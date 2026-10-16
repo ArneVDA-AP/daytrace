@@ -73,9 +73,22 @@ pub fn clock_span_minutes(start: &str, end: &str) -> Option<f64> {
 }
 
 fn local_at(date: NaiveDate, t: NaiveTime) -> Option<i64> {
-    let ndt = date.and_time(t);
-    // earliest() handles DST folds; gaps return None
-    Local.from_local_datetime(&ndt).earliest().map(|d| d.timestamp())
+    local_candidates(date, t).into_iter().next()
+}
+
+/// All Unix times for a local wall-clock time: two during the repeated DST hour, one normally,
+/// and for a time skipped by spring-forward, the same clock time one hour later.
+fn local_candidates(date: NaiveDate, t: NaiveTime) -> Vec<i64> {
+    use chrono::LocalResult;
+    match Local.from_local_datetime(&date.and_time(t)) {
+        LocalResult::Single(d) => vec![d.timestamp()],
+        LocalResult::Ambiguous(a, b) => vec![a.timestamp(), b.timestamp()],
+        LocalResult::None => Local
+            .from_local_datetime(&(date.and_time(t) + Duration::hours(1)))
+            .earliest()
+            .map(|d| vec![d.timestamp()])
+            .unwrap_or_default(),
+    }
 }
 
 /// Resolve a card's clock strings to Unix seconds, choosing the calendar day (previous, same or
@@ -88,7 +101,7 @@ pub fn resolve_card_range(start: &str, end: &str, anchor_ts: i64) -> Option<(i64
     let mut best: Option<(i64, NaiveDate)> = None;
     for offset in [-1i64, 0, 1] {
         let date = anchor_date + Duration::days(offset);
-        if let Some(ts) = local_at(date, st) {
+        for ts in local_candidates(date, st) {
             let better = match best {
                 None => true,
                 Some((b, _)) => (ts - anchor_ts).abs() < (b - anchor_ts).abs(),
@@ -99,17 +112,21 @@ pub fn resolve_card_range(start: &str, end: &str, anchor_ts: i64) -> Option<(i64
         }
     }
     let (start_ts, date) = best?;
-    let mut end_ts = local_at(date, et)?;
-    if end_ts < start_ts {
-        end_ts = local_at(date + Duration::days(1), et)?;
-    }
+    // End: the first occurrence of the end clock time at or after the start.
+    let end_ts = [date, date + Duration::days(1)]
+        .iter()
+        .flat_map(|d| local_candidates(*d, et))
+        .filter(|ts| *ts >= start_ts)
+        .min()?;
     Some((start_ts, end_ts))
 }
 
 /// Logical day (`YYYY-MM-DD`) of a timestamp: times before 4 AM belong to the previous day.
 pub fn logical_day(ts: i64) -> String {
-    let shifted = local(ts) - Duration::hours(DAY_START_HOUR as i64);
-    shifted.date_naive().format("%Y-%m-%d").to_string()
+    // Compare wall-clock hours (not elapsed time) so DST days split at 4 AM too.
+    let dt = local(ts);
+    let date = if dt.hour() < DAY_START_HOUR { dt.date_naive() - Duration::days(1) } else { dt.date_naive() };
+    date.format("%Y-%m-%d").to_string()
 }
 
 /// Unix range [start, end) of a logical day.
@@ -212,4 +229,29 @@ mod tests {
         assert_eq!(minutes_to_clock(14.0 * 60.0 + 5.0), "2:05 PM");
         assert_eq!(clock_span_minutes("11:50 PM", "12:20 AM"), Some(30.0));
     }
+}
+
+#[cfg(test)]
+mod dst_tests {
+    use super::*;
+    // Run with TZ=Europe/Brussels; skipped otherwise. 2026-10-25 is the fall-back day there.
+    fn brussels() -> bool {
+        std::env::var("TZ").as_deref() == Ok("Europe/Brussels")
+    }
+
+    #[test]
+    fn fall_back_day() {
+        if !brussels() {
+            return;
+        }
+        let at_0330 = Local.with_ymd_and_hms(2026, 10, 25, 3, 30, 0).unwrap().timestamp();
+        assert_eq!(logical_day(at_0330), "2026-10-24");
+        // Second occurrence of 2:30 AM (after the clocks go back)
+        let LocalResult::Ambiguous(_, second) = Local.with_ymd_and_hms(2026, 10, 25, 2, 30, 0) else { panic!() };
+        let anchor = second.timestamp() + 300;
+        let (s, e) = resolve_card_range("2:30 AM", "2:40 AM", anchor).unwrap();
+        assert_eq!(s, second.timestamp());
+        assert_eq!(e - s, 600);
+    }
+    use chrono::LocalResult;
 }

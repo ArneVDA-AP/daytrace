@@ -27,7 +27,10 @@ pub struct SettingsDto {
 pub fn get_settings(state: S) -> SettingsDto {
     SettingsDto {
         settings: state.settings(),
-        has_api_key: crate::platform::secret_get().is_some(),
+        has_api_key: {
+            let s = state.settings();
+            crate::config::stored_key(s.provider, &s.base_url).is_some()
+        },
         data_dir: state.paths.root.to_string_lossy().to_string(),
     }
 }
@@ -36,8 +39,9 @@ pub fn get_settings(state: S) -> SettingsDto {
 pub fn save_settings(app: tauri::AppHandle, state: S, settings: Settings, api_key: Option<String>) -> CmdResult<SettingsDto> {
     let settings = settings.sanitized();
     settings.save(&state.paths.settings).map_err(err)?;
-    if let Some(k) = api_key {
-        crate::platform::secret_set(k.trim()).map_err(err)?;
+    if let Some(k) = api_key.filter(|k| !k.trim().is_empty()) {
+        let slot = crate::config::key_slot(settings.provider, &settings.base_url).ok_or("This provider does not use an API key")?;
+        crate::platform::secret_set(&slot, k.trim()).map_err(err)?;
     }
     {
         use tauri_plugin_autostart::ManagerExt;
@@ -163,7 +167,9 @@ pub fn analyze_now(state: S) {
 }
 
 fn client_for(provider: ProviderKind, base_url: &str, model: &str, api_key: Option<String>) -> CmdResult<LlmClient> {
-    let key = api_key.filter(|k| !k.trim().is_empty()).or_else(crate::platform::secret_get);
+    // A key typed in the form is used as-is; otherwise only the key stored for this exact
+    // provider and host is used.
+    let key = api_key.filter(|k| !k.trim().is_empty()).or_else(|| crate::config::stored_key(provider, base_url));
     LlmClient::new(provider, base_url, model, key, None).map_err(err)
 }
 

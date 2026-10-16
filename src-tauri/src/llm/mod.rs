@@ -81,6 +81,7 @@ pub async fn transcribe_local(ctx: &Ctx<'_>, shots: &[Shot]) -> Result<Vec<Obser
     let t0 = sampled[0].captured_at;
 
     let mut frames: Vec<(i64, String)> = Vec::new();
+    let mut any_call_ok = false;
     for shot in &sampled {
         let offset = shot.captured_at - t0;
         if let Some(note) = hidden_note(shot) {
@@ -103,6 +104,7 @@ pub async fn transcribe_local(ctx: &Ctx<'_>, shots: &[Shot]) -> Result<Vec<Obser
             .await;
         match res {
             Ok(text) => {
+                any_call_ok = true;
                 let t = text.trim().to_string();
                 if !t.is_empty() {
                     frames.push((offset, t));
@@ -111,7 +113,7 @@ pub async fn transcribe_local(ctx: &Ctx<'_>, shots: &[Shot]) -> Result<Vec<Obser
             Err(e) => {
                 log::warn!("describe_frame failed at {offset}s: {e:#}");
                 // A connection failure on every frame should fail fast rather than burn 15 calls.
-                if frames.is_empty() && e.downcast_ref::<reqwest::Error>().map(|r| r.is_connect()).unwrap_or(false) {
+                if !any_call_ok && e.downcast_ref::<reqwest::Error>().map(|r| r.is_connect()).unwrap_or(false) {
                     return Err(e.context("Could not reach the model server"));
                 }
             }
@@ -160,10 +162,18 @@ pub async fn transcribe_local(ctx: &Ctx<'_>, shots: &[Shot]) -> Result<Vec<Obser
             if coverage < 0.8 {
                 return Err(anyhow::Error::msg(format!("coverage {coverage}")).context(CoverageMarker(coverage)));
             }
-            Ok(kept
+            let obs: Vec<Observation> = kept
                 .into_iter()
-                .map(|(a, b, d)| Observation { start_ts: t0 + a.max(0), end_ts: t0 + b.clamp(a.max(0), dur), text: d })
-                .collect())
+                .filter_map(|(a, b, d)| {
+                    let s = a.clamp(0, dur);
+                    let e = b.clamp(s, dur);
+                    (e > s).then(|| Observation { start_ts: t0 + s, end_ts: t0 + e, text: d })
+                })
+                .collect();
+            if obs.is_empty() {
+                bail!("No segments inside the recording");
+            }
+            Ok(obs)
         }
         .await;
         match outcome {
@@ -369,7 +379,7 @@ fn strip_user_refs(s: &str) -> String {
     let mut out = s.to_string();
     for needle in ["the user", "a user"] {
         loop {
-            let lower = out.to_lowercase();
+            let lower = out.to_ascii_lowercase(); // keeps byte offsets aligned with `out`
             match lower.find(needle) {
                 Some(i) => out.replace_range(i..i + needle.len(), ""),
                 None => break,
@@ -701,5 +711,15 @@ mod tests {
     fn strips_user_refs_and_titles() {
         assert_eq!(strip_user_refs("The user opened X. a USER typed"), " opened X.  typed");
         assert_eq!(normalize_title("Title: \"Fixing Cedar sign-in\"\nextra"), "Fixing Cedar sign-in");
+    }
+}
+
+#[cfg(test)]
+mod regression {
+    use super::*;
+    #[test]
+    fn strip_user_refs_handles_non_ascii() {
+        assert_eq!(strip_user_refs("İzmir trip: the user’s calendar"), "İzmir trip: ’s calendar");
+        assert_eq!(strip_user_refs("ẞ the user éé"), "ẞ  éé");
     }
 }

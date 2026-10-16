@@ -22,8 +22,16 @@ pub fn spawn(state: Arc<AppState>) {
         recover_interrupted(&state);
         let mut last_retention = 0i64;
         loop {
-            if let Err(e) = tick(&state).await {
-                log::error!("analysis tick failed: {e:#}");
+            // Each tick runs in its own task so a panic is logged instead of ending the loop.
+            let s = state.clone();
+            match tauri::async_runtime::spawn(async move { tick(&s).await }).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => log::error!("analysis tick failed: {e:#}"),
+                Err(e) => {
+                    log::error!("analysis tick panicked: {e}");
+                    recover_interrupted(&state);
+                    fail_processing_batches(&state, "Daytrace hit an internal error while analyzing this batch.");
+                }
             }
             if now_ts() - last_retention > 3600 {
                 last_retention = now_ts();
@@ -48,6 +56,18 @@ fn recover_interrupted(state: &AppState) {
     }
 }
 
+/// After a panic, mark the batch that was in flight as failed so it is not retried in a loop.
+fn fail_processing_batches(state: &AppState, msg: &str) {
+    if let Ok(pending) = state.db.batches_with_status(&["pending"], 0) {
+        let current = state.analysis.lock().unwrap().current_batch;
+        for b in pending.iter().filter(|b| Some(b.id) == current) {
+            let _ = state.db.set_batch_status(b.id, "failed", Some(msg));
+            let _ = write_error_card(state, b, msg);
+        }
+    }
+    set_step(state, None, None);
+}
+
 fn set_step(state: &AppState, batch: Option<i64>, step: Option<&str>) {
     let mut a = state.analysis.lock().unwrap();
     a.current_batch = batch;
@@ -63,7 +83,8 @@ pub async fn tick(state: &AppState) -> Result<()> {
     }
 
     let mut any_success = false;
-    for batch in state.db.batches_with_status(&["pending"], since)? {
+    // No age limit here: a manual retry can re-queue a batch from an earlier day.
+    for batch in state.db.batches_with_status(&["pending"], 0)? {
         if process_batch(state, &batch).await? {
             any_success = true;
         }
@@ -82,12 +103,17 @@ async fn catch_up(state: &AppState) -> Result<()> {
         if batch.attempts >= MAX_AUTO_RETRIES || !state.db.has_error_card(batch.id)? {
             continue;
         }
-        log::info!("catch-up: retrying batch {}", batch.id);
+        log::info!("catch-up: retrying batch {} (automatic try {})", batch.id, batch.attempts + 1);
+        db_increment(state, batch.id)?;
         if !process_batch(state, &batch).await? {
             break;
         }
     }
     Ok(())
+}
+
+fn db_increment(state: &AppState, id: i64) -> Result<()> {
+    state.db.increment_attempts(id)
 }
 
 /// Returns Ok(true) when the batch produced cards (or a valid idle/skip outcome).
@@ -111,7 +137,6 @@ pub async fn process_batch(state: &AppState, batch: &Batch) -> Result<bool> {
     }
 
     db.set_batch_status(batch.id, "processing", None)?;
-    db.increment_attempts(batch.id)?;
     set_step(state, Some(batch.id), Some("Reading screenshots"));
     match run_pipeline(state, batch, &shots).await {
         Ok(n) => {
@@ -135,7 +160,7 @@ pub async fn process_batch(state: &AppState, batch: &Batch) -> Result<bool> {
 
 async fn run_pipeline(state: &AppState, batch: &Batch, shots: &[crate::db::Shot]) -> Result<usize> {
     let settings = state.settings();
-    let api_key = crate::platform::secret_get();
+    let api_key = crate::config::stored_key(settings.provider, &settings.base_url);
     let client = LlmClient::new(settings.provider, &settings.base_url, &settings.model, api_key, Some(state.db.clone()))?;
     let categories = categories_for_llm(&settings.categories);
     let ctx = Ctx {
@@ -198,8 +223,8 @@ async fn run_pipeline(state: &AppState, batch: &Batch, shots: &[crate::db::Shot]
     state.db.replace_cards_in_range(window_start, current, &resolved, batch.id)
 }
 
-fn is_idle_card(c: &crate::db::StoredCard) -> bool {
-    c.category.eq_ignore_ascii_case("idle") && c.title.eq_ignore_ascii_case("idle")
+fn is_idle_card(c: &crate::db::StoredCard, idle_name: &str) -> bool {
+    c.is_idle_shortcut || (c.category.eq_ignore_ascii_case(idle_name) && c.title.eq_ignore_ascii_case("idle"))
 }
 
 fn write_idle_card(state: &AppState, batch: &Batch, stats: &crate::batching::IdleStats) -> Result<()> {
@@ -208,7 +233,7 @@ fn write_idle_card(state: &AppState, batch: &Batch, stats: &crate::batching::Idl
     let mut start = batch.start_ts;
     if let Some(prev) = state.db.last_card_ending_by(batch.start_ts)? {
         let gap = batch.start_ts - prev.end_ts;
-        if is_idle_card(&prev) && (0..300).contains(&gap) && logical_day(prev.start_ts) == logical_day(batch.start_ts) {
+        if is_idle_card(&prev, &idle_name) && (0..300).contains(&gap) && logical_day(prev.start_ts) == logical_day(batch.start_ts) {
             start = prev.start_ts;
         }
     }
@@ -274,6 +299,7 @@ fn enforce_retention(state: &AppState) -> Result<()> {
     let days = state.settings().retention_days as i64;
     let before = now_ts() - days * 86400;
     let paths = state.db.expire_screenshots(before)?;
+    state.db.expire_text(before)?;
     let mut removed = 0;
     for p in &paths {
         if !p.is_empty() && std::fs::remove_file(p).is_ok() {

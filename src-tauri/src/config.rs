@@ -73,6 +73,25 @@ pub fn default_base_url(kind: ProviderKind) -> &'static str {
     }
 }
 
+/// Credential slot for a provider. Keys are bound to the provider and, for generic endpoints, to
+/// the host, so a stored key is never sent to a different server. Ollama never gets a key.
+pub fn key_slot(kind: ProviderKind, base_url: &str) -> Option<String> {
+    match kind {
+        ProviderKind::Anthropic => Some("anthropic".into()),
+        ProviderKind::LmStudio => Some("lm_studio".into()),
+        ProviderKind::Ollama => None,
+        ProviderKind::OpenaiCompatible => {
+            let host = reqwest::Url::parse(base_url.trim()).ok()?.host_str()?.to_lowercase();
+            Some(format!("openai:{host}"))
+        }
+    }
+}
+
+/// The stored key for this provider and server, if any.
+pub fn stored_key(kind: ProviderKind, base_url: &str) -> Option<String> {
+    key_slot(kind, base_url).and_then(|s| crate::platform::secret_get(&s))
+}
+
 pub fn default_model(kind: ProviderKind) -> &'static str {
     match kind {
         ProviderKind::Anthropic => "claude-haiku-5-5",

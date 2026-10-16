@@ -14,25 +14,28 @@ mod imp {
     use super::ForegroundApp;
     use windows::Win32::Foundation::{CloseHandle, POINT};
     use windows::Win32::Security::Credentials::{
-        CredDeleteW, CredFree, CredReadW, CredWriteW, CREDENTIALW, CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC,
+        CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC, CREDENTIALW, CredDeleteW, CredFree, CredReadW, CredWriteW,
     };
     use windows::Win32::System::StationsAndDesktops::{
-        CloseDesktop, OpenInputDesktop, SwitchDesktop, DESKTOP_CONTROL_FLAGS, DESKTOP_SWITCHDESKTOP,
+        CloseDesktop, DESKTOP_CONTROL_FLAGS, DESKTOP_SWITCHDESKTOP, OpenInputDesktop, SwitchDesktop,
     };
     use windows::Win32::System::SystemInformation::GetTickCount;
     use windows::Win32::System::Threading::{
-        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+        OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetCursorPos, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, SystemParametersInfoW,
-        SPI_GETSCREENSAVERRUNNING, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+        GetCursorPos, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, SPI_GETSCREENSAVERRUNNING,
+        SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
     };
     use windows::core::{HSTRING, PWSTR};
 
     pub fn idle_seconds() -> u64 {
         unsafe {
-            let mut lii = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+            let mut lii = LASTINPUTINFO {
+                cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+                dwTime: 0,
+            };
             if !GetLastInputInfo(&mut lii).as_bool() {
                 return 0;
             }
@@ -78,6 +81,75 @@ mod imp {
         }
     }
 
+    fn process_name(hwnd: windows::Win32::Foundation::HWND) -> String {
+        unsafe { process_name_inner(hwnd) }
+    }
+
+    unsafe fn process_name_inner(hwnd: windows::Win32::Foundation::HWND) -> String {
+        unsafe {
+            let mut pid: u32 = 0;
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            if pid == 0 {
+                return String::new();
+            }
+            let Ok(h) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+                return String::new();
+            };
+            let mut path = [0u16; 1024];
+            let mut size = path.len() as u32;
+            let mut name = String::new();
+            if QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, PWSTR(path.as_mut_ptr()), &mut size).is_ok() {
+                let full = String::from_utf16_lossy(&path[..size as usize]);
+                name = std::path::Path::new(&full)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+            }
+            let _ = CloseHandle(h);
+            name
+        }
+    }
+
+    /// Screen rectangles (left, top, right, bottom; physical pixels) of visible top-level windows
+    /// whose process matches the blocklist.
+    pub fn blocked_window_rects(blocked: &[String]) -> Vec<(i32, i32, i32, i32)> {
+        use windows::Win32::Foundation::{HWND, LPARAM, RECT};
+        use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
+        use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowRect, IsIconic, IsWindowVisible};
+
+        unsafe extern "system" fn collect(hwnd: HWND, lparam: LPARAM) -> windows::core::BOOL {
+            let out = unsafe { &mut *(lparam.0 as *mut Vec<HWND>) };
+            out.push(hwnd);
+            true.into()
+        }
+        let mut hwnds: Vec<HWND> = Vec::new();
+        unsafe {
+            let _ = EnumWindows(Some(collect), LPARAM(&mut hwnds as *mut Vec<HWND> as isize));
+        }
+        let mut rects = Vec::new();
+        for hwnd in hwnds {
+            unsafe {
+                if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+                    continue;
+                }
+                let mut cloaked: u32 = 0;
+                if DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut cloaked as *mut u32 as *mut core::ffi::c_void, 4).is_ok() && cloaked != 0
+                {
+                    continue; // on another virtual desktop or hidden by the shell
+                }
+                let name = process_name(hwnd);
+                if super::blocked_match(&name, blocked).is_none() {
+                    continue;
+                }
+                let mut r = RECT::default();
+                if GetWindowRect(hwnd, &mut r).is_ok() && r.right > r.left && r.bottom > r.top {
+                    rects.push((r.left, r.top, r.right, r.bottom));
+                }
+            }
+        }
+        rects
+    }
+
     pub fn foreground_app() -> Option<ForegroundApp> {
         unsafe {
             let hwnd = GetForegroundWindow();
@@ -88,33 +160,21 @@ mod imp {
             let n = GetWindowTextW(hwnd, &mut buf);
             let title = String::from_utf16_lossy(&buf[..n.max(0) as usize]);
 
-            let mut pid: u32 = 0;
-            GetWindowThreadProcessId(hwnd, Some(&mut pid));
-            let mut app = String::new();
-            if pid != 0 {
-                if let Ok(h) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
-                    let mut path = [0u16; 1024];
-                    let mut size = path.len() as u32;
-                    if QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, PWSTR(path.as_mut_ptr()), &mut size).is_ok() {
-                        let full = String::from_utf16_lossy(&path[..size as usize]);
-                        app = std::path::Path::new(&full)
-                            .file_stem()
-                            .map(|s| s.to_string_lossy().to_string())
-                            .unwrap_or_default();
-                    }
-                    let _ = CloseHandle(h);
-                }
-            }
-            Some(ForegroundApp { app, title })
+            Some(ForegroundApp {
+                app: process_name(hwnd),
+                title,
+            })
         }
     }
 
-    const CRED_TARGET: &str = "Daytrace/llm-api-key";
+    fn target(slot: &str) -> String {
+        format!("Daytrace/{slot}")
+    }
 
-    pub fn secret_get() -> Option<String> {
+    pub fn secret_get(slot: &str) -> Option<String> {
         unsafe {
             let mut ptr: *mut CREDENTIALW = std::ptr::null_mut();
-            CredReadW(&HSTRING::from(CRED_TARGET), CRED_TYPE_GENERIC, None, &mut ptr).ok()?;
+            CredReadW(&HSTRING::from(target(slot)), CRED_TYPE_GENERIC, None, &mut ptr).ok()?;
             let cred = &*ptr;
             let bytes = std::slice::from_raw_parts(cred.CredentialBlob, cred.CredentialBlobSize as usize);
             let value = String::from_utf8(bytes.to_vec()).ok();
@@ -123,13 +183,13 @@ mod imp {
         }
     }
 
-    pub fn secret_set(value: &str) -> anyhow::Result<()> {
+    pub fn secret_set(slot: &str, value: &str) -> anyhow::Result<()> {
         unsafe {
             if value.is_empty() {
-                let _ = CredDeleteW(&HSTRING::from(CRED_TARGET), CRED_TYPE_GENERIC, None);
+                let _ = CredDeleteW(&HSTRING::from(target(slot)), CRED_TYPE_GENERIC, None);
                 return Ok(());
             }
-            let mut target: Vec<u16> = CRED_TARGET.encode_utf16().chain(std::iter::once(0)).collect();
+            let mut target: Vec<u16> = target(slot).encode_utf16().chain(std::iter::once(0)).collect();
             let mut user: Vec<u16> = "daytrace".encode_utf16().chain(std::iter::once(0)).collect();
             let mut blob = value.as_bytes().to_vec();
             let cred = CREDENTIALW {
@@ -164,16 +224,26 @@ mod imp {
     pub fn foreground_app() -> Option<ForegroundApp> {
         None
     }
-
-    // Development fallback: the key lives in memory, seeded from DAYTRACE_API_KEY.
-    static SECRET: Mutex<Option<String>> = Mutex::new(None);
-
-    pub fn secret_get() -> Option<String> {
-        let guard = SECRET.lock().unwrap();
-        guard.clone().or_else(|| std::env::var("DAYTRACE_API_KEY").ok()).filter(|s| !s.is_empty())
+    pub fn blocked_window_rects(_blocked: &[String]) -> Vec<(i32, i32, i32, i32)> {
+        Vec::new()
     }
-    pub fn secret_set(value: &str) -> anyhow::Result<()> {
-        *SECRET.lock().unwrap() = Some(value.to_string());
+
+    // Development fallback: keys live in memory, seeded from DAYTRACE_API_KEY.
+    static SECRETS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+    pub fn secret_get(slot: &str) -> Option<String> {
+        let guard = SECRETS.lock().unwrap();
+        guard
+            .iter()
+            .find(|(s, _)| s == slot)
+            .map(|(_, v)| v.clone())
+            .or_else(|| std::env::var("DAYTRACE_API_KEY").ok())
+            .filter(|s| !s.is_empty())
+    }
+    pub fn secret_set(slot: &str, value: &str) -> anyhow::Result<()> {
+        let mut g = SECRETS.lock().unwrap();
+        g.retain(|(s, _)| s != slot);
+        g.push((slot.to_string(), value.to_string()));
         Ok(())
     }
 }
@@ -183,8 +253,20 @@ pub use imp::*;
 /// Password managers and authenticators hidden by default (Dayflow's seed list, adapted to
 /// Windows executable names). Matching is on the normalized executable name.
 pub const DEFAULT_BLOCKED_APPS: &[&str] = &[
-    "1password", "authy", "bitwarden", "dashlane", "enpass", "keeper", "keepass", "keepassxc",
-    "lastpass", "ledger live", "nordpass", "proton pass", "trezor suite", "yubico authenticator",
+    "1password",
+    "authy",
+    "bitwarden",
+    "dashlane",
+    "enpass",
+    "keeper",
+    "keepass",
+    "keepassxc",
+    "lastpass",
+    "ledger live",
+    "nordpass",
+    "proton pass",
+    "trezor suite",
+    "yubico authenticator",
 ];
 
 fn normalize(s: &str) -> String {

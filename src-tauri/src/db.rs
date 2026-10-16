@@ -314,6 +314,14 @@ impl Db {
         Ok(paths)
     }
 
+    /// Removes screen transcriptions and model call logs older than `before`; cards stay.
+    pub fn expire_text(&self, before: i64) -> Result<()> {
+        let c = self.c();
+        c.execute("DELETE FROM observations WHERE end_ts < ?", [before])?;
+        c.execute("DELETE FROM llm_calls WHERE created_at < datetime(?, 'unixepoch')", [before])?;
+        Ok(())
+    }
+
     // ---- batches ----
 
     pub fn create_batch(&self, shots: &[Shot]) -> Result<i64> {

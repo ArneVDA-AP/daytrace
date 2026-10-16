@@ -104,6 +104,29 @@ fn pick_monitor() -> Result<xcap::Monitor> {
     monitors.into_iter().nth(primary).ok_or_else(|| anyhow!("no monitors found"))
 }
 
+/// Paint over private apps' windows that are visible on the captured monitor but not in front.
+fn mask_blocked_windows(img: &mut image::RgbaImage, monitor: &xcap::Monitor, blocked: &[String]) {
+    let rects = platform::blocked_window_rects(blocked);
+    if rects.is_empty() {
+        return;
+    }
+    let (Ok(mx), Ok(my), Ok(mw), Ok(mh)) = (monitor.x(), monitor.y(), monitor.width(), monitor.height()) else { return };
+    // Monitor geometry may be logical while the image is physical; scale between them.
+    let sx = img.width() as f64 / mw.max(1) as f64;
+    let sy = img.height() as f64 / mh.max(1) as f64;
+    for (l, t, r, b) in rects {
+        let x0 = (((l - mx) as f64) * sx).floor().max(0.0) as u32;
+        let y0 = (((t - my) as f64) * sy).floor().max(0.0) as u32;
+        let x1 = ((((r - mx) as f64) * sx).ceil().max(0.0) as u32).min(img.width());
+        let y1 = ((((b - my) as f64) * sy).ceil().max(0.0) as u32).min(img.height());
+        for y in y0..y1 {
+            for x in x0..x1 {
+                img.put_pixel(x, y, image::Rgba([40, 44, 43, 255]));
+            }
+        }
+    }
+}
+
 pub fn capture_once(state: &AppState, settings: &Settings) -> Result<()> {
     let now = chrono::Local::now();
     let ts = now.timestamp();
@@ -119,7 +142,8 @@ pub fn capture_once(state: &AppState, settings: &Settings) -> Result<()> {
     }
 
     let monitor = pick_monitor()?;
-    let img = monitor.capture_image().map_err(|e| anyhow!("capture: {e}"))?;
+    let mut img = monitor.capture_image().map_err(|e| anyhow!("capture: {e}"))?;
+    mask_blocked_windows(&mut img, &monitor, &settings.blocked_apps);
     let target_h = settings.capture_height;
     let img = image::DynamicImage::ImageRgba8(img);
     let img = if img.height() > target_h {
