@@ -341,7 +341,10 @@ pub async fn transcribe_cloud(ctx: &Ctx<'_>, shots: &[Shot]) -> Result<Vec<Obser
                     },
                 )
                 .await?;
-            let resp: CloudSegments = parse_json(&text)?;
+            let mut resp: CloudSegments = parse_json(&text)?;
+            // A zero-length segment (e.g. "00:14:59" -> "00:14:59" at the very end) carries no
+            // time; drop it instead of rejecting the whole answer.
+            resp.segments.retain(|s| parse_elapsed(&s.end) != parse_elapsed(&s.start));
             if let Some(err) = validate_cloud_segments(&resp.segments, duration) {
                 bail!(err);
             }
@@ -560,13 +563,20 @@ pub fn validate_coverage(existing: &[ActivityCard], new: &[ActivityCard]) -> Opt
     if existing.is_empty() {
         return None;
     }
+    // Put every card on one continuous minute axis around the first input card. Dayflow maps each
+    // card to minutes-of-day independently, so a card starting after midnight (12:13 AM = 13) is
+    // compared against one that started before it (11:13 PM = 1393) as if it were 23 hours
+    // earlier, and valid output fails coverage.
+    let base = clock_minutes(&existing[0].start_time);
     let range = |c: &ActivityCard| {
-        let s = clock_minutes(&c.start_time);
-        let mut e = clock_minutes(&c.end_time);
-        if e < s {
-            e += 1440.0;
+        let mut s = clock_minutes(&c.start_time);
+        while s >= base + 720.0 {
+            s -= 1440.0;
         }
-        (s, e)
+        while s < base - 720.0 {
+            s += 1440.0;
+        }
+        (s, s + clock_span_minutes(&c.start_time, &c.end_time).unwrap_or(0.0))
     };
     let mut input: Vec<(f64, f64)> = existing.iter().map(range).collect();
     input.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
@@ -640,7 +650,7 @@ pub async fn cards_cloud(ctx: &Ctx<'_>, window_obs: &[Observation], existing: &[
             .client
             .complete(
                 vec![Part::Text(prompt)],
-                CallOpts { op: "generate_cards", batch_id: Some(ctx.batch_id), max_tokens: 8000, system: Some(prompts::SYSTEM_CLOUD.into()), attempts: 2 },
+                CallOpts { op: "generate_cards", batch_id: Some(ctx.batch_id), max_tokens: 16000, system: Some(prompts::SYSTEM_CLOUD.into()), attempts: 2 },
             )
             .await?;
         let decoded: Vec<ActivityCard> = parse_json(&text)?;
@@ -691,6 +701,18 @@ mod tests {
         assert!(validate_coverage(&existing, &[card("2:02 PM", "2:28 PM")]).is_none()); // within flex
         let err = validate_coverage(&existing, &[card("2:00 PM", "2:10 PM"), card("2:20 PM", "2:45 PM")]);
         assert!(err.unwrap().contains("Missing coverage")); // gap minus the 3-min flex
+    }
+
+    #[test]
+    fn coverage_across_midnight() {
+        // From a real run: valid output was rejected because 12:13 AM was compared as if it
+        // came 23 hours before 11:13 PM.
+        let existing = vec![card("11:13 PM", "12:43 AM"), card("12:43 AM", "12:58 AM")];
+        let out = vec![card("11:13 PM", "12:13 AM"), card("12:13 AM", "12:43 AM"), card("12:43 AM", "12:58 AM"), card("12:58 AM", "1:14 AM")];
+        assert_eq!(validate_coverage(&existing, &out), None);
+        // A real gap after midnight is still caught.
+        let gap = vec![card("11:13 PM", "12:13 AM"), card("12:30 AM", "1:14 AM")];
+        assert!(validate_coverage(&existing, &gap).unwrap().contains("12:16 AM-12:30 AM")); // gap minus the 3-min flex
     }
 
     #[test]
