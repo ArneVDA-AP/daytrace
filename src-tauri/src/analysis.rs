@@ -159,24 +159,37 @@ async fn run_pipeline(state: &AppState, batch: &Batch, shots: &[crate::db::Shot]
     set_step(state, Some(batch.id), Some("Writing timeline cards"));
     let current = batch.end_ts;
     let window_start = current - CARD_LOOKBACK;
-    let existing: Vec<ActivityCard> =
-        state.db.cards_in_range(window_start, current, true)?.iter().map(|c| c.to_activity()).collect();
+    let stored = state.db.cards_in_range(window_start, current, true)?;
+    let existing: Vec<ActivityCard> = stored.iter().map(|c| c.to_activity()).collect();
+    let window_obs = state.db.observations_in_range(window_start, current)?;
     let cards = match settings.pipeline {
         Pipeline::Local => llm::cards_local(&ctx, &obs, &existing).await?,
-        Pipeline::Cloud => {
-            let window_obs = state.db.observations_in_range(window_start, current)?;
-            llm::cards_cloud(&ctx, &window_obs, &existing).await?
-        }
+        Pipeline::Cloud => llm::cards_cloud(&ctx, &window_obs, &existing).await?,
     };
+
+    // Models sometimes stretch a card past the evidence (e.g. to the window edge). Clamp every
+    // card to the span covered by observations and the cards it was given.
+    let ev_start = window_obs.iter().map(|o| o.start_ts).chain(stored.iter().map(|c| c.start_ts)).min().unwrap_or(batch.start_ts);
+    let ev_end = window_obs.iter().map(|o| o.end_ts).chain(stored.iter().map(|c| c.end_ts)).max().unwrap_or(batch.end_ts);
     let anchor = (window_start + current) / 2;
     let resolved: Vec<ResolvedCard> = cards
         .into_iter()
         .filter_map(|c| {
-            let r = ResolvedCard::from_clock(c.clone(), anchor);
-            if r.is_none() {
+            let Some(mut r) = ResolvedCard::from_clock(c.clone(), anchor) else {
                 log::warn!("dropping card with unparsable times: {} - {}", c.start_time, c.end_time);
+                return None;
+            };
+            // Allow a minute of slack for clock-string rounding.
+            if r.start_ts < ev_start - 60 {
+                r.start_ts = ev_start;
+                r.card.start_time = fmt_clock(ev_start);
             }
-            r
+            if r.end_ts > ev_end + 60 {
+                log::info!("clamping card '{}' end {} to evidence end {}", r.card.title, r.card.end_time, fmt_clock(ev_end));
+                r.end_ts = ev_end;
+                r.card.end_time = fmt_clock(ev_end);
+            }
+            (r.end_ts > r.start_ts).then_some(r)
         })
         .collect();
     if resolved.is_empty() {

@@ -20,7 +20,9 @@ async fn replay_frames() {
     frames.push(frames.last().unwrap().clone());
 
     let tmp = tempfile::tempdir().unwrap();
-    let state = AppState::new(Paths::new(tmp.path().to_path_buf()).unwrap()).unwrap();
+    // DAYTRACE_REPLAY_OUT keeps the resulting data directory (to open it in the app afterwards).
+    let root = std::env::var("DAYTRACE_REPLAY_OUT").map(std::path::PathBuf::from).unwrap_or(tmp.path().to_path_buf());
+    let state = AppState::new(Paths::new(root).unwrap()).unwrap();
     {
         let mut s = state.settings.write().unwrap();
         s.pipeline = if std::env::var("DAYTRACE_PIPELINE").as_deref() == Ok("local") { Pipeline::Local } else { Pipeline::Cloud };

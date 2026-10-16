@@ -49,7 +49,7 @@ impl Default for Settings {
         Settings {
             recording_enabled: true,
             capture_interval_secs: 10,
-            capture_height: 1080,
+            capture_height: 720,
             jpeg_quality: 70,
             retention_days: 7,
             provider: ProviderKind::Anthropic,
