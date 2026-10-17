@@ -195,7 +195,7 @@ export function AgentsFrame({ url }: { url: string }) {
       tabIndex={-1}
       className="flex min-h-0 flex-1 flex-col focus:outline-2 focus:-outline-offset-2 focus:outline-ring"
     >
-      <p className="flex h-8 shrink-0 items-center gap-1 overflow-hidden border-b px-(--page-x) text-caption whitespace-nowrap text-muted-foreground" aria-live="polite">
+      <p className="min-h-8 shrink-0 border-b px-(--page-x) py-1.5 text-caption text-muted-foreground" aria-live="polite">
         {focused ? (
           <>
             Keys go to the dashboard. <Kbd>Esc</Kbd> returns to Daytrace; <Kbd>Ctrl+{k}</Kbd> and <Kbd>Ctrl+1</Kbd>…<Kbd>Ctrl+6</Kbd> still work.
