@@ -347,11 +347,19 @@ fn write_error_card(state: &AppState, batch: &Batch, msg: &str) -> Result<()> {
     Ok(())
 }
 
+/// After the retention period: screenshot files are deleted and model call logs lose their
+/// request and response text. Cards, observations and token counts stay; screenshot rows (app
+/// and window title) stay for `SCREENSHOT_ROW_DAYS`.
 fn enforce_retention(state: &AppState) -> Result<()> {
     let days = state.settings().retention_days as i64;
-    let before = now_ts() - days * 86400;
+    let now = now_ts();
+    let before = now - days * 86400;
     let paths = state.db.expire_screenshots(before)?;
     state.db.expire_text(before)?;
+    let purged = state.db.purge_screenshot_rows(now - crate::db::SCREENSHOT_ROW_DAYS * 86400)?;
+    if purged > 0 {
+        log::info!("retention: deleted {purged} screenshot rows older than {} days", crate::db::SCREENSHOT_ROW_DAYS);
+    }
     let mut removed = 0;
     for p in &paths {
         if !p.is_empty() && std::fs::remove_file(p).is_ok() {
@@ -419,6 +427,60 @@ mod tests {
         let pending = st.db.batches_with_status(&["pending"], 0).unwrap();
         assert_eq!(pending.len(), 1, "batch should wait, not fail");
         assert!(st.db.cards_in_range(0, i64::MAX, false).unwrap().is_empty(), "no error card");
+    }
+
+    #[test]
+    fn retention_keeps_text_the_features_read() {
+        let (dir, st) = state();
+        let day = 86400;
+        let now = now_ts();
+        let shot = |at: i64, name: &str| {
+            let p = dir.path().join(name);
+            std::fs::write(&p, b"jpg").unwrap();
+            st.db.insert_screenshot(at, &p.to_string_lossy(), 3, 0, Some("WINWORD"), Some("Report.docx"), None, None).unwrap();
+            p
+        };
+        let ancient = shot(now - 400 * day, "ancient.jpg");
+        let old = shot(now - 10 * day, "old.jpg");
+        let fresh = shot(now - 3600, "fresh.jpg");
+        let shots = st.db.unbatched_screenshots(0).unwrap();
+        let b_ancient = st.db.create_batch(&shots[..1]).unwrap();
+        let b_old = st.db.create_batch(&shots[1..2]).unwrap();
+        st.db.create_batch(&shots[2..]).unwrap();
+        let obs = |at: i64| vec![crate::types::Observation { start_ts: at, end_ts: at + 60, text: "Editing the report".into() }];
+        st.db.insert_observations(b_ancient, &obs(now - 400 * day), Some("m")).unwrap();
+        st.db.insert_observations(b_old, &obs(now - 10 * day), Some("m")).unwrap();
+        st.db.log_llm_call(Some(b_old), "transcribe", "m", 10, "{\"req\":1}", Some("{\"res\":1}"), None, (Some(1000), Some(50)));
+        st.db.conn().execute("UPDATE llm_calls SET created_at = datetime(?, 'unixepoch')", [now - 10 * day]).unwrap();
+        st.db.log_llm_call(None, "chat", "m", 10, "{\"req\":2}", Some("{\"res\":2}"), None, (Some(200), Some(20)));
+
+        enforce_retention(&st).unwrap();
+
+        assert!(!ancient.exists() && !old.exists() && fresh.exists(), "images past the retention period are deleted");
+        assert_eq!(st.db.observations_in_range(0, i64::MAX).unwrap().len(), 2, "observations stay");
+        assert_eq!(st.db.token_usage_since(0).unwrap(), (1200, 70), "token counts stay");
+        let texts: Vec<(Option<String>, Option<String>)> = {
+            let c = st.db.conn();
+            let mut q = c.prepare("SELECT request, response FROM llm_calls ORDER BY id").unwrap();
+            q.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+        };
+        assert_eq!(texts[0], (None, None), "old request and response text cleared");
+        assert_eq!(texts[1].0.as_deref(), Some("{\"req\":2}"), "recent call logs keep their text");
+        // The 10-day-old row stays without an image (program statistics read it); the
+        // 400-day-old one is gone with its batch link, while its batch and observation stay.
+        let rows: Vec<(i64, String, i64)> = {
+            let c = st.db.conn();
+            let mut q = c.prepare("SELECT captured_at, file_path, is_deleted FROM screenshots ORDER BY captured_at").unwrap();
+            q.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+        };
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0], (now - 10 * day, String::new(), 1));
+        assert!(st.db.batch_screenshots(b_ancient).unwrap().is_empty());
+        assert!(st.db.batch(b_ancient).unwrap().is_some());
+        assert_eq!(st.db.batch_screenshots(b_old).unwrap().len(), 1);
+        // A second pass changes nothing.
+        enforce_retention(&st).unwrap();
+        assert_eq!(st.db.token_usage_since(0).unwrap(), (1200, 70));
     }
 
     #[test]

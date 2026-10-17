@@ -100,6 +100,11 @@ const MIGRATIONS: &[&str] = &["ALTER TABLE screenshots ADD COLUMN skip_reason TE
 /// `skip_reason` value for rows written while the user was away (no image).
 pub const SKIP_IDLE: &str = "idle";
 
+/// Days the row of an expired screenshot (time, app and window title, without the image) is
+/// kept: program statistics and chat read it. Older rows are deleted so the database does not
+/// grow without bound.
+pub const SCREENSHOT_ROW_DAYS: i64 = 365;
+
 pub const SYSTEM_CATEGORY: &str = "System";
 pub const ERROR_TITLE: &str = "Processing failed";
 
@@ -339,24 +344,44 @@ impl Db {
     }
 
     /// Soft-deletes screenshots older than `before` and returns their file paths for removal.
+    /// The rows stay (with their app and window title, without a path) like Dayflow's
+    /// soft-deleted screenshot rows; `purge_screenshot_rows` removes them much later.
     pub fn expire_screenshots(&self, before: i64) -> Result<Vec<String>> {
         let mut c = self.c();
         let tx = c.transaction()?;
         let paths = {
-            let mut st = tx.prepare("SELECT file_path FROM screenshots WHERE captured_at < ? AND is_deleted = 0")?;
+            let mut st = tx.prepare("SELECT file_path FROM screenshots WHERE captured_at < ? AND is_deleted = 0 AND file_path != ''")?;
             st.query_map([before], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?
         };
-        tx.execute("UPDATE screenshots SET is_deleted = 1 WHERE captured_at < ? AND is_deleted = 0", [before])?;
+        tx.execute("UPDATE screenshots SET is_deleted = 1, file_path = '' WHERE captured_at < ? AND is_deleted = 0", [before])?;
         tx.commit()?;
         Ok(paths)
     }
 
-    /// Removes screen transcriptions and model call logs older than `before`; cards stay.
-    pub fn expire_text(&self, before: i64) -> Result<()> {
-        let c = self.c();
-        c.execute("DELETE FROM observations WHERE end_ts < ?", [before])?;
-        c.execute("DELETE FROM llm_calls WHERE created_at < datetime(?, 'unixepoch')", [before])?;
-        Ok(())
+    /// Deletes expired screenshot rows captured before `before`, with their links to analysis
+    /// batches (`batch_screenshots`). The batches, their observations and cards stay; such a
+    /// batch can no longer be re-analyzed, which already held once its images were gone.
+    pub fn purge_screenshot_rows(&self, before: i64) -> Result<usize> {
+        let mut c = self.c();
+        let tx = c.transaction()?;
+        tx.execute(
+            "DELETE FROM batch_screenshots WHERE screenshot_id IN (SELECT id FROM screenshots WHERE captured_at < ? AND is_deleted = 1)",
+            [before],
+        )?;
+        let n = tx.execute("DELETE FROM screenshots WHERE captured_at < ? AND is_deleted = 1", [before])?;
+        tx.commit()?;
+        Ok(n)
+    }
+
+    /// Clears the request and response text of model calls made before `before`. The rows stay
+    /// with operation, model, latency, error and token counts, so usage totals survive.
+    /// Observations and cards are kept: chat and the daily recap read them (as in Dayflow).
+    pub fn expire_text(&self, before: i64) -> Result<usize> {
+        Ok(self.c().execute(
+            "UPDATE llm_calls SET request = NULL, response = NULL
+             WHERE created_at < datetime(?, 'unixepoch') AND (request IS NOT NULL OR response IS NOT NULL)",
+            [before],
+        )?)
     }
 
     // ---- batches ----

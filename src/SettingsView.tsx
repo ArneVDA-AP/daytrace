@@ -190,7 +190,10 @@ export function SettingsView({ dto, onSaved, onClose }: { dto: SettingsDto; onSa
               {[1, 3, 7, 14, 30, 90].map((n) => <option key={n} value={n}>{n === 1 ? "1 day" : `${n} days`}</option>)}
             </select>
           </label>
-          <p className="hint">Timeline cards are kept after their screenshots are deleted.</p>
+          <p className="hint">
+            Timeline cards and the text descriptions of your screen are kept after their screenshots are deleted. The names of the apps and windows you
+            used are kept for a year.
+          </p>
           <label className="check">
             <input type="checkbox" checked={s.launchAtLogin} onChange={(e) => set("launchAtLogin", e.target.checked)} />
             Start Daytrace when I sign in to Windows
