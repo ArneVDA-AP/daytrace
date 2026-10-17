@@ -101,7 +101,7 @@ jobs:
           # Xcode 26.3's type checker gives up on a long string concatenation in Dayflow's
           # Core/Flow/FlowSessionTimeline.swift ("unable to type-check this expression in
           # reasonable time"). Raise its solver limits instead of editing Dayflow's source.
-          SOLVER_FLAGS="-Xfrontend -solver-scope-threshold=16777216 -Xfrontend -solver-memory-threshold=2147483648"
+          SOLVER_FLAGS="-Xfrontend -solver-scope-threshold=16777216 -Xfrontend -solver-memory-threshold -Xfrontend 2147483648"
           xcodebuild test \
             -project dayflow/Dayflow/Dayflow.xcodeproj \
             -scheme Dayflow \
