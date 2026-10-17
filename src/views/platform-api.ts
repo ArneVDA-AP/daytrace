@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { api, type Settings } from "../api";
+import { applyAppearance as applyTheme } from "../lib/theme";
 
 export type Appearance = Settings["appearance"];
 
@@ -64,12 +65,31 @@ export async function withLiveRecordingState(s: Settings): Promise<Settings> {
   }
 }
 
-/** Applies the light/dark override to the page (data-theme on <html>) and the window title bar. */
+/** Dayflow's PausePresets.defaultMinutes. */
+export const DEFAULT_PRESETS = [15, 30, 60];
+
+/** "15 minutes", "1 hour", "1 hour 30 minutes" (the same labels as the tray). */
+export function minutesLabel(m: number): string {
+  const h = Math.floor(m / 60);
+  const rest = m % 60;
+  const hours = h === 0 ? "" : h === 1 ? "1 hour" : `${h} hours`;
+  const mins = rest === 0 ? "" : rest === 1 ? "1 minute" : `${rest} minutes`;
+  return [hours, mins].filter(Boolean).join(" ");
+}
+
+/** The pause choices in menu order, the same as the tray's "Pause for" menu. */
+export function pauseOptions(presets: number[]): PauseOption[] {
+  const valid = presets.length === 3 && presets.every((m) => Number.isInteger(m) && m >= 1 && m <= 1440);
+  return [
+    ...(valid ? presets : DEFAULT_PRESETS).map((m) => ({ id: String(m), label: minutesLabel(m) })),
+    { id: "tomorrow", label: "Until tomorrow (4 AM)" },
+    { id: "indefinite", label: "Until I resume" },
+  ];
+}
+
+/** Applies the light/dark override to the page and the native window (see lib/theme.ts). */
 export function applyAppearance(a: Appearance) {
-  const root = document.documentElement;
-  if (a === "system") delete root.dataset.theme;
-  else root.dataset.theme = a;
-  platformApi.setWindowTheme(a).catch(() => {});
+  applyTheme(a);
 }
 
 /** Event a settings section dispatches to open the first-run setup again. */

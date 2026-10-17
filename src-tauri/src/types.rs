@@ -87,23 +87,27 @@ pub struct Category {
     pub is_idle: bool,
 }
 
+/// Defaults for new installs. Work, Personal and Distraction use the validated palette of the UI
+/// (src/design/tokens.css: blue, green, plum, at least 3:1 on every surface and distinct for
+/// colour-blind readers); the UI maps these hex values to theme-aware tokens. Idle is drawn as a
+/// hatch from its own token, so its stored colour is only a fallback.
 pub fn default_categories() -> Vec<Category> {
     vec![
         Category {
             name: "Work".into(),
-            color: "#B984FF".into(),
+            color: "#407BC5".into(),
             description: "Career, school, or productivity-focused activities (projects, emails, assignments, video calls, learning skills, etc.)".into(),
             is_idle: false,
         },
         Category {
             name: "Personal".into(),
-            color: "#6AADFF".into(),
+            color: "#287C42".into(),
             description: "Purposeful non-work activities or life tasks (paying bills, fitness tracking, meal planning, personal research, creative hobbies, etc.)".into(),
             is_idle: false,
         },
         Category {
             name: "Distraction".into(),
-            color: "#FF5950".into(),
+            color: "#73176F".into(),
             description: "Passive consumption or aimless browsing (scrolling feeds, watching random videos, clicking through news, mindless games, etc.)".into(),
             is_idle: false,
         },

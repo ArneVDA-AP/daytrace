@@ -34,17 +34,33 @@ pub fn show_main(app: &AppHandle) {
         return;
     }
     let appearance = app.state::<Arc<AppState>>().settings().appearance;
+    // Built hidden so the window and webview get the theme's background colour before the first
+    // frame: no white flash in dark mode. The resolved theme (the Windows setting when following
+    // it) is only known once the window exists.
     let built = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
         .title("Daytrace")
         .inner_size(1180.0, 780.0)
         .min_inner_size(760.0, 520.0)
         .theme(platform_extras::window_theme(appearance))
+        .visible(false)
         .build();
     match built {
         Ok(w) => {
+            let dark = w.theme().map(|t| t == tauri::Theme::Dark).unwrap_or(false);
+            let _ = w.set_background_color(Some(window_background(dark)));
+            let _ = w.show();
             let _ = w.set_focus();
         }
         Err(e) => log::error!("could not open the window: {e}"),
+    }
+}
+
+/// The app canvas colour (--background in src/design/tokens.css): #f4f6f8 light, #0f1113 dark.
+fn window_background(dark: bool) -> tauri::window::Color {
+    if dark {
+        tauri::window::Color(0x0f, 0x11, 0x13, 0xff)
+    } else {
+        tauri::window::Color(0xf4, 0xf6, 0xf8, 0xff)
     }
 }
 
