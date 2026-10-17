@@ -4,6 +4,7 @@
 //! OllamaPromptPreferences.swift, CodexProvider+Prompts.swift, CodexPromptPreferences.swift,
 //! TimelineOutputSupport.swift, LLMOutputLanguagePreferences.swift, OpenAICompatibleProvider.swift.
 
+use crate::config::PromptOverrides;
 use crate::types::Category;
 
 pub const SYSTEM_JSON_LOCAL: &str = "You are a helpful assistant. Always respond with valid JSON.";
@@ -124,7 +125,8 @@ Rules:
 - Avoid long lists; no more than one conjunction
 - Return only the title text (no quotes, no JSON)"#;
 
-pub fn local_summary(observations: &str, categories: &[Category], language: &str) -> String {
+pub fn local_summary(observations: &str, categories: &[Category], language: &str, overrides: &PromptOverrides) -> String {
+    let summary_block = PromptOverrides::pick(&overrides.lightweight_summary, LOCAL_SUMMARY_BLOCK);
     let category_lines: Vec<String> = categories
         .iter()
         .map(|c| {
@@ -145,7 +147,7 @@ Activity periods:
 
   Create a summary that captures what happened during this time period.
 
-{LOCAL_SUMMARY_BLOCK}
+{summary_block}
 
 CATEGORIES:
 Choose exactly one:
@@ -184,9 +186,10 @@ pub fn local_summary_retry(err: &str) -> String {
     format!("\n\nPREVIOUS ATTEMPT FAILED — The response was invalid (error: {err}).\nRespond with ONLY the JSON object described above. Ensure it contains \"reasoning\", \"summary\", \"category\", and \"app_sites\" fields.")
 }
 
-pub fn local_title(observation_bullets: &str, language: &str) -> String {
+pub fn local_title(observation_bullets: &str, language: &str, overrides: &PromptOverrides) -> String {
     let lang = language_instruction(language, false).map(|l| format!("\n\n{l}")).unwrap_or_default();
-    format!("{LOCAL_TITLE_BLOCK}\n{lang}\n\nOBSERVATIONS:\n{observation_bullets}")
+    let title_block = PromptOverrides::pick(&overrides.lightweight_title, LOCAL_TITLE_BLOCK);
+    format!("{title_block}\n{lang}\n\nOBSERVATIONS:\n{observation_bullets}")
 }
 
 pub fn local_title_retry(err: &str) -> String {
@@ -437,8 +440,10 @@ Write 2–3 factual sentences in first person without "I". State the main activi
 pub const CLOUD_DETAILED_BLOCK: &str = r#"DETAILED SUMMARIES
 Write a chronological log of timestamped activity lines. Each line states the concrete action, subject, and relevant application or site. Include substantive secondary activities and specific details here that the title omits. Encode line breaks with valid JSON escapes."#;
 
-pub fn cloud_cards(previous_cards_json: &str, transcript: &str, categories: &[Category], language: &str) -> String {
+pub fn cloud_cards(previous_cards_json: &str, transcript: &str, categories: &[Category], language: &str, overrides: &PromptOverrides) -> String {
     let lang = language_instruction(language, true).map(|l| format!("\n\n{l}")).unwrap_or_default();
+    let title_block = PromptOverrides::pick(&overrides.detailed_title, CLOUD_TITLE_BLOCK);
+    let summary_block = PromptOverrides::pick(&overrides.detailed_summary, CLOUD_SUMMARY_BLOCK);
     format!(
         r#"<previous_cards>
 {previous_cards_json}
@@ -456,11 +461,54 @@ Return cards covering all the time represented by the supplied previous cards an
 {cats}
 {lang}
 
-{CLOUD_TITLE_BLOCK}
+{title_block}
 
-{CLOUD_SUMMARY_BLOCK}
+{summary_block}
 
 Return only a valid JSON array. Each card has startTime and endTime in h:mm AM/PM format, category and subcategory strings, summary, title, distractions (array of brief unrelated interruptions with startTime, endTime, title, summary), and appSites (an object with primary and secondary, each a single string or null, never an array; use website domains or recognizable application names). Choose consistent categories. Write summaries before the title. Check coverage, duration, and factual accuracy before returning the array."#,
         cats = categories_section(categories),
     )
+}
+
+/// The default instruction blocks users can replace in Settings (Dayflow's
+/// CodexPromptDefaults / OllamaPromptDefaults, as Daytrace sends them).
+pub fn default_blocks() -> PromptOverrides {
+    PromptOverrides {
+        detailed_title: CLOUD_TITLE_BLOCK.into(),
+        detailed_summary: CLOUD_SUMMARY_BLOCK.into(),
+        lightweight_title: LOCAL_TITLE_BLOCK.into(),
+        lightweight_summary: LOCAL_SUMMARY_BLOCK.into(),
+    }
+}
+
+#[cfg(test)]
+mod override_tests {
+    use super::*;
+
+    #[test]
+    fn overrides_replace_only_their_block() {
+        let cats = crate::types::default_categories();
+        let none = PromptOverrides::default();
+        let custom = PromptOverrides {
+            detailed_title: "  Titles: name the project first.  ".into(),
+            detailed_summary: String::new(),
+            lightweight_title: "Short titles only.".into(),
+            lightweight_summary: "\n\n".into(),
+        };
+        let a = cloud_cards("[]", "obs", &cats, "", &none);
+        assert!(a.contains(CLOUD_TITLE_BLOCK) && a.contains(CLOUD_SUMMARY_BLOCK));
+        let b = cloud_cards("[]", "obs", &cats, "", &custom);
+        assert!(!b.contains(CLOUD_TITLE_BLOCK));
+        assert!(b.contains("\n\nTitles: name the project first.\n\nSUMMARIES\n"), "trimmed override in place of the title block");
+        assert!(b.contains(CLOUD_SUMMARY_BLOCK), "an empty override keeps the default");
+        assert!(b.ends_with("Check coverage, duration, and factual accuracy before returning the array."));
+
+        let t = local_title("- x", "", &custom);
+        assert!(t.starts_with("Short titles only.\n"));
+        assert!(!t.contains(LOCAL_TITLE_BLOCK));
+        // Whitespace-only counts as no override.
+        let s = local_summary("obs", &cats, "", &custom);
+        assert!(s.contains(LOCAL_SUMMARY_BLOCK));
+        assert_eq!(default_blocks().lightweight_title, LOCAL_TITLE_BLOCK);
+    }
 }

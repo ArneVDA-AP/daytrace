@@ -166,7 +166,8 @@ pub enum PromptStyle {
 
 pub fn prompt_style(kind: ProviderKind, base_url: &str) -> PromptStyle {
     match kind {
-        ProviderKind::Anthropic => PromptStyle::Evidence,
+        ProviderKind::Anthropic | ProviderKind::ClaudeCli => PromptStyle::Evidence,
+        ProviderKind::CodexCli => PromptStyle::EvidenceExtra,
         ProviderKind::Ollama | ProviderKind::LmStudio => PromptStyle::Local,
         ProviderKind::OpenaiCompatible => {
             if base_url.to_lowercase().contains("generativelanguage.googleapis.com") {
@@ -364,6 +365,8 @@ pub fn provider_label(kind: ProviderKind) -> &'static str {
         ProviderKind::Ollama => "ollama",
         ProviderKind::LmStudio => "lm_studio",
         ProviderKind::OpenaiCompatible => "openai_compatible",
+        ProviderKind::ClaudeCli => "claude_cli",
+        ProviderKind::CodexCli => "codex_cli",
     }
 }
 

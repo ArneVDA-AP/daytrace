@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type ProviderKind = "anthropic" | "ollama" | "lm_studio" | "openai_compatible";
+export type ProviderKind = "anthropic" | "ollama" | "lm_studio" | "openai_compatible" | "claude_cli" | "codex_cli";
 export type Pipeline = "local" | "cloud";
 
 export interface Category {
@@ -8,6 +8,19 @@ export interface Category {
   color: string;
   description: string;
   isIdle: boolean;
+}
+
+/** Edited instruction blocks of the card prompts; an empty string means the default text. */
+export interface PromptOverrides {
+  detailedTitle: string;
+  detailedSummary: string;
+  lightweightTitle: string;
+  lightweightSummary: string;
+}
+
+export interface CliCheck {
+  path: string;
+  version: string;
 }
 
 export interface Settings {
@@ -31,6 +44,10 @@ export interface Settings {
   recapAuto: boolean;
   recapTime: string;
   chatModel: string;
+  fallbackProvider: ProviderKind | null;
+  fallbackBaseUrl: string;
+  fallbackModel: string;
+  promptOverrides: PromptOverrides;
 }
 
 export interface SettingsDto {
@@ -106,6 +123,11 @@ export const api = {
     invoke<string>("test_provider", { provider, baseUrl, model, apiKey: apiKey || null }),
   exportMarkdown: (fromDay: string, toDay: string, path: string) => invoke<number>("export_markdown", { fromDay, toDay, path }),
   openDataDir: () => invoke<void>("open_data_dir"),
+  // provider settings
+  providerPromptDefaults: () => invoke<PromptOverrides>("provider_prompt_defaults"),
+  providerKeyStatus: (provider: ProviderKind, baseUrl: string) => invoke<boolean>("provider_key_status", { provider, baseUrl }),
+  providerSaveKey: (provider: ProviderKind, baseUrl: string, apiKey: string) => invoke<boolean>("provider_save_key", { provider, baseUrl, apiKey }),
+  providerCheckCli: (provider: ProviderKind, path: string) => invoke<CliCheck>("provider_check_cli", { provider, path }),
 };
 
 // ---- date helpers (logical days start at 4 AM, matching the backend) ----

@@ -184,3 +184,11 @@ textarea { width: 100%; resize: vertical; font-family: inherit; }
 .tab:hover { color: var(--ink); }
 .tab.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
 .placeholder-view { flex: 1; display: grid; place-items: center; color: var(--muted); border-top: 1px solid var(--rule); }
+
+/* provider settings: fallback provider and prompt instructions */
+.settings h3 { font-size: 14px; margin: 22px 0 4px; }
+.prompt-editor { margin-top: 18px; }
+.prompt-editor > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+.prompt-block { margin: 14px 0; }
+.prompt-block .hint { margin: 2px 0 6px; }
+.prompt-block textarea { font-size: 12.5px; line-height: 1.45; }

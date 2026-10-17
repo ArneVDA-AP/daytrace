@@ -5,6 +5,8 @@ use crate::config::ProviderKind;
 use crate::db::Db;
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
@@ -53,6 +55,12 @@ pub struct LlmClient {
     /// Route Anthropic requests through the Message Batches API.
     pub use_batch: bool,
     pub reasoning: crate::config::Reasoning,
+    /// The CLI runner for the Claude Code / Codex providers (None for HTTP providers).
+    cli: Option<Arc<super::cli::CliBackend>>,
+    /// Set after the model rejected `thinking` / `output_config` with HTTP 400 (Claude Opus 5.5
+    /// refuses `thinking: {"type": "disabled"}`); later requests leave the field out.
+    drop_thinking: Arc<AtomicBool>,
+    drop_output_config: Arc<AtomicBool>,
 }
 
 #[derive(Debug)]
@@ -90,7 +98,26 @@ impl LlmClient {
             db,
             use_batch: false,
             reasoning: crate::config::Reasoning::Off,
+            cli: super::cli::CliTool::from_kind(kind).map(|tool| Arc::new(super::cli::CliBackend::new(tool, base_url, model))),
+            drop_thinking: Arc::new(AtomicBool::new(false)),
+            drop_output_config: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    /// Replaces the CLI runner (tests use a fake process runner).
+    #[cfg(test)]
+    pub(crate) fn with_cli_backend(mut self, backend: super::cli::CliBackend) -> LlmClient {
+        self.cli = Some(Arc::new(backend));
+        self
+    }
+
+    /// The CLI runner, for the Claude Code and Codex providers.
+    pub fn cli(&self) -> Option<&super::cli::CliBackend> {
+        self.cli.as_deref()
+    }
+
+    pub fn is_cli(&self) -> bool {
+        self.cli.is_some()
     }
 
     pub fn is_local(&self) -> bool {
@@ -146,7 +173,9 @@ impl LlmClient {
                 if let Some(s) = &opts.system {
                     body["system"] = json!(s);
                 }
-                // Older Claude generations do not know these fields.
+                // Older Claude generations do not know these fields. No temperature is sent:
+                // Dayflow has no Anthropic API path (its Claude provider is the CLI, which sets
+                // none), and the API default suits the JSON tasks.
                 let modern = !self.model.starts_with("claude-3");
                 if modern {
                     match self.reasoning {
@@ -160,6 +189,7 @@ impl LlmClient {
                         crate::config::Reasoning::Default => {}
                     }
                 }
+                self.apply_reasoning_drops(&mut body);
                 (self.messages_url(), body)
             }
             _ => {
@@ -345,9 +375,14 @@ impl LlmClient {
         if estimate > MAX_INPUT_TOKENS {
             bail!("Request would be about {estimate} input tokens, over the {MAX_INPUT_TOKENS} limit; not sent");
         }
-        let (url, body) = self.build_request(&parts, &opts);
+        if let Some(cli) = self.cli.clone() {
+            return self.complete_cli(&cli, parts, opts).await;
+        }
+        let (url, mut body) = self.build_request(&parts, &opts);
         let mut last_err = anyhow!("no attempts made");
-        for attempt in 0..opts.attempts.max(1) {
+        let mut attempt = 0;
+        let mut reasoning_retry_done = false;
+        while attempt < opts.attempts.max(1) {
             if attempt > 0 {
                 tokio::time::sleep(Duration::from_secs(2u64 << (attempt - 1).min(2))).await;
             }
@@ -364,10 +399,92 @@ impl LlmClient {
             match result {
                 Ok((out, _)) => return Ok(out),
                 Err(e) => {
+                    // A model that refuses the reasoning fields gets one immediate retry without
+                    // them; the client remembers it for later requests.
+                    if !reasoning_retry_done && self.kind == ProviderKind::Anthropic && self.note_reasoning_rejection(&e, &body) {
+                        reasoning_retry_done = true;
+                        log::warn!("{}: model {} rejected the reasoning fields; retrying without them", opts.op, self.model);
+                        self.apply_reasoning_drops(&mut body);
+                        last_err = e;
+                        continue;
+                    }
                     log::warn!("{} attempt {} failed: {e:#}", opts.op, attempt + 1);
                     let retry = Self::retryable(&e);
                     last_err = e;
+                    attempt += 1;
                     if !retry {
+                        break;
+                    }
+                }
+            }
+        }
+        Err(last_err)
+    }
+
+    /// Records which reasoning fields a 400 response complains about. True when the request
+    /// carried one of them, so a retry without it can succeed.
+    fn note_reasoning_rejection(&self, err: &anyhow::Error, body: &Value) -> bool {
+        let Some(h) = err.downcast_ref::<HttpError>() else { return false };
+        if h.status != 400 {
+            return false;
+        }
+        let msg = h.body.to_lowercase();
+        let has_thinking = body.get("thinking").is_some();
+        let has_output_config = body.get("output_config").is_some();
+        let mut hit = false;
+        if has_thinking && msg.contains("thinking") {
+            self.drop_thinking.store(true, Ordering::SeqCst);
+            hit = true;
+        }
+        if has_output_config && (msg.contains("output_config") || msg.contains("effort")) {
+            self.drop_output_config.store(true, Ordering::SeqCst);
+            hit = true;
+        }
+        hit
+    }
+
+    fn apply_reasoning_drops(&self, body: &mut Value) {
+        if let Some(o) = body.as_object_mut() {
+            if self.drop_thinking.load(Ordering::SeqCst) {
+                o.remove("thinking");
+            }
+            if self.drop_output_config.load(Ordering::SeqCst) {
+                o.remove("output_config");
+            }
+        }
+    }
+
+    /// `complete` for the CLI providers. Retries only failures the classifier calls transient
+    /// (a timeout, an overloaded server): a signed-out CLI fails the same way every time.
+    async fn complete_cli(&self, cli: &super::cli::CliBackend, parts: Vec<Part>, opts: CallOpts) -> Result<String> {
+        let timeout = if opts.op == "test" { Duration::from_secs(120) } else { super::cli::DEFAULT_TIMEOUT };
+        let images = parts.iter().filter(|p| matches!(p, Part::Jpeg { .. })).count();
+        let text: String = parts.iter().filter_map(|p| if let Part::Text(t) = p { Some(t.as_str()) } else { None }).collect::<Vec<_>>().join("\n");
+        let req_log = json!({"cli": cli.tool.bin_name(), "system": opts.system, "prompt": text, "images": images}).to_string();
+        let mut last_err = anyhow!("no attempts made");
+        for attempt in 0..opts.attempts.max(1) {
+            let started = Instant::now();
+            let result = cli.complete(&parts, opts.system.as_deref(), timeout).await;
+            let latency = started.elapsed().as_millis() as i64;
+            if let Some(db) = &self.db {
+                match &result {
+                    Ok((out, usage)) => {
+                        db.log_llm_call(opts.batch_id, opts.op, &self.model, latency, &req_log, Some(out), None, usage.map(|u| u.for_log()).unwrap_or((None, None)))
+                    }
+                    Err(e) => {
+                        let usage = e.downcast_ref::<super::cli::CliFailed>().and_then(|f| f.usage).map(|u| u.for_log()).unwrap_or((None, None));
+                        db.log_llm_call(opts.batch_id, opts.op, &self.model, latency, &req_log, None, Some(&format!("{e:#}")), usage)
+                    }
+                }
+            }
+            match result {
+                Ok((out, _)) => return Ok(out),
+                Err(e) => {
+                    log::warn!("{} attempt {} via {} failed: {e:#}", opts.op, attempt + 1, cli.tool.display_name());
+                    let transient = super::failure::classify(&format!("{e:#}")).kind == super::failure::FailureKind::Transient;
+                    let cancelled = format!("{e:#}").contains("cancelled");
+                    last_err = e;
+                    if !transient || cancelled {
                         break;
                     }
                 }
@@ -378,6 +495,9 @@ impl LlmClient {
 
     /// Lists model ids from the provider (`/models`), for the settings dropdown.
     pub async fn list_models(&self) -> Result<Vec<String>> {
+        if let Some(cli) = &self.cli {
+            return Ok(cli.tool.suggested_models());
+        }
         let mut req = self.http.get(self.models_url());
         match self.kind {
             ProviderKind::Anthropic => {
@@ -491,5 +611,142 @@ impl LlmClient {
     }
     pub(crate) fn redacted(body: &Value) -> String {
         Self::redact(body)
+    }
+}
+
+/// A local HTTP server with scripted answers, for tests that must go through the real client
+/// (no external network).
+#[cfg(test)]
+pub(crate) mod test_server {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+
+    pub struct Server {
+        pub url: String,
+        pub bodies: Arc<Mutex<Vec<serde_json::Value>>>,
+    }
+
+    /// Answers each request with the next (status, body); records the JSON request bodies.
+    pub fn start(replies: Vec<(u16, String)>) -> Server {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let bodies = Arc::new(Mutex::new(Vec::new()));
+        let seen = bodies.clone();
+        std::thread::spawn(move || {
+            for (status, reply) in replies {
+                let Ok((mut stream, _)) = listener.accept() else { return };
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 8192];
+                let header_end = loop {
+                    let n = stream.read(&mut chunk).unwrap_or(0);
+                    if n == 0 {
+                        break None;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                    if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break Some(i + 4);
+                    }
+                };
+                let Some(header_end) = header_end else { continue };
+                let head = String::from_utf8_lossy(&buf[..header_end]).to_lowercase();
+                let len: usize = head
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:").map(|v| v.trim().parse().unwrap_or(0)))
+                    .unwrap_or(0);
+                while buf.len() < header_end + len {
+                    let n = stream.read(&mut chunk).unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                }
+                let body = &buf[header_end..(header_end + len).min(buf.len())];
+                seen.lock().unwrap().push(serde_json::from_slice(body).unwrap_or(serde_json::Value::Null));
+                let resp = format!(
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+            }
+        });
+        Server { url, bodies }
+    }
+}
+
+#[cfg(test)]
+mod reasoning_retry_tests {
+    use super::*;
+    use crate::config::Reasoning;
+
+    fn ok_reply(text: &str) -> String {
+        json!({"content": [{"type": "text", "text": text}], "stop_reason": "end_turn", "usage": {"input_tokens": 3, "output_tokens": 1}}).to_string()
+    }
+
+    fn opts() -> CallOpts {
+        CallOpts { op: "test", batch_id: None, max_tokens: 50, system: None, attempts: 1 }
+    }
+
+    #[tokio::test]
+    async fn opus_rejecting_disabled_thinking_is_retried_without_it() {
+        let rejection = json!({"type": "error", "error": {"type": "invalid_request_error",
+            "message": "thinking.type: 'disabled' is not supported for this model. Use 'adaptive' instead."}})
+        .to_string();
+        let server = test_server::start(vec![(400, rejection), (200, ok_reply("one")), (200, ok_reply("two"))]);
+        let mut c = LlmClient::new(ProviderKind::Anthropic, &server.url, "claude-opus-5-5", Some("k".into()), None).unwrap();
+        c.reasoning = Reasoning::Off;
+        assert_eq!(c.complete(vec![Part::Text("hi".into())], opts()).await.unwrap(), "one");
+        // The client remembers: the next request leaves the field out from the start.
+        assert_eq!(c.complete(vec![Part::Text("again".into())], opts()).await.unwrap(), "two");
+        let bodies = server.bodies.lock().unwrap().clone();
+        assert_eq!(bodies.len(), 3);
+        assert_eq!(bodies[0]["thinking"], json!({"type": "disabled"}));
+        assert!(bodies[1].get("thinking").is_none());
+        // Only the field the error named is dropped; effort stays low.
+        assert_eq!(bodies[1]["output_config"], json!({"effort": "low"}));
+        assert!(bodies[2].get("thinking").is_none());
+        assert!(!bodies.iter().any(|b| b.get("temperature").is_some()), "no temperature to Anthropic");
+    }
+
+    #[tokio::test]
+    async fn effort_rejection_drops_output_config_and_other_400s_fail() {
+        let effort = json!({"type": "error", "error": {"type": "invalid_request_error", "message": "output_config.effort: Extra inputs are not permitted"}}).to_string();
+        let other = json!({"type": "error", "error": {"type": "invalid_request_error", "message": "messages: at least one message is required"}}).to_string();
+        let server = test_server::start(vec![(400, effort), (200, ok_reply("ok")), (400, other)]);
+        let mut c = LlmClient::new(ProviderKind::Anthropic, &server.url, "claude-haiku-5-5", Some("k".into()), None).unwrap();
+        c.reasoning = Reasoning::Low;
+        assert_eq!(c.complete(vec![Part::Text("hi".into())], opts()).await.unwrap(), "ok");
+        let err = c.complete(vec![Part::Text("hi".into())], opts()).await.unwrap_err();
+        assert!(err.to_string().contains("HTTP 400"), "{err}");
+        let bodies = server.bodies.lock().unwrap().clone();
+        assert_eq!(bodies.len(), 3, "an unrelated 400 is not retried");
+        assert!(bodies[0].get("output_config").is_some());
+        assert!(bodies[1].get("output_config").is_none());
+    }
+
+    #[tokio::test]
+    async fn cli_provider_goes_through_the_cli() {
+        use super::super::cli::{process::FakeRunner, testing, CliTool};
+        let tmp = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(vec![
+            FakeRunner::ok(&testing::claude_result("Blue")),
+            Err("CLI process timed out after 300 seconds".into()),
+            FakeRunner::ok(&testing::claude_result("Blue again")),
+            FakeRunner::exit(1, r#"{"type":"result","is_error":true,"result":"Not logged in · Please run /login"}"#, ""),
+        ]));
+        let db = crate::db::Db::memory();
+        let c = LlmClient::new(ProviderKind::ClaudeCli, "", "haiku", None, Some(db.clone()))
+            .unwrap()
+            .with_cli_backend(testing::backend(CliTool::Claude, runner.clone(), tmp.path()));
+        assert_eq!(c.list_models().await.unwrap(), vec!["haiku", "sonnet", "opus"]);
+        assert_eq!(c.complete(vec![Part::Text("color?".into())], opts()).await.unwrap(), "Blue");
+        // A timeout is transient: retried when the caller allows two attempts.
+        let two = CallOpts { attempts: 2, ..opts() };
+        assert_eq!(c.complete(vec![Part::Text("color?".into())], two.clone()).await.unwrap(), "Blue again");
+        // Signed out is not retried.
+        let err = c.complete(vec![Part::Text("color?".into())], two).await.unwrap_err();
+        assert!(err.to_string().contains("Please run /login"));
+        assert_eq!(runner.calls().len(), 4);
+        assert_eq!(db.token_usage_since(0).unwrap(), (220, 40));
     }
 }

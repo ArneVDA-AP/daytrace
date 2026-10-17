@@ -23,6 +23,8 @@ pub fn key_required(kind: ProviderKind, base_url: &str) -> bool {
             ["api.openai.com", "openrouter.ai", "generativelanguage.googleapis.com"].contains(&host.as_str())
         }
         ProviderKind::Ollama | ProviderKind::LmStudio => false,
+        // CLI providers sign in through their own tool; no API key is involved.
+        ProviderKind::ClaudeCli | ProviderKind::CodexCli => false,
     }
 }
 
