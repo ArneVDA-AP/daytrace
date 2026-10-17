@@ -68,6 +68,7 @@ pub struct Settings {
     /// export off.
     pub recap_export_dir: String,
     /// Write the daily recap automatically after `recap_time` (and export it when a folder is set).
+    /// Opt-in: it spends a model request a day.
     pub recap_auto: bool,
     /// Local time ("HH:MM", 24-hour) after which the automatic recap runs.
     pub recap_time: String,
@@ -95,7 +96,7 @@ impl Default for Settings {
             use_batch_api: false,
             reasoning: Reasoning::Low,
             recap_export_dir: String::new(),
-            recap_auto: true,
+            recap_auto: false,
             recap_time: "08:00".into(),
             chat_model: String::new(),
         }
@@ -180,6 +181,11 @@ impl Settings {
         }
         if self.model.trim().is_empty() {
             self.model = default_model(self.provider).into();
+        }
+        // A relative recap folder would resolve against the working directory (save refuses it).
+        self.recap_export_dir = self.recap_export_dir.trim().to_string();
+        if !self.recap_export_dir.is_empty() && !Path::new(&self.recap_export_dir).is_absolute() {
+            self.recap_export_dir.clear();
         }
         self
     }

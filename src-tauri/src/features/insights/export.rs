@@ -102,6 +102,18 @@ pub fn recap_markdown(day: &str, stats: &DayStats, recap: Option<&RecapEntry>, c
     out
 }
 
+pub const RELATIVE_DIR: &str = "The recap folder must be a full path, such as C:\\Users\\you\\OneDrive. Choose it with Choose folder.";
+
+/// The export folder must be absolute: a relative one would land wherever the app happens to
+/// run from (with autostart on Windows, often C:\Windows\System32).
+pub fn check_dir(dir: &str) -> Result<()> {
+    let d = dir.trim();
+    if !d.is_empty() && !Path::new(d).is_absolute() {
+        anyhow::bail!(RELATIVE_DIR);
+    }
+    Ok(())
+}
+
 /// `<dir>/Daytrace/<day>.md`
 pub fn export_path(dir: &str, day: &str) -> PathBuf {
     Path::new(dir.trim()).join("Daytrace").join(format!("{day}.md"))
@@ -178,6 +190,15 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "# two");
         let names: Vec<_> = std::fs::read_dir(path.parent().unwrap()).unwrap().map(|e| e.unwrap().file_name()).collect();
         assert_eq!(names.len(), 1, "no temporary file left behind");
+    }
+
+    #[test]
+    fn export_folder_must_be_absolute() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(check_dir(&dir.path().to_string_lossy()).is_ok());
+        assert!(check_dir("").is_ok(), "empty turns the export off");
+        assert_eq!(check_dir("OneDrive/Daytrace").unwrap_err().to_string(), RELATIVE_DIR);
+        assert!(check_dir("./phone").is_err());
     }
 
     #[test]

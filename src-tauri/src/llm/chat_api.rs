@@ -13,6 +13,19 @@ use serde_json::{json, Value};
 use std::future::Future;
 use std::time::{Duration, Instant};
 
+/// Whether requests to this provider fail without an API key: Anthropic, and the hosted
+/// OpenAI-compatible services (a self-hosted server may not need one).
+pub fn key_required(kind: ProviderKind, base_url: &str) -> bool {
+    match kind {
+        ProviderKind::Anthropic => true,
+        ProviderKind::OpenaiCompatible => {
+            let host = reqwest::Url::parse(base_url.trim()).ok().and_then(|u| u.host_str().map(str::to_lowercase)).unwrap_or_default();
+            ["api.openai.com", "openrouter.ai", "generativelanguage.googleapis.com"].contains(&host.as_str())
+        }
+        ProviderKind::Ollama | ProviderKind::LmStudio => false,
+    }
+}
+
 /// A tool the model may call. `parameters` is a JSON Schema object.
 #[derive(Debug, Clone)]
 pub struct ToolSpec {

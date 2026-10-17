@@ -8,7 +8,7 @@ pub mod recap;
 pub mod stats;
 pub mod weekly;
 
-use crate::config::ProviderKind;
+use crate::config::{ProviderKind, Settings};
 use crate::db::{Db, StoredCard, SYSTEM_CATEGORY};
 use crate::llm::client::{CallOpts, LlmClient, Part};
 use crate::state::AppState;
@@ -171,38 +171,97 @@ pub struct RecapView {
     pub auto_error: Option<String>,
     /// The export file of the source day, when it exists.
     pub export_path: Option<String>,
+    /// What the automatic recap will do: set for today while there is no recap and automatic
+    /// recaps are on.
+    pub auto: Option<AutoPlan>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoPlan {
+    /// Local time ("HH:MM") after which it runs.
+    pub after: String,
+    /// The day it would be written from. The automatic recap needs `MIN_MINUTES_AUTO` captured
+    /// minutes on that day (Generate needs `MIN_MINUTES_MANUAL`); None when no recent day has them.
+    pub source_day: Option<String>,
+    /// Why it will not run now, in plain words.
+    pub blocked: Option<String>,
+}
+
+/// Why the configured model cannot write a recap, in plain words (the configuration part of
+/// Dayflow's provider availability check; nothing is sent).
+pub fn provider_problem(s: &Settings) -> Option<String> {
+    if s.model.trim().is_empty() {
+        return Some("No model is set. Choose one in Settings.".into());
+    }
+    if crate::llm::chat_api::key_required(s.provider, &s.base_url) && crate::config::stored_key(s.provider, &s.base_url).is_none() {
+        let who = match s.provider {
+            ProviderKind::Anthropic => "Anthropic".to_string(),
+            _ => reqwest::Url::parse(s.base_url.trim()).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or_else(|| "The model provider".into()),
+        };
+        return Some(format!("{who} needs an API key. Add one in Settings."));
+    }
+    None
+}
+
+/// Checks the recap settings before they are saved.
+pub fn check_settings(s: &Settings) -> Result<(), String> {
+    export::check_dir(&s.recap_export_dir).map_err(|e| e.to_string())
 }
 
 fn existing_export(state: &AppState, source_day: &str) -> Option<PathBuf> {
     let dir = state.settings().recap_export_dir;
-    if dir.trim().is_empty() {
+    if dir.trim().is_empty() || export::check_dir(&dir).is_err() {
         return None;
     }
     let p = export::export_path(&dir, source_day);
     p.exists().then_some(p)
 }
 
+fn auto_plan(c: &Connection, settings: &Settings, target: &str) -> Result<AutoPlan> {
+    let blocked = if !settings.recording_enabled {
+        Some("Automatic recaps are paused while recording is paused.".to_string())
+    } else {
+        provider_problem(settings).map(|p| format!("The automatic recap cannot run yet. {p}"))
+    };
+    Ok(AutoPlan {
+        after: settings.recap_time.clone(),
+        source_day: recap::source_for(c, target, &settings.categories, recap::MIN_MINUTES_AUTO)?,
+        blocked,
+    })
+}
+
 pub fn recap_view(state: &AppState, target: &str) -> Result<RecapView> {
     bounds(target)?;
     let settings = state.settings();
-    let (entry, source_day, auto_error) = {
+    let (entry, source_day, auto_error, auto) = {
         let c = state.db.conn();
         let entry = recap::load(&c, target)?;
         let source = match &entry {
             Some(e) => Some(e.source_day.clone()),
             None => recap::source_for(&c, target, &settings.categories, recap::MIN_MINUTES_MANUAL)?,
         };
-        (entry, source, kv_get(&c, &auto_error_key(target))?)
+        let auto = if settings.recap_auto && entry.is_none() && target == logical_day(now_ts()) {
+            Some(auto_plan(&c, &settings, target)?)
+        } else {
+            None
+        };
+        (entry, source, kv_get(&c, &auto_error_key(target))?, auto)
     };
     let export_path = source_day.as_deref().and_then(|s| existing_export(state, s)).map(|p| p.to_string_lossy().to_string());
-    Ok(RecapView { target_day: target.to_string(), generating: is_in_flight(target), entry, source_day, auto_error, export_path })
+    Ok(RecapView { target_day: target.to_string(), generating: is_in_flight(target), entry, source_day, auto_error, export_path, auto })
 }
 
 /// Generates (or regenerates) the recap for `target`. `background` is the scheduler: it may use
 /// the Batch API and needs 180 captured minutes on the source day; the Daily view needs 120 and
 /// keeps the source day of an existing recap.
 pub async fn generate(state: &AppState, target: &str, background: bool) -> Result<RecapEntry> {
-    let _guard = InFlight::claim(target).ok_or_else(|| anyhow!("A recap for this day is already being generated."))?;
+    let claim = InFlight::claim(target).ok_or_else(|| anyhow!("A recap for this day is already being generated."))?;
+    generate_claimed(state, target, background, &claim).await
+}
+
+/// `generate` for a caller that already holds the day's claim.
+async fn generate_claimed(state: &AppState, target: &str, background: bool, _claim: &InFlight) -> Result<RecapEntry> {
     let settings = state.settings();
     let source = {
         let c = state.db.conn();
@@ -216,10 +275,10 @@ pub async fn generate(state: &AppState, target: &str, background: bool) -> Resul
     if cards.is_empty() {
         bail!("No timeline cards were found for {source}.");
     }
-    let api_key = crate::config::stored_key(settings.provider, &settings.base_url);
-    if settings.provider == ProviderKind::Anthropic && api_key.is_none() {
-        bail!("Add an Anthropic API key in Settings to generate the recap.");
+    if let Some(p) = provider_problem(&settings) {
+        bail!(p);
     }
+    let api_key = crate::config::stored_key(settings.provider, &settings.base_url);
     let prompt = recap::build_prompt(&source, &cards, recap::prompt_style(settings.provider, &settings.base_url), &settings.output_language);
     let mut client = LlmClient::new(settings.provider, &settings.base_url, &settings.model, api_key, Some(state.db.clone()))?;
     // Only the scheduled recap may wait for the Batch API; a click needs an answer now.
@@ -294,6 +353,7 @@ pub fn export_day(state: &AppState, day: &str, path: Option<PathBuf>, note: Opti
             if dir.trim().is_empty() {
                 bail!("Choose a recap folder in Settings first.");
             }
+            export::check_dir(&dir)?;
             export::export_path(&dir, day)
         }
     };
@@ -357,10 +417,11 @@ fn analysis_pending(state: &AppState, source: &str) -> Result<bool> {
 }
 
 /// One scheduler check: after the recap time, make today's recap (from the last active day) if
-/// there is none, then write its file to the export folder once.
+/// there is none, then write its file to the export folder once. Automatic recaps are opt-in and
+/// pause with recording.
 pub async fn auto_tick(state: &AppState) -> Result<()> {
     let settings = state.settings();
-    if !settings.recap_auto {
+    if !settings.recap_auto || !settings.recording_enabled {
         return Ok(());
     }
     let now = now_ts();
@@ -385,28 +446,40 @@ pub async fn auto_tick(state: &AppState) -> Result<()> {
         if now < moment + MAX_ANALYSIS_WAIT && analysis_pending(state, &source)? {
             return Ok(());
         }
-        let attempt = reserve_attempt(&state.db.conn(), &target)?;
-        match attempt {
-            Some(n) => {
-                log::info!("generating the daily recap for {target} from {source} (attempt {n})");
-                match generate(state, &target, true).await {
-                    Ok(e) => entry = Some(e),
-                    Err(e) => {
-                        let msg = format!("{e:#}");
-                        log::warn!("daily recap for {target} failed: {msg}");
-                        kv_set(&state.db.conn(), &auto_error_key(&target), &msg)?;
-                        if n < MAX_AUTO_ATTEMPTS {
-                            return Ok(());
+        // Dayflow's scheduler checks the provider before it reserves an attempt.
+        if provider_problem(&settings).is_some() {
+            return Ok(());
+        }
+        // A Generate from the Daily view may be writing this day's recap. It is not an automatic
+        // attempt: leave it alone and look again at the next check.
+        let Some(claim) = InFlight::claim(&target) else { return Ok(()) };
+        // It may have finished between the first look and the claim.
+        entry = recap::load(&state.db.conn(), &target)?;
+        if entry.is_none() {
+            let attempt = reserve_attempt(&state.db.conn(), &target)?; // guard dropped before the await
+            match attempt {
+                Some(n) => {
+                    log::info!("generating the daily recap for {target} from {source} (attempt {n})");
+                    match generate_claimed(state, &target, true, &claim).await {
+                        Ok(e) => entry = Some(e),
+                        Err(e) => {
+                            let msg = format!("{e:#}");
+                            log::warn!("daily recap for {target} failed: {msg}");
+                            kv_set(&state.db.conn(), &auto_error_key(&target), &msg)?;
+                            if n < MAX_AUTO_ATTEMPTS {
+                                return Ok(());
+                            }
+                            note = Some(format!("The recap could not be generated: {msg}"));
                         }
-                        note = Some(format!("The recap could not be generated: {msg}"));
                     }
                 }
-            }
-            None => {
-                let last = kv_get(&state.db.conn(), &auto_error_key(&target))?;
-                note = Some(format!("The recap could not be generated: {}", last.unwrap_or_else(|| "unknown error".into())));
+                None => {
+                    let last = kv_get(&state.db.conn(), &auto_error_key(&target))?;
+                    note = Some(format!("The recap could not be generated: {}", last.unwrap_or_else(|| "unknown error".into())));
+                }
             }
         }
+        drop(claim);
     }
 
     if settings.recap_export_dir.trim().is_empty() {
@@ -616,6 +689,113 @@ mod tests {
         st.settings.write().unwrap().recap_auto = false;
         auto_tick(&st).await.unwrap();
         assert!(!out.exists());
+    }
+
+    /// Today's target, and a card of `minutes` on yesterday.
+    fn yesterday_with(st: &AppState, minutes: i64) -> (String, String) {
+        let today = logical_day(now_ts());
+        let (ts, _) = logical_day_bounds(&today).unwrap();
+        let yesterday = logical_day(ts - 3600);
+        let (ys, _) = logical_day_bounds(&yesterday).unwrap();
+        add_card(st, ys + 5 * 3600, ys + 5 * 3600 + minutes * 60, "Work", "Thesis chapter");
+        (today, yesterday)
+    }
+
+    fn auto_on(st: &AppState, dir: &std::path::Path) {
+        let mut s = st.settings.write().unwrap();
+        s.recap_auto = true;
+        s.recap_time = "04:00".into();
+        s.recap_export_dir = dir.join("phone").to_string_lossy().to_string();
+    }
+
+    fn attempts(st: &AppState) -> Option<String> {
+        kv_get(&st.db.conn(), "auto_attempts").unwrap()
+    }
+
+    #[test]
+    fn automatic_recap_is_opt_in() {
+        assert!(!Settings::default().recap_auto);
+        let old: Settings = serde_json::from_str(r#"{"model": "m"}"#).unwrap();
+        assert!(!old.recap_auto, "a settings file without the field stays off");
+    }
+
+    #[tokio::test]
+    async fn auto_tick_spends_no_attempt_without_a_usable_provider_or_while_paused() {
+        unsafe { std::env::remove_var("DAYTRACE_API_KEY") }; // test-only
+        let (dir, st) = state();
+        let (today, _) = yesterday_with(&st, 240);
+        auto_on(&st, dir.path());
+        st.settings.write().unwrap().provider = ProviderKind::Anthropic;
+        auto_tick(&st).await.unwrap();
+        assert_eq!(attempts(&st), None, "no key: nothing reserved");
+        assert_eq!(kv_get(&st.db.conn(), &auto_error_key(&today)).unwrap(), None);
+        {
+            let mut s = st.settings.write().unwrap();
+            s.provider = ProviderKind::Ollama;
+            s.recording_enabled = false;
+        }
+        auto_tick(&st).await.unwrap();
+        assert_eq!(attempts(&st), None, "recording paused: nothing reserved");
+        assert!(!dir.path().join("phone").exists(), "and nothing exported");
+    }
+
+    #[tokio::test]
+    async fn manual_generate_in_flight_is_left_alone() {
+        let (dir, st) = state();
+        let (today, _) = yesterday_with(&st, 240);
+        auto_on(&st, dir.path());
+        st.settings.write().unwrap().provider = ProviderKind::Ollama;
+        // The Daily view's Generate holds the day's claim.
+        let manual = InFlight::claim(&today).unwrap();
+        auto_tick(&st).await.unwrap();
+        assert_eq!(attempts(&st), None, "no automatic attempt used");
+        assert_eq!(kv_get(&st.db.conn(), &auto_error_key(&today)).unwrap(), None, "no automatic error stored");
+        drop(manual);
+    }
+
+    #[test]
+    fn view_explains_the_automatic_recap() {
+        unsafe { std::env::remove_var("DAYTRACE_API_KEY") }; // test-only
+        let (dir, st) = state();
+        let (today, yesterday) = yesterday_with(&st, 150);
+        // Off: nothing is promised.
+        st.settings.write().unwrap().provider = ProviderKind::Ollama;
+        assert_eq!(recap_view(&st, &today).unwrap().auto, None);
+        auto_on(&st, dir.path());
+        // 150 minutes: enough for Generate (120), not for the automatic recap (180).
+        let v = recap_view(&st, &today).unwrap();
+        assert_eq!(v.source_day.as_deref(), Some(yesterday.as_str()));
+        assert_eq!(v.auto, Some(AutoPlan { after: "04:00".into(), source_day: None, blocked: None }));
+        // Not for other days.
+        assert_eq!(recap_view(&st, &yesterday).unwrap().auto, None);
+        st.settings.write().unwrap().recording_enabled = false;
+        assert_eq!(recap_view(&st, &today).unwrap().auto.unwrap().blocked.as_deref(), Some("Automatic recaps are paused while recording is paused."));
+        {
+            let mut s = st.settings.write().unwrap();
+            s.recording_enabled = true;
+            s.provider = ProviderKind::Anthropic;
+        }
+        let blocked = recap_view(&st, &today).unwrap().auto.unwrap().blocked.unwrap();
+        assert_eq!(blocked, "The automatic recap cannot run yet. Anthropic needs an API key. Add one in Settings.");
+    }
+
+    #[test]
+    fn view_names_the_automatic_source_day() {
+        let (dir, st) = state();
+        let (today, yesterday) = yesterday_with(&st, 200);
+        auto_on(&st, dir.path());
+        st.settings.write().unwrap().provider = ProviderKind::Ollama;
+        assert_eq!(recap_view(&st, &today).unwrap().auto.unwrap().source_day, Some(yesterday));
+    }
+
+    #[test]
+    fn relative_export_folder_is_refused() {
+        let (_d, st) = state();
+        let bad = Settings { recap_export_dir: "phone\\Daytrace".into(), ..Default::default() };
+        assert_eq!(check_settings(&bad).unwrap_err(), export::RELATIVE_DIR);
+        assert!(check_settings(&Settings::default()).is_ok());
+        st.settings.write().unwrap().recap_export_dir = "phone".into();
+        assert_eq!(export_day(&st, "2026-10-16", None, None).unwrap_err().to_string(), export::RELATIVE_DIR);
     }
 
     #[test]

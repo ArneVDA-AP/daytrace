@@ -37,6 +37,7 @@ pub fn get_settings(state: S) -> SettingsDto {
 
 #[tauri::command]
 pub fn save_settings(app: tauri::AppHandle, state: S, settings: Settings, api_key: Option<String>) -> CmdResult<SettingsDto> {
+    crate::features::insights::check_settings(&settings)?;
     let mut settings = settings.sanitized();
     crate::features::chat::clear_model_on_provider_change(&state.settings(), &mut settings);
     settings.save(&state.paths.settings).map_err(err)?;

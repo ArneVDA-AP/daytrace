@@ -122,13 +122,7 @@ impl Target {
         if self.model.is_empty() {
             return Some("No model is set. Choose one in Settings.".into());
         }
-        let host = reqwest::Url::parse(&self.base_url).ok().and_then(|u| u.host_str().map(str::to_lowercase)).unwrap_or_default();
-        let needs_key = match self.kind {
-            ProviderKind::Anthropic => true,
-            ProviderKind::OpenaiCompatible => ["api.openai.com", "openrouter.ai", "generativelanguage.googleapis.com"].contains(&host.as_str()),
-            _ => false,
-        };
-        if needs_key && self.key.is_none() {
+        if crate::llm::chat_api::key_required(self.kind, &self.base_url) && self.key.is_none() {
             return Some(format!("Chat needs an API key for {}. Add one in Settings.", self.provider_label()));
         }
         None

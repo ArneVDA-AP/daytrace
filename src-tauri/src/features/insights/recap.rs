@@ -334,13 +334,26 @@ pub fn parse_response(raw: &str) -> Result<Parsed> {
     Ok(Parsed { done: strings(obj.get("done")).into_iter().take(MAX_DONE).collect(), next: optional_string(obj.get("next")) })
 }
 
+/// A line without one leading list marker: `-` or `*` followed by whitespace, or `•`. Text that
+/// starts with these characters ("-5% churn", "**Shipped**") is left alone.
+fn strip_marker(line: &str) -> &str {
+    let t = line.trim();
+    if let Some(rest) = t.strip_prefix('•') {
+        return rest.trim_start();
+    }
+    match t.strip_prefix(['-', '*']) {
+        Some(rest) if rest.is_empty() || rest.starts_with(char::is_whitespace) => rest.trim_start(),
+        _ => t,
+    }
+}
+
 /// Trimmed, non-empty, de-duplicated lines (the editable lists).
 pub fn clean_items(items: &[String]) -> Vec<String> {
     let mut seen = HashSet::new();
     items
         .iter()
         .flat_map(|s| s.lines())
-        .map(|s| s.trim().trim_start_matches(['-', '*', '•']).trim().to_string())
+        .map(|s| strip_marker(s).to_string())
         .filter(|s| !s.is_empty() && seen.insert(s.clone()))
         .collect()
 }
@@ -523,7 +536,9 @@ mod tests {
 
     #[test]
     fn cleans_edited_items() {
-        let items = vec!["- First\n* Second".to_string(), "  ".into(), "First".into()];
-        assert_eq!(clean_items(&items), vec!["First", "Second"]);
+        let items = vec!["- First\n* Second".to_string(), "  ".into(), "First".into(), "•Third".into(), "-".into()];
+        assert_eq!(clean_items(&items), vec!["First", "Second", "Third"]);
+        let kept = vec!["-5% churn".to_string(), "**Shipped** the page".into(), "- - nested".into(), "*emphasis*".into()];
+        assert_eq!(clean_items(&kept), vec!["-5% churn", "**Shipped** the page", "- nested", "*emphasis*"]);
     }
 }

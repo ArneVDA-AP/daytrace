@@ -2,11 +2,22 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { clock, formatDuration, shiftDay } from "../api";
 import type { ViewProps } from "./types";
-import { DayStats, RecapView, insightsApi, percent, relativeDayLabel, shortDate } from "./insights-api";
+import { AutoPlan, DayStats, RecapView, insightsApi, percent, relativeDayLabel, shortDate } from "./insights-api";
 import { Axis, Bars, CellRow, Panel, Stat, Swatch, minuteLabel } from "./insights-parts";
 import "./insights.css";
 
 const NO_HISTORY = "Not enough captured activity in the previous 3 days to generate a standup.";
+
+/**
+ * The sentence about the automatic recap. Generate needs 2 hours of activity on the source day,
+ * the automatic recap 3 (as in Dayflow), so it may use another day or not run at all.
+ */
+function autoSentence(auto: AutoPlan | null): string {
+  if (!auto) return "";
+  if (auto.blocked) return ` ${auto.blocked}`;
+  if (!auto.sourceDay) return " The automatic recap needs at least 3 hours of activity on one of the previous 3 days, so it will not run today.";
+  return ` Daytrace also writes it automatically after ${auto.after}, from the cards of ${shortDate(auto.sourceDay)}.`;
+}
 
 /**
  * Daily: the standup for the selected day (Dayflow's Daily view: highlights from the last active
@@ -54,17 +65,19 @@ export function DailyView({ day, today, settings, openTimeline }: ViewProps) {
   const generating = busy === "generate" || !!recap?.generating;
   const s = settings.settings;
 
+  // Results of a request for another day than the one now shown are dropped.
   async function generate() {
+    const forDay = day;
     setBusy("generate");
     setMessage(null);
     try {
-      const r = await insightsApi.generateRecap(day);
-      if (r.targetDay === dayRef.current) {
+      const r = await insightsApi.generateRecap(forDay);
+      if (dayRef.current === forDay) {
         setRecap(r);
         setEditing(null);
       }
     } catch (e) {
-      setMessage({ ok: false, text: String(e) });
+      if (dayRef.current === forDay) setMessage({ ok: false, text: String(e) });
     } finally {
       setBusy(null);
     }
@@ -72,15 +85,18 @@ export function DailyView({ day, today, settings, openTimeline }: ViewProps) {
 
   async function saveEdits() {
     if (!editing) return;
+    const forDay = day;
     setBusy("save");
     const lines = (t: string) => t.split("\n").map((l) => l.trim()).filter(Boolean);
     try {
-      const r = await insightsApi.saveRecap(day, lines(editing.highlights), lines(editing.tasks), lines(editing.blockers));
-      setRecap(r);
-      setEditing(null);
-      setMessage(null);
+      const r = await insightsApi.saveRecap(forDay, lines(editing.highlights), lines(editing.tasks), lines(editing.blockers));
+      if (dayRef.current === forDay) {
+        setRecap(r);
+        setEditing(null);
+        setMessage(null);
+      }
     } catch (e) {
-      setMessage({ ok: false, text: `Couldn’t save the standup: ${e}` });
+      if (dayRef.current === forDay) setMessage({ ok: false, text: `Couldn’t save the standup: ${e}` });
     } finally {
       setBusy(null);
     }
@@ -110,6 +126,7 @@ export function DailyView({ day, today, settings, openTimeline }: ViewProps) {
 
   async function exportRecap() {
     if (!sourceDay) return;
+    const forDay = day;
     setBusy("export");
     setMessage(null);
     try {
@@ -120,10 +137,11 @@ export function DailyView({ day, today, settings, openTimeline }: ViewProps) {
         path = p;
       }
       const written = await insightsApi.exportRecap(sourceDay, path);
+      if (dayRef.current !== forDay) return;
       setMessage({ ok: true, text: `Saved to ${written}` });
       load();
     } catch (e) {
-      setMessage({ ok: false, text: `Couldn’t export: ${e}` });
+      if (dayRef.current === forDay) setMessage({ ok: false, text: `Couldn’t export: ${e}` });
     } finally {
       setBusy(null);
     }
@@ -207,7 +225,7 @@ export function DailyView({ day, today, settings, openTimeline }: ViewProps) {
             ) : (
               <p>
                 No standup yet. Select Generate to write one from the cards of {shortDate(sourceDay)}.
-                {day === today && s.recapAuto ? ` Daytrace also writes it automatically after ${s.recapTime}.` : ""}
+                {day === today ? autoSentence(recap.auto) : ""}
               </p>
             )}
           </div>

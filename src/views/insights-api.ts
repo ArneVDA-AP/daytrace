@@ -103,6 +103,18 @@ export interface RecapView {
   generating: boolean;
   autoError: string | null;
   exportPath: string | null;
+  /** Set for today while there is no recap and automatic recaps are on. */
+  auto: AutoPlan | null;
+}
+
+/** What the automatic recap will do (it needs 3 hours of activity on the day it is written from). */
+export interface AutoPlan {
+  /** "HH:MM" after which it runs. */
+  after: string;
+  /** The day it would be written from; null when none of the previous 3 days has 3 hours. */
+  sourceDay: string | null;
+  /** Why it will not run now, in plain words. */
+  blocked: string | null;
 }
 
 export interface WeekDaySummary {
