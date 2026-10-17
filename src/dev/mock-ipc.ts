@@ -31,6 +31,7 @@ import { timelineMock } from "@/dev/timeline";
 import { applySettingsMock } from "@/dev/settings";
 import { applyF4Mock } from "@/dev/f4";
 import { applyF2Mock } from "@/dev/w4-f2";
+import { agentsMock } from "@/dev/agents";
 
 export const DEV_MOCK_MARKER = "DAYTRACE_DEV_MOCK_IPC";
 
@@ -300,6 +301,7 @@ export function installMockIpc() {
   applySettingsMock(handlers, { q, flags, settings, now, dataDir });
   applyF4Mock(handlers, { q, now }); // update install, What's new, debug info (src/dev/f4.ts)
   applyF2Mock(handlers, { q, settings, today: ds.today }); // wave 4 views (src/dev/w4-f2.ts)
+  Object.assign(handlers, agentsMock(q, now)); // Agents section (src/dev/agents.ts)
 
   mockWindows("main");
   mockIPC(

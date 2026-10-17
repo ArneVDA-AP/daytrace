@@ -25,6 +25,7 @@ const SECTIONS: Record<Section, React.ComponentType> = {
   weekly: React.lazy(() => import("@/views/weekly")),
   journal: React.lazy(() => import("@/views/journal")),
   chat: React.lazy(() => import("@/views/chat")),
+  agents: React.lazy(() => import("@/views/agents")),
   settings: React.lazy(() => import("@/views/settings")),
 };
 const OnboardingScreen = React.lazy(() => import("@/views/onboarding"));

@@ -2,6 +2,7 @@
 //! with CREATE ... IF NOT EXISTS) and its Tauri commands, so features stay independent.
 
 pub mod agent_bridge;
+pub mod agents;
 pub mod chat;
 pub mod insights;
 pub mod journal;

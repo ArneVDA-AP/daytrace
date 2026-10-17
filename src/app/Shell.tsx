@@ -1,5 +1,6 @@
 import * as React from "react";
 import { CalendarRange, Clock3, Goal, Laptop, ListChecks, MessagesSquare, Moon, Search, Settings, Sun, type LucideIcon } from "lucide-react";
+import { Bot } from "lucide-react";
 import { useDay, isDaySection } from "@/app/day";
 import { LogoMark } from "@/app/Logo";
 import { useAppState } from "@/app/state";
@@ -26,6 +27,7 @@ export const NAV: NavItem[] = [
   { id: "weekly", label: "Weekly", icon: CalendarRange, key: "3" },
   { id: "journal", label: "Goals", icon: Goal, key: "4" },
   { id: "chat", label: "Chat", icon: MessagesSquare, key: "5" },
+  { id: "agents", label: "Agents", icon: Bot, key: "6" },
 ];
 
 export const SETTINGS_NAV: NavItem = { id: "settings", label: "Settings", icon: Settings, key: "," };
@@ -36,6 +38,7 @@ export const SECTION_TITLES: Record<Section, string> = {
   weekly: "Weekly",
   journal: "Goals",
   chat: "Chat",
+  agents: "Agents",
   settings: "Settings",
 };
 

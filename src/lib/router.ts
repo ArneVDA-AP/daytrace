@@ -7,9 +7,9 @@ import { useSyncExternalStore } from "react";
  * screenshotted). Selecting inside a list replaces the history entry (navigate(..., {replace})).
  */
 
-export type Section = "timeline" | "daily" | "weekly" | "journal" | "chat" | "settings";
+export type Section = "timeline" | "daily" | "weekly" | "journal" | "chat" | "agents" | "settings";
 
-export const SECTIONS: Section[] = ["timeline", "daily", "weekly", "journal", "chat", "settings"];
+export const SECTIONS: Section[] = ["timeline", "daily", "weekly", "journal", "chat", "agents", "settings"];
 
 /** Sections that show one day (Weekly shows the week that contains it). They share `day`. */
 export const DAY_SECTIONS: Section[] = ["timeline", "daily", "weekly", "journal"];

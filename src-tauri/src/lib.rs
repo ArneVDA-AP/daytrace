@@ -164,10 +164,20 @@ pub fn run() {
             llm::provider_cmds::provider_key_status,
             llm::provider_cmds::provider_save_key,
             llm::provider_cmds::provider_check_cli,
+            // agents commands
+            features::agents::agents_status,
+            features::agents::agents_recheck,
+            features::agents::agents_start,
+            features::agents::agents_stop,
+            features::agents::agents_open_in_browser,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Daytrace")
         .run(|_app, event| {
+            // agents: end the AgentPlayback dashboard with Daytrace
+            if matches!(event, tauri::RunEvent::Exit) {
+                features::agents::shutdown();
+            }
             // Closing the window destroys it; keep running in the tray. Quit from the tray menu
             // calls exit(0), which carries an exit code and is allowed through.
             if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
