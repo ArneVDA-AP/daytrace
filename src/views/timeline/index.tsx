@@ -22,9 +22,10 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTi
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toast";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isKey } from "@/lib/keys";
-import { navigate, numParam, setParams, useRoute } from "@/lib/router";
+import { dayParam, navigate, numParam, setParams, useRoute } from "@/lib/router";
 import { formatDayTitle, formatWeekRange, shiftDay, weekStart } from "@/lib/time";
 import { useDelayedLoading } from "@/lib/use-delayed";
 import { errorText, isTypingTarget } from "@/lib/utils";
@@ -37,16 +38,21 @@ import { DaySoFar } from "./DaySoFar";
 import { DayTrace } from "./DayTrace";
 import { ExportDialog } from "./ExportDialog";
 import { buildRows, lanesFor, navIds, navIndexOf, nextUnrated } from "./model";
+import { ReviewMode } from "./ReviewMode";
 import { Targets } from "./Targets";
+import { WeekView } from "./WeekView";
 
 /*
- * Timeline: the app's main screen. Page header (day navigation, Export…), the day trace, then the
- * card list and the detail side by side from 960 px (below that the detail opens over the list,
- * with "All cards" to go back). With no card selected the detail pane shows "Your day so far".
+ * Timeline: the app's main screen. Page header (day navigation, Day / Week, Export…), then in Day
+ * mode the day trace, the card list and the detail side by side from 960 px (below that the
+ * detail opens over the list, with "All cards" to go back); with no card selected the detail pane
+ * shows "Your day so far". Week mode (WeekView.tsx) shows the week of the day as seven columns;
+ * a card there opens in Day mode. Review mode (ReviewMode.tsx) walks through the day's cards that
+ * are not rated yet, over the whole window.
  *
- * URL: #/timeline?day=YYYY-MM-DD&card=<id>&detail=1&export=1. Keys: J next card, K previous card
- * (by physical key), Esc closes the card (plus [ and ] for days from DayNav, arrows inside the
- * trace and the list).
+ * URL: #/timeline?day=YYYY-MM-DD&card=<id>&detail=1&export=1&mode=week&review=1. Keys in Day
+ * mode: J next card, K previous card (by physical key), Esc closes the card (plus [ and ] for days
+ * or weeks from DayNav, arrows inside the trace, the list and the week grid).
  *
  * Reads only what it shows from the status (recording or not, paused, the queue), so a status
  * poll does not re-render the card list (FE5).
@@ -66,11 +72,19 @@ export default function TimelineSection() {
   const recording = useAppStatusSelect(selectRecording);
   const userPaused = useAppStatusSelect(selectUserPaused);
   const pending = useAppStatusSelect(selectPending);
-  const { day, today, setDay } = useDay();
+  const { today, setDay } = useDay();
   const route = useRoute();
+  // The day comes from the same route snapshot as the card (DayProvider's rule: the day param,
+  // never after today). useDay().day can lag one render behind a navigation that changes both
+  // (hashchange listeners run in mount order with a render in between), and the gone-card effect
+  // below would then drop a card of the new day.
+  const routeDay = dayParam(route.params);
+  const day = routeDay && routeDay < today ? routeDay : today;
   const isToday = day === today;
   const selected = numParam(route.params, "card");
   const exportOpen = route.params.get("export") === "1";
+  const week = route.params.get("mode") === "week";
+  const reviewOpen = route.params.get("review") === "1";
   const split = useMedia("(min-width: 60rem)");
   const now = useNow(30_000);
 
@@ -89,7 +103,7 @@ export default function TimelineSection() {
   const extras = useLoad(day, timelineApi.dayExtras, cards);
   const stats = useLoad(day, timelineApi.dayStats, cards);
   const goals = useLoad(day, timelineApi.goals, cards);
-  const week = useLoad(weekStart(day), timelineApi.weekStats, cards);
+  const weekStats = useLoad(weekStart(day), timelineApi.weekStats, cards);
 
   const [muted, setMuted] = React.useState<Set<string>>(mutedKeys);
   const [fit, setFit] = React.useState(() => readPref(FIT_KEY) !== "0");
@@ -133,6 +147,7 @@ export default function TimelineSection() {
 
   // J / K: next / previous card (one step per collapsed run), by physical key. Esc closes the card.
   React.useEffect(() => {
+    if (week || reviewOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.altKey || e.metaKey || e.defaultPrevented || isTypingTarget(e.target)) return;
       if (e.key === "Escape" && selected !== null) {
@@ -150,7 +165,7 @@ export default function TimelineSection() {
     };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
-  }, [ids, rows, selected, select, deselect, detailOpen]);
+  }, [ids, rows, selected, select, deselect, detailOpen, week, reviewOpen]);
 
   const toggleMute = (key: string) => {
     const next = new Set(muted);
@@ -186,8 +201,8 @@ export default function TimelineSection() {
     [retry.items, retryError, startRetry],
   );
 
-  // "N cards to rate" (Dayflow CardsToReviewBadge): jumps to the next unrated card and puts the
-  // focus on its rating (gap 11).
+  // "N cards to rate" (Dayflow CardsToReviewBadge) opens review mode (gap 20); "Rate the next
+  // card" in Your day so far jumps to the next unrated card and focuses its rating (gap 11).
   const toRate = extras.data?.reviewSummary.unreviewedCards ?? 0;
   const [rateFocus, setRateFocus] = React.useState<number | null>(null);
   const clearRateFocus = React.useCallback(() => setRateFocus(null), []);
@@ -232,198 +247,256 @@ export default function TimelineSection() {
     <>
       <PageHeader
         label="Timeline"
-        title={formatDayTitle(day)}
-        badge={isToday ? <TitleBadge>Today</TitleBadge> : undefined}
-        nav={<DayNav />}
+        title={week ? formatWeekRange(weekStart(day)) : formatDayTitle(day)}
+        badge={isToday && !week ? <TitleBadge>Today</TitleBadge> : undefined}
+        nav={<DayNav unit={week ? "week" : "day"} />}
         actions={
-          <Button id="timeline-export" variant="outline" size="sm" aria-haspopup="dialog" aria-expanded={exportOpen} onClick={() => setParams({ export: 1 })}>
-            <Download aria-hidden="true" />
-            Export…
-          </Button>
+          <>
+            {/* Dayflow TimelineMode: Day / Week. Pressed = ink fill (README: ToggleGroup). */}
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              size="sm"
+              spacing={0}
+              aria-label="Timeline view"
+              value={week ? "week" : "day"}
+              onValueChange={(v) => v && setParams({ mode: v === "week" ? "week" : null }, { section: "timeline" })}
+            >
+              <ToggleGroupItem value="day" className="px-3">
+                Day
+              </ToggleGroupItem>
+              <ToggleGroupItem value="week" className="px-3">
+                Week
+              </ToggleGroupItem>
+            </ToggleGroup>
+            <Button id="timeline-export" variant="outline" size="sm" aria-haspopup="dialog" aria-expanded={exportOpen} onClick={() => setParams({ export: 1 })}>
+              <Download aria-hidden="true" />
+              Export…
+            </Button>
+          </>
         }
       />
-      <div className="flex min-h-0 flex-1 flex-col">
-        <DayTrace
+      {week ? (
+        <WeekView
           day={day}
-          cards={cards}
-          lanes={lanes}
+          today={today}
+          categories={app.categories}
           colorFor={app.colorFor}
-          selectedId={selected}
-          onSelect={(id) => select(id, detailOpen)}
-          now={nowOnDay}
           muted={muted}
+          onToggleMute={toggleMute}
           fit={fit}
           onFitChange={changeFit}
-          error={data.error !== null && cards === null}
+          now={now}
+          onShowDay={setDay}
         />
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <DayTrace
+            day={day}
+            cards={cards}
+            lanes={lanes}
+            colorFor={app.colorFor}
+            selectedId={selected}
+            onSelect={(id) => select(id, detailOpen)}
+            now={nowOnDay}
+            muted={muted}
+            fit={fit}
+            onFitChange={changeFit}
+            error={data.error !== null && cards === null}
+          />
 
-        {data.error && cards === null ? (
-          <div className="px-(--page-x) py-5">
-            <Banner
-              tone="error"
-              title={`Couldn’t load the timeline of ${formatDayTitle(day)}`}
-              details={data.error}
-              actions={
-                <Button size="sm" variant="outline" onClick={data.reload}>
-                  Try again
-                </Button>
-              }
-            >
-              Daytrace could not read this day from its database. Your recording is not affected.
-            </Banner>
-          </div>
-        ) : empty ? (
-          <EmptyDay day={day} today={today} recording={recording} userPaused={userPaused} pending={pending} onDay={setDay} onResume={app.resume} />
-        ) : (
-          <div className="flex min-h-0 flex-1">
-            {showList && (
-              <div className="scroll-thin min-h-0 w-full overflow-y-auto overscroll-contain split:w-[clamp(21rem,38%,30rem)] split:shrink-0 split:border-r">
-                <div className="flex flex-col gap-2.5 border-b px-3 py-2.5">
-                  <div className="flex items-start gap-2">
-                    <div className="min-w-0 flex-1">
-                      <CategoryChips lanes={lanes} colorFor={app.colorFor} muted={muted} onToggle={toggleMute} />
-                    </div>
-                    {/* Non-modal: the rest of the window stays readable for assistive tech while it is open. */}
-                    <DropdownMenu modal={false}>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon-sm" aria-label="Actions for this day">
-                              <MoreHorizontal aria-hidden="true" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                        </TooltipTrigger>
-                        <TooltipContent>Actions for this day</TooltipContent>
-                      </Tooltip>
-                      <DropdownMenuContent align="end" className="w-60">
-                        <DropdownMenuItem onSelect={() => void copyTimeline()} disabled={!cards?.length}>
-                          <ClipboardCopy aria-hidden="true" /> Copy timeline
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onSelect={() => void reprocessDay.ask()}
-                          disabled={!cards?.length || reprocessDay.rp.stage === "running" || reprocessDay.rp.stage === "loading" || reprocessDay.rp.stage === "starting"}
-                        >
-                          <ListRestart aria-hidden="true" /> Reprocess day…
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem onSelect={() => navigate("settings", { section: "categories" })}>
-                          <Settings2 aria-hidden="true" /> Edit categories…
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-                  <Targets goals={goals.data} day={day} colorFor={app.colorFor} compact />
-                  {(!split || toRate > 0) && (
-                    <div className="flex flex-wrap items-center gap-2">
-                      {!split && (
-                        <Button variant="outline" size="sm" onClick={() => setParams({ card: null, detail: 1 })}>
-                          <PanelRight aria-hidden="true" /> {isToday ? "Your day so far" : "Your day"}
-                        </Button>
-                      )}
-                      {toRate > 0 && (
+          {data.error && cards === null ? (
+            <div className="px-(--page-x) py-5">
+              <Banner
+                tone="error"
+                title={`Couldn’t load the timeline of ${formatDayTitle(day)}`}
+                details={data.error}
+                actions={
+                  <Button size="sm" variant="outline" onClick={data.reload}>
+                    Try again
+                  </Button>
+                }
+              >
+                Daytrace could not read this day from its database. Your recording is not affected.
+              </Banner>
+            </div>
+          ) : empty ? (
+            <EmptyDay day={day} today={today} recording={recording} userPaused={userPaused} pending={pending} onDay={setDay} onResume={app.resume} />
+          ) : (
+            <div className="flex min-h-0 flex-1">
+              {showList && (
+                <div className="scroll-thin min-h-0 w-full overflow-y-auto overscroll-contain split:w-[clamp(21rem,38%,30rem)] split:shrink-0 split:border-r">
+                  <div className="flex flex-col gap-2.5 border-b px-3 py-2.5">
+                    <div className="flex items-start gap-2">
+                      <div className="min-w-0 flex-1">
+                        <CategoryChips lanes={lanes} colorFor={app.colorFor} muted={muted} onToggle={toggleMute} />
+                      </div>
+                      {/* Non-modal: the rest of the window stays readable for assistive tech while it is open. */}
+                      <DropdownMenu modal={false}>
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <Button variant="outline" size="sm" onClick={rateNext} aria-label={`${toRate} ${toRate === 1 ? "card" : "cards"} to rate. Rate the next card`}>
-                              <ListChecks aria-hidden="true" />
-                              {toRate} {toRate === 1 ? "card" : "cards"} to rate
-                            </Button>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon-sm" aria-label="Actions for this day">
+                                <MoreHorizontal aria-hidden="true" />
+                              </Button>
+                            </DropdownMenuTrigger>
                           </TooltipTrigger>
-                          <TooltipContent>Rate the next card: Focused, Neutral or Distracted</TooltipContent>
+                          <TooltipContent>Actions for this day</TooltipContent>
                         </Tooltip>
-                      )}
+                        <DropdownMenuContent align="end" className="w-60">
+                          <DropdownMenuItem onSelect={() => void copyTimeline()} disabled={!cards?.length}>
+                            <ClipboardCopy aria-hidden="true" /> Copy timeline
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onSelect={() => void reprocessDay.ask()}
+                            disabled={!cards?.length || reprocessDay.rp.stage === "running" || reprocessDay.rp.stage === "loading" || reprocessDay.rp.stage === "starting"}
+                          >
+                            <ListRestart aria-hidden="true" /> Reprocess day…
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onSelect={() => navigate("settings", { section: "categories" })}>
+                            <Settings2 aria-hidden="true" /> Edit categories…
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
-                  )}
-                  {toolError && (
-                    <p role="alert" className="text-caption text-destructive">
-                      {toolError}
-                    </p>
+                    <Targets goals={goals.data} day={day} colorFor={app.colorFor} compact />
+                    {(!split || toRate > 0) && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        {!split && (
+                          <Button variant="outline" size="sm" onClick={() => setParams({ card: null, detail: 1 })}>
+                            <PanelRight aria-hidden="true" /> {isToday ? "Your day so far" : "Your day"}
+                          </Button>
+                        )}
+                        {toRate > 0 && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                id="timeline-rate"
+                                variant="outline"
+                                size="sm"
+                                aria-haspopup="dialog"
+                                aria-expanded={reviewOpen}
+                                onClick={() => setParams({ review: 1 }, { section: "timeline" })}
+                                aria-label={`${toRate} ${toRate === 1 ? "card" : "cards"} to rate. Rate them one after another`}
+                              >
+                                <ListChecks aria-hidden="true" />
+                                {toRate} {toRate === 1 ? "card" : "cards"} to rate
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Rate them one after another, with their screenshots</TooltipContent>
+                          </Tooltip>
+                        )}
+                      </div>
+                    )}
+                    {toolError && (
+                      <p role="alert" className="text-caption text-destructive">
+                        {toolError}
+                      </p>
+                    )}
+                  </div>
+
+                  <ReprocessStatus state={reprocessDay.rp} onClose={reprocessDay.close} />
+
+                  {showSkeleton ? (
+                    <ListSkeleton />
+                  ) : cards === null ? null : (
+                    <>
+                      <CardList
+                        day={day}
+                        rows={rows}
+                        extras={extras.data}
+                        idleKey={idleKey}
+                        colorFor={app.colorFor}
+                        selectedId={selected}
+                        onSelect={onListSelect}
+                        muted={muted}
+                        retry={retryUi}
+                        now={nowHour}
+                        live={live}
+                      />
+                      <WeekFooter day={day} today={today} secs={weekStats.data?.capturedSecs ?? null} />
+                    </>
                   )}
                 </div>
-
-                <ReprocessStatus state={reprocessDay.rp} onClose={reprocessDay.close} />
-
-                {showSkeleton ? (
-                  <ListSkeleton />
-                ) : cards === null ? null : (
-                  <>
-                    <CardList
-                      day={day}
-                      rows={rows}
+              )}
+              {showDetail && (
+                <div className="scroll-thin min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain">
+                  {!split && (
+                    <div className="sticky top-0 z-10 border-b bg-surface-1 px-3 py-2">
+                      <Button variant="ghost" size="sm" onClick={() => setParams({ detail: 0 })}>
+                        <ArrowLeft aria-hidden="true" /> All cards
+                      </Button>
+                    </div>
+                  )}
+                  {showSkeleton ? (
+                    <DetailSkeleton />
+                  ) : cards === null ? null : selectedCard ? (
+                    <CardDetail
+                      key={selectedCard.id}
+                      card={selectedCard}
+                      group={groupOf(selectedCard.id)}
                       extras={extras.data}
-                      idleKey={idleKey}
+                      reloadExtras={extras.reload}
+                      categories={app.categories}
                       colorFor={app.colorFor}
-                      selectedId={selected}
-                      onSelect={onListSelect}
-                      muted={muted}
+                      idleKey={idleKey}
+                      onChanged={reloadCards}
+                      onDeleted={() => {
+                        // The card after it (or before it, at the end) takes its place (UX4).
+                        const after = nextId ?? prevId;
+                        if (after !== undefined) select(after, detailOpen);
+                        else deselect();
+                        reloadCards();
+                        return after ?? null;
+                      }}
+                      onPrev={prevId !== undefined ? () => select(prevId, detailOpen) : undefined}
+                      onNext={nextId !== undefined ? () => select(nextId, detailOpen) : undefined}
+                      onClose={() => (split ? deselect() : setParams({ card: null, detail: null }))}
                       retry={retryUi}
                       now={nowHour}
-                      live={live}
+                      focusRating={rateFocus === selectedCard.id}
+                      onRatingFocused={clearRateFocus}
                     />
-                    <WeekFooter day={day} today={today} secs={week.data?.capturedSecs ?? null} />
-                  </>
-                )}
-              </div>
-            )}
-            {showDetail && (
-              <div className="scroll-thin min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain">
-                {!split && (
-                  <div className="sticky top-0 z-10 border-b bg-surface-1 px-3 py-2">
-                    <Button variant="ghost" size="sm" onClick={() => setParams({ detail: 0 })}>
-                      <ArrowLeft aria-hidden="true" /> All cards
-                    </Button>
-                  </div>
-                )}
-                {showSkeleton ? (
-                  <DetailSkeleton />
-                ) : cards === null ? null : selectedCard ? (
-                  <CardDetail
-                    key={selectedCard.id}
-                    card={selectedCard}
-                    group={groupOf(selectedCard.id)}
-                    extras={extras.data}
-                    reloadExtras={extras.reload}
-                    categories={app.categories}
-                    colorFor={app.colorFor}
-                    idleKey={idleKey}
-                    onChanged={reloadCards}
-                    onDeleted={() => {
-                      // The card after it (or before it, at the end) takes its place (UX4).
-                      const after = nextId ?? prevId;
-                      if (after !== undefined) select(after, detailOpen);
-                      else deselect();
-                      reloadCards();
-                      return after ?? null;
-                    }}
-                    onPrev={prevId !== undefined ? () => select(prevId, detailOpen) : undefined}
-                    onNext={nextId !== undefined ? () => select(nextId, detailOpen) : undefined}
-                    onClose={() => (split ? deselect() : setParams({ card: null, detail: null }))}
-                    retry={retryUi}
-                    now={nowHour}
-                    focusRating={rateFocus === selectedCard.id}
-                    onRatingFocused={clearRateFocus}
-                  />
-                ) : (
-                  <DaySoFar
-                    day={day}
-                    isToday={isToday}
-                    cards={cards}
-                    lanes={lanes}
-                    colorFor={app.colorFor}
-                    stats={stats.data}
-                    statsError={stats.error}
-                    reloadStats={stats.reload}
-                    goals={goals.data}
-                    extras={extras.data}
-                    onSelect={(id) => select(id, true)}
-                    onRate={toRate > 0 ? rateNext : undefined}
-                  />
-                )}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+                  ) : (
+                    <DaySoFar
+                      day={day}
+                      isToday={isToday}
+                      cards={cards}
+                      lanes={lanes}
+                      colorFor={app.colorFor}
+                      stats={stats.data}
+                      statsError={stats.error}
+                      reloadStats={stats.reload}
+                      goals={goals.data}
+                      extras={extras.data}
+                      onSelect={(id) => select(id, true)}
+                      onRate={toRate > 0 ? rateNext : undefined}
+                    />
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
+      <ReviewMode
+        open={reviewOpen}
+        day={day}
+        cards={cards}
+        extras={extras.data}
+        error={data.error ?? extras.error}
+        onReload={() => {
+          data.reload();
+          extras.reload();
+        }}
+        onRated={extras.reload}
+        colorFor={app.colorFor}
+        idleKey={idleKey}
+        onClose={() => setParams({ review: null }, { section: "timeline" })}
+        returnFocus={() => document.getElementById("timeline-rate") ?? document.getElementById("content")}
+      />
       <ReprocessDialog state={reprocessDay.rp} onStart={() => void reprocessDay.start()} onClose={reprocessDay.close} day={day} />
       <ExportDialog
         open={exportOpen}

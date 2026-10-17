@@ -58,6 +58,61 @@ export function useDayCards(day: string, fast: boolean): DayCards {
   return { cards: current.cards, error: current.error, reload: load };
 }
 
+const WEEK_POLL_MS = 60_000;
+
+export interface WeekCards {
+  /** Cards per day of `days` (future days are empty); null while the first load runs (or failed). */
+  cards: Card[][] | null;
+  error: string | null;
+  reload: () => void;
+}
+
+/**
+ * The cards of seven days (get_day for each day up to today), polled every minute while the
+ * window is visible (Dayflow's week grid refreshes every 60 s).
+ */
+export function useWeekCards(days: string[], today: string): WeekCards {
+  const key = `${days.join(",")}|${today}`;
+  const [state, setState] = React.useState<{ key: string; cards: Card[][] | null; error: string | null }>({ key, cards: null, error: null });
+  const keyRef = React.useRef(key);
+  keyRef.current = key;
+  const daysRef = React.useRef(days);
+  daysRef.current = days;
+
+  const load = React.useCallback(() => {
+    const k = key;
+    Promise.all(daysRef.current.map((d) => (d > today ? Promise.resolve<Card[]>([]) : timelineApi.getDay(d))))
+      .then((cards) => {
+        if (keyRef.current !== k) return;
+        setState((cur) => (cur.key === k && cur.cards && !cur.error && same(cur.cards, cards) ? cur : { key: k, cards, error: null }));
+      })
+      .catch((e) => {
+        if (keyRef.current !== k) return;
+        setState((cur) => (cur.key === k && cur.cards ? cur : { key: k, cards: null, error: errorText(e) }));
+      });
+  }, [key, today]);
+
+  React.useEffect(() => {
+    setState((cur) => (cur.key === key ? cur : { key, cards: null, error: null }));
+    load();
+  }, [key, load]);
+
+  React.useEffect(() => {
+    const t = setInterval(() => {
+      if (document.visibilityState === "visible") load();
+    }, WEEK_POLL_MS);
+    const onVisible = () => document.visibilityState === "visible" && load();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [load]);
+
+  const current = state.key === key ? state : { cards: null, error: null };
+  return { cards: current.cards, error: current.error, reload: load };
+}
+
 /**
  * Loads `fn(key)` whenever `key` or `refresh` changes. Keeps the last result for the same key
  * while reloading (no flash), drops it when the key changes.
@@ -252,6 +307,27 @@ export function useWidth<T extends HTMLElement>(fallback: number): [React.RefObj
     return () => ro.disconnect();
   }, [fallback]);
   return [ref, w];
+}
+
+/**
+ * Height of an element's box (e.g. a scroll area), measured when it mounts and on every resize.
+ * A callback ref, so an element that is replaced (loading → loaded) is measured again.
+ */
+export function useHeight<T extends HTMLElement>(fallback: number): [(el: T | null) => void, number] {
+  const [h, setH] = React.useState(fallback);
+  const ro = React.useRef<ResizeObserver | null>(null);
+  const ref = React.useCallback(
+    (el: T | null) => {
+      ro.current?.disconnect();
+      ro.current = null;
+      if (!el) return;
+      setH(el.clientHeight || fallback);
+      ro.current = new ResizeObserver(([e]) => setH(Math.round(e.contentRect.height) || fallback));
+      ro.current.observe(el);
+    },
+    [fallback],
+  );
+  return [ref, h];
 }
 
 /** Matches a media query (e.g. the split breakpoint). */

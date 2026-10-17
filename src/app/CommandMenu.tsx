@@ -1,5 +1,5 @@
 import * as React from "react";
-import { CalendarClock, CalendarSearch, Download, FolderOpen, Images, Laptop, Moon, Pause, Play, RotateCcw, Sun } from "lucide-react";
+import { CalendarClock, CalendarSearch, Download, FolderOpen, Images, Laptop, ListChecks, Moon, Pause, Play, RotateCcw, Sun } from "lucide-react";
 import { api } from "@/api";
 import { isDaySection, useDay } from "@/app/day";
 import { NAV, SECTION_TITLES, SETTINGS_NAV } from "@/app/Shell";
@@ -132,6 +132,12 @@ export function CommandMenu({ open, onOpenChange }: { open: boolean; onOpenChang
           <CommandItem value="export markdown copy day as text" onSelect={() => run(() => navigate("timeline", { day, export: 1 }))}>
             <Download aria-hidden="true" />
             Export…
+            <span className="text-muted-foreground">{day === today ? "Today" : formatDayTitle(day)}</span>
+          </CommandItem>
+          {/* Review mode of the Timeline (gap 20, w5-r1). */}
+          <CommandItem value="rate cards review focused neutral distracted" onSelect={() => run(() => navigate("timeline", { day, review: 1 }))}>
+            <ListChecks aria-hidden="true" />
+            Rate the day’s cards…
             <span className="text-muted-foreground">{day === today ? "Today" : formatDayTitle(day)}</span>
           </CommandItem>
           <CommandItem value="open screenshots folder" onSelect={() => run(() => platformApi.openScreenshots())}>
