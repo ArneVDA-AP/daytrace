@@ -11,8 +11,16 @@ Daytrace is an unofficial port of [Dayflow](https://github.com/JerryZLiu/Dayflow
 - **Analysis.** Screenshots are grouped into 15-minute batches. Batches where you were away get an "Idle" card without calling a model. Everything else goes to the model you choose, in one of two modes:
   - *Detailed*: one request with 15 screenshots, then the cards of the last 45 minutes are rewritten as a whole. Use this with Claude or another large model.
   - *Lightweight*: each screenshot is described on its own, then grouped into one card that may be merged with the previous one. Use this with small local vision models such as `qwen3-vl:4b` in Ollama.
-- **Timeline.** A day view (days start at 4 AM) with a strip for the whole day, cards with summaries, the screenshots each card was written from, and a retry button for batches that failed.
-- **Export.** Any range of days as Markdown.
+
+  When a batch fails, the rail and a banner say why (a refused key, no credits, a usage limit, a signed-out CLI, a busy server) with the fix; Daytrace tries again with the next batch.
+- **Timeline.** A day view (days start at 4 AM) with a strip of the whole day, cards with summaries and the screenshots they were written from, and a Week view of seven days. Cards can be renamed, recategorized, deleted, rated and reprocessed; a timelapse plays a card's screenshots, and a review mode walks through the cards you have not rated yet.
+- **Daily, Weekly, Goals.** Daily has a standup recap (done, next, blockers), time per category and distractions; the recap can be written each morning and saved as Markdown to a folder. Weekly has charts of the week and a focus heat map by hour, each savable as PNG. Goals sets a focus target and a distraction limit per day, with a checklist. Each category counts as focus, distraction or neither.
+- **Chat.** Questions about your days, answered from the timeline with links to the cards, through the model provider or the Claude Code CLI.
+- **Agents.** Starts [AgentPlayback](https://github.com/JerryZLiu/AgentPlayback) (Dayflow's Agents tab, run with `npx`, a pinned version) and shows its dashboard of your Claude Code and Codex sessions in the window. Needs Node.js 20 or newer.
+- **AI tools.** `daytrace-mcp` gives Claude Code and other MCP clients your timeline, also as a command line, and a Claude Code plugin adds skills (see [AI tools](#ai-tools)).
+- **Pause from outside.** Pause and resume from the tray, a script, Task Scheduler or a `daytrace://pause` link (see [Pause from a script](#pause-from-a-script)).
+- **Updates.** A daily check on GitHub; updates install by themselves while the PC is idle or locked (see [Updates](#updates)).
+- **Storage.** Retention (7 days by default) and an optional size limit for screenshots, a daily backup of the database (the last 7 are kept) with recovery when it is damaged, and export of any range of days as Markdown.
 
 ## Models
 
@@ -42,7 +50,9 @@ A fallback provider (Settings → Model provider) takes over a step when the mai
 
 ## Privacy
 
-Screenshots, the timeline database and logs stay in `%APPDATA%\dev.daytrace.app`. Screenshots are deleted after the retention period (7 days by default), and the logged model requests and responses lose their text then; timeline cards, the text descriptions of the screen (observations) and token counts are kept, and app and window names for a year. With a cloud provider, the sampled screenshots of each batch are sent to that provider. With Ollama or LM Studio nothing leaves the machine.
+Screenshots, the timeline database and logs stay in `%APPDATA%\dev.daytrace.app`. Screenshots are deleted after the retention period (7 days by default), and the logged model requests and responses lose their text then; timeline cards, the text descriptions of the screen (observations) and token counts are kept, and app and window names for a year. With a cloud provider, the sampled screenshots of each batch are sent to that provider; chat answers and recaps send text from your timeline (cards, screen notes, app and window names), never screenshots. With Ollama or LM Studio nothing leaves the machine.
+
+The Agents section downloads AgentPlayback from npm on its first start and lets it fetch a price list from GitHub; its dashboard is served on 127.0.0.1 only and its data stays in the `agents` folder of the data folder. Links in it open in your browser.
 
 App icons next to app names are read from the programs on your PC. Sites get a letter; with Settings → Appearance → "Look up site icons" on (off by default), Daytrace asks each website named on the timeline for its `https://<site>/favicon.ico` directly, without a third-party favicon service.
 
@@ -97,12 +107,20 @@ DAYTRACE_API_KEY=... DAYTRACE_REPLAY_DIR=path/to/frames DAYTRACE_PIPELINE=cloud 
 | `src-tauri/src/capture.rs` | Screenshot loop, lock handling, private apps |
 | `src-tauri/src/batching.rs` | 15-minute batching and the idle shortcut |
 | `src-tauri/src/analysis.rs` | Analysis loop, card window rewrite, failure cards, retries, retention |
-| `src-tauri/src/llm/` | Model client (Anthropic and OpenAI-compatible), both pipelines, prompts |
+| `src-tauri/src/llm/` | Model clients (Anthropic, OpenAI-compatible, Claude Code and Codex CLI), both pipelines, prompts, fallback routing, failure causes |
 | `src-tauri/src/db.rs` | SQLite schema and queries |
 | `src-tauri/src/platform.rs` | Win32: idle time, lock state, foreground app, Credential Manager |
+| `src-tauri/src/tray.rs` | Tray icon and menu, the main window |
+| `src-tauri/src/features/` | Daily and Weekly (`insights`), Goals (`journal`), Chat (`chat`), card edits and reprocessing (`timeline_extras`), Agents (`agents.rs`), backups and storage (`storage`), updates, pause switches, notifications and debug info (`platform_extras`), the rail's badges and link opener (`shell.rs`) |
 | `src-tauri/src/features/agent_bridge/` | `daytrace-mcp`: MCP server, command line, write bridge, PATH and client setup |
+| `src-tauri/windows/` | NSIS installer hooks (PATH) |
+| `src/app/`, `src/components/`, `src/design/` | React UI: shell, rail, banners, command menu; shared components; design contract and tokens (`src/design/README.md`) |
+| `src/views/<section>/` | One folder per section (timeline, daily, weekly, journal = Goals, chat, agents, settings, onboarding) |
+| `src/dev/` | Browser preview without Tauri: mocked commands with synthetic data (`npm run dev`) |
+| `scripts/` | Screenshots, contrast check, build checks, release notes from `CHANGELOG.md` |
 | `claude-plugin/`, `.claude-plugin/` | Claude Code plugin and its marketplace file |
-| `src/` | React UI |
+
+Tests: `cargo test --lib --bins` in `src-tauri`, and `npm test` for the UI's pure modules (`src/**/*.test.mjs`). CI runs both on pushes to `main` and on pull requests.
 
 ## License
 

@@ -4,8 +4,11 @@
 //!   item while a recap is ready and Daily has not been opened since; cleared when Daily opens).
 //!   A recap counts as new while today's recap was created after Daily was last opened.
 //! - The taskbar overlay icon that mirrors that dot (Dayflow's Dock badge; Windows only).
-//! - Opening a few fixed web pages a fix button points to (the Claude Console billing and API key
-//!   pages). Only these addresses can be opened; nothing comes from the UI but a name.
+//! - The one link opener of the UI (`shell_open_link`): a named page a fix button points to (the
+//!   Claude Console billing and API key pages, the releases, Node.js), or an https link to one of
+//!   a few allowed sites (links in the release notes). Everything else is refused, so a link in
+//!   text Daytrace shows cannot send the browser anywhere else. Chat answers keep their own
+//!   opener (`chat_open_link`, any web link after the user confirms the host).
 
 use crate::features::platform_extras::{kv_get, kv_set};
 use crate::state::AppState;
@@ -43,13 +46,53 @@ pub fn recap_opened(state: &AppState, now: i64) {
     kv_set(state, K_RECAP_OPENED, &now.to_string());
 }
 
-/// The fixed pages a fix button may open.
-fn link_for(target: &str) -> Option<&'static str> {
+/// The named pages the UI opens by name.
+fn named_page(target: &str) -> Option<&'static str> {
     match target {
         "console_billing" => Some("https://console.anthropic.com/settings/billing"),
         "console_keys" => Some("https://console.anthropic.com/settings/keys"),
+        "releases" => Some("https://github.com/ArneVDA-AP/daytrace/releases"),
+        "nodejs" => Some("https://nodejs.org/en/download"),
         _ => None,
     }
+}
+
+/// Sites a link may point to besides the named pages, as (host, path prefix): Daytrace's and
+/// Dayflow's repositories (release notes link to issues, pull requests and releases) and the help
+/// pages of the providers and tools Daytrace works with. https only, default port.
+const ALLOWED_SITES: &[(&str, &str)] = &[
+    ("github.com", "/arnevda-ap/daytrace"),
+    ("github.com", "/jerryzliu/dayflow"),
+    ("github.com", "/jerryzliu/agentplayback"),
+    ("console.anthropic.com", "/"),
+    ("docs.anthropic.com", "/"),
+    ("docs.claude.com", "/"),
+    ("code.claude.com", "/"),
+    ("support.claude.com", "/"),
+    ("nodejs.org", "/"),
+    ("ollama.com", "/"),
+    ("lmstudio.ai", "/"),
+];
+
+/// The address `shell_open_link` opens for `target` (a page name or an allowed https link), or
+/// why it refuses.
+pub fn link_url(target: &str) -> Result<String, String> {
+    let target = target.trim();
+    if let Some(url) = named_page(target) {
+        return Ok(url.into());
+    }
+    let refused = || format!("Daytrace opens only its own pages and a few help sites from here. The link was: {target}");
+    let u = reqwest::Url::parse(target).map_err(|_| refused())?;
+    if u.scheme() != "https" || !u.username().is_empty() || u.password().is_some() || u.port().is_some() {
+        return Err(refused());
+    }
+    let host = u.host_str().unwrap_or("").to_ascii_lowercase();
+    // GitHub owner and repository names are case-insensitive; the prefix ends at a path segment.
+    let path = u.path().to_ascii_lowercase();
+    let allowed = ALLOWED_SITES.iter().any(|(h, prefix)| {
+        host == *h && (*prefix == "/" || path == *prefix || path.starts_with(&format!("{prefix}/")))
+    });
+    if allowed { Ok(u.into()) } else { Err(refused()) }
 }
 
 /// A 32×32 RGBA dot for the taskbar overlay: an ink disc with a white ring, readable on light
@@ -113,11 +156,11 @@ pub fn shell_set_overlay(app: tauri::AppHandle, on: bool) -> Result<(), String> 
     Ok(())
 }
 
-/// Opens one of the fixed help pages (see `link_for`) in the default browser.
+/// Opens a named page or an allowed https link (see `link_url`) in the default browser.
 #[tauri::command]
 pub fn shell_open_link(app: tauri::AppHandle, target: String) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
-    let url = link_for(&target).ok_or_else(|| format!("Unknown page: {target}"))?;
+    let url = link_url(&target)?;
     app.opener().open_url(url, None::<&str>).map_err(err)
 }
 
@@ -172,9 +215,30 @@ mod tests {
     }
 
     #[test]
-    fn only_fixed_links_open() {
-        assert!(link_for("console_billing").unwrap().starts_with("https://console.anthropic.com/"));
-        assert!(link_for("https://example.com").is_none());
+    fn opens_named_pages_and_allowed_sites_only() {
+        assert_eq!(link_url("console_billing").unwrap(), "https://console.anthropic.com/settings/billing");
+        assert_eq!(link_url("nodejs").unwrap(), "https://nodejs.org/en/download");
+        // Release notes: the repository's own pages, any letter case.
+        assert!(link_url("https://github.com/ArneVDA-AP/daytrace/releases/tag/v0.3.0").is_ok());
+        assert!(link_url("https://github.com/arnevda-ap/Daytrace/issues/12").is_ok());
+        assert!(link_url("https://github.com/ArneVDA-AP/daytrace").is_ok());
+        assert!(link_url(" https://code.claude.com/docs/en/mcp ").is_ok());
+        for bad in [
+            "https://example.com",
+            "https://github.com/ArneVDA-AP/daytrace-evil/releases",
+            "https://github.com/someone/else",
+            "http://github.com/ArneVDA-AP/daytrace",
+            "https://github.com:8443/ArneVDA-AP/daytrace",
+            "https://user@github.com/ArneVDA-AP/daytrace",
+            "https://nodejs.org.example.com/",
+            "file:///C:/Windows/System32/calc.exe",
+            "javascript:alert(1)",
+            "daytrace://pause?minutes=30",
+            "console_unknown",
+            "",
+        ] {
+            assert!(link_url(bad).is_err(), "{bad} must be refused");
+        }
     }
 
     #[test]

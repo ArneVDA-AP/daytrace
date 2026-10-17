@@ -159,7 +159,6 @@ pub fn run() {
             features::platform_extras::platform_whats_new,
             features::platform_extras::platform_whats_new_seen,
             features::platform_extras::platform_debug_info,
-            features::platform_extras::platform_open_link,
             // agent_bridge commands
             features::agent_bridge::agent_access_status,
             features::agent_bridge::agent_add_to_claude_code,

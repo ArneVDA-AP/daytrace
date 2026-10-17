@@ -83,8 +83,6 @@ export const platformApi = {
   whatsNewSeen: (version: string) => invoke<void>("platform_whats_new_seen", { version }),
   /** Recent batches, model calls and the end of the log, with keys, user folder and titles left out. */
   debugInfo: () => invoke<string>("platform_debug_info"),
-  /** Opens an http(s) link in the browser. */
-  openLink: (url: string) => invoke<void>("platform_open_link", { url }),
 };
 
 /** Event with the InstallStatus whenever the download or install moves on. */

@@ -37,15 +37,23 @@ pub fn show_main(app: &AppHandle) {
     // Built hidden so the window and webview get the theme's background colour before the first
     // frame: no white flash in dark mode. The resolved theme (the Windows setting when following
     // it) is only known once the window exists.
+    let links = app.clone();
     let built = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
         .title("Daytrace")
         .inner_size(1180.0, 780.0)
         .min_inner_size(760.0, 520.0)
         .theme(platform_extras::window_theme(appearance))
         .visible(false)
+        // Links that ask for a new window can only come from the Agents dashboard frame: its web
+        // links open in the default browser; no window ever opens (features/agents.rs).
+        .on_new_window(move |url, _| {
+            crate::features::agents::on_new_window(&links, url.as_str());
+            tauri::webview::NewWindowResponse::Deny
+        })
         .build();
     match built {
         Ok(w) => {
+            crate::features::agents::watch_frame_keys(&w);
             let dark = w.theme().map(|t| t == tauri::Theme::Dark).unwrap_or(false);
             let _ = w.set_background_color(Some(window_background(dark)));
             let _ = w.show();

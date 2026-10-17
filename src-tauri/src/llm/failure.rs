@@ -1,26 +1,45 @@
 //! Sorts analysis failures into plain-language causes (Dayflow TimelineFailureClassifier.swift).
 //! The rules and their order are Dayflow's; the copy is adapted to Windows and Daytrace. The
 //! card message goes on the failed timeline card; `is_actionable` tells whether the user has to
-//! do something (sign in, install, top up) before analysis can work again.
+//! do something (sign in, install, top up) before analysis can work again. `cause` turns the
+//! last failure into what the rail and the global banner say (get_status `cause`).
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub mod cause;
+
+/// Serialized with the names the UI uses (`cause.kind` in get_status).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum FailureKind {
     // The user has to act.
+    #[serde(rename = "loginExpired")]
     ProviderLoginExpired,
+    #[serde(rename = "cliMissing")]
     CliNotInstalled,
+    #[serde(rename = "cliOutdated")]
     CliOutdated,
+    #[serde(rename = "localOffline")]
     LocalEngineOffline,
+    #[serde(rename = "localModelMissing")]
     LocalModelMissing,
+    #[serde(rename = "apiKey")]
     ApiKeyProblem,
+    #[serde(rename = "usageLimit")]
     UsageLimitHit,
+    #[serde(rename = "noCredits")]
     OutOfCredits,
+    #[serde(rename = "geoBlocked")]
     GeoBlocked,
+    #[serde(rename = "accountBlocked")]
     AccountBlocked,
+    #[serde(rename = "modelMissing")]
     ModelMisconfigured,
+    #[serde(rename = "notConfigured")]
     NotConfigured,
     // Daytrace retries these on its own.
+    #[serde(rename = "transient")]
     Transient,
+    #[serde(rename = "unreadable")]
     ModelFlaky,
+    #[serde(rename = "unknown")]
     Unknown,
 }
 
@@ -233,5 +252,8 @@ mod tests {
         assert_eq!(classify("HTTP 529: overloaded").kind, FailureKind::Transient);
         assert_eq!(classify("Could not reach the model server: error sending request").kind, FailureKind::LocalEngineOffline);
         assert_eq!(classify("something odd").kind, FailureKind::Unknown);
+        let credits = r#"HTTP 400: {"error":{"message":"Your credit balance is too low to access the Anthropic API."}}"#;
+        assert_eq!(classify(credits).kind, FailureKind::OutOfCredits);
+        assert_eq!(classify(credits).provider, Some("Claude"));
     }
 }

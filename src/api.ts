@@ -108,6 +108,52 @@ export interface Status {
   lastCaptureAt: number | null;
   tokensToday: [number, number];
   today: string;
+  /** Why the last analysis failed, in plain words with its fixes (src-tauri/src/llm/failure/cause.rs); null while the last batch went through. */
+  cause: FailureCause | null;
+}
+
+/** A button in the failure banner; the first one is the main fix. */
+export type FixAction =
+  /** Settings → Model provider. */
+  | { kind: "settings"; label: string }
+  /** One of the named pages shell_open_link opens. */
+  | { kind: "link"; label: string; target: "console_billing" | "console_keys" }
+  /** Retry today's failed batches now (or analyze the queue). */
+  | { kind: "retry"; label: string };
+
+export type FailureKind =
+  | "loginExpired"
+  | "cliMissing"
+  | "cliOutdated"
+  | "localOffline"
+  | "localModelMissing"
+  | "apiKey"
+  | "usageLimit"
+  | "noCredits"
+  | "geoBlocked"
+  | "accountBlocked"
+  | "modelMissing"
+  | "notConfigured"
+  | "transient"
+  | "unreadable"
+  | "unknown";
+
+/** The last failure as the rail and the global banner show it (UX2). */
+export interface FailureCause {
+  kind: FailureKind;
+  /** Provider named by the error text itself ("Claude", "ChatGPT", ...). */
+  provider: string | null;
+  /** The provider could not be reached: the "Can’t reach …" banner instead of the failure banner. */
+  unreachable: boolean;
+  /** Short line for the rail ("Claude refused the API key"). */
+  label: string;
+  /** The cause and what Daytrace does by itself (banner body). */
+  body: string;
+  /** Second line in the rail: what happens next. */
+  next: string;
+  fixes: FixAction[];
+  /** Daytrace gets past this by itself (busy servers, an unreadable answer). */
+  selfHealing: boolean;
 }
 
 export interface Distraction {

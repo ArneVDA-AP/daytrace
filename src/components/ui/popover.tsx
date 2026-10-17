@@ -1,6 +1,7 @@
 import * as React from "react"
 import { cn } from "@/lib/utils"
 import { Popover as PopoverPrimitive } from "radix-ui"
+import { usePortalContainer } from "@/components/ui/portal-container"
 
 function Popover({
   ...props
@@ -14,15 +15,43 @@ function PopoverTrigger({
   return <PopoverPrimitive.Trigger data-slot="popover-trigger" {...props} />
 }
 
+/**
+ * A popover is a dialog for assistive tech, so it needs a name. Without an aria-label or
+ * aria-labelledby of its own it takes the name of the button that opened it (Radix links the two
+ * with aria-controls).
+ */
+function useNameFromTrigger(el: HTMLElement | null, named: boolean) {
+  React.useLayoutEffect(() => {
+    if (!el || named || !el.id) return
+    const trigger = document.querySelector<HTMLElement>(`[aria-controls="${CSS.escape(el.id)}"]`)
+    if (!trigger) return
+    if (!trigger.id) trigger.id = `${el.id}-trigger`
+    el.setAttribute("aria-labelledby", trigger.id)
+  }, [el, named])
+}
+
 function PopoverContent({
   className,
   align = "center",
   sideOffset = 4,
+  ref,
   ...props
 }: React.ComponentProps<typeof PopoverPrimitive.Content>) {
+  const container = usePortalContainer()
+  const [el, setEl] = React.useState<HTMLDivElement | null>(null)
+  const setRef = React.useCallback(
+    (node: HTMLDivElement | null) => {
+      setEl(node)
+      if (typeof ref === "function") ref(node)
+      else if (ref) ref.current = node
+    },
+    [ref]
+  )
+  useNameFromTrigger(el, !!(props["aria-label"] || props["aria-labelledby"]))
   return (
-    <PopoverPrimitive.Portal>
+    <PopoverPrimitive.Portal container={container}>
       <PopoverPrimitive.Content
+        ref={setRef}
         data-slot="popover-content"
         align={align}
         sideOffset={sideOffset}

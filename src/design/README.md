@@ -120,6 +120,13 @@ screenshots"), Command (cmdk), Kbd, Skeleton, Spinner, Empty, Toast. Shared: `Pa
 name; decorative, nothing when "Show app and site icons" is off). Unused shadcn parts (Tabs, Slider, Separator) were removed; ask to bring one back.
 No other UI libraries; ask before adding one (bundle and CSP). Charts are hand-written SVG.
 
+DropdownMenu is non-modal by default (the rest of the window stays readable for screen readers
+while it is open). Menus, popovers and tooltips open inside the landmark they belong to: the shell
+provides the rail's `<aside>` and the section's `<main>` as their container
+(`components/ui/portal-container.tsx`); inside a Dialog they go to `<body>` as before. Links to
+web pages go through `shellApi.openLink(name)` / `openUrl(url)` (one allowlisted backend
+command); chat answers keep `chat_open_link`.
+
 ## Page pattern
 
 ```tsx
@@ -179,8 +186,8 @@ export default function DailySection() {
   ("Exported", "Copied") and offer Undo; never for errors that need action.
 - Global problems (capture failing, no key, provider unreachable, and every other reason the
   last batch failed: "Timeline cards can’t be written" with the cause, its fix and the raw error,
-  `app/failure.ts`) are already shown under every PageHeader and in the rail. Do not repeat them
-  inside views.
+  from get_status `cause`, written by `src-tauri/src/llm/failure/cause.rs`) are already shown
+  under every PageHeader and in the rail. Do not repeat them inside views.
 
 ## Focus and accessibility
 

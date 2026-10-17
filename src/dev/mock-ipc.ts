@@ -37,6 +37,7 @@ import { applyAgentAccessMock } from "@/dev/w4-f3";
 import { applyF1Mock } from "@/dev/w4-f1";
 import { applyChatChartsMock } from "@/dev/w5-r2";
 import { applyIconsMock } from "@/dev/w5-r3";
+import { applyR4Mock } from "@/dev/w5-r4";
 
 export const DEV_MOCK_MARKER = "DAYTRACE_DEV_MOCK_IPC";
 
@@ -147,6 +148,7 @@ export function installMockIpc() {
       lastCaptureAt: r.state === "recording" ? t - (t % 10) : t - 47 * 60,
       tokensToday: [182_400, 9_850],
       today: ds.today,
+      cause: null,
     };
   };
 
@@ -314,6 +316,7 @@ export function installMockIpc() {
   applyF1Mock(handlers, { q, today: ds.today, now }); // shell commands and variants (src/dev/w4-f1.ts)
   applyChatChartsMock(handlers, { q, now }); // chat answers with charts, ?chat=charts (src/dev/w5-r2.ts)
   applyIconsMock(handlers, { q, settings }); // app and site icons, ?icons=… (src/dev/w5-r3.ts)
+  applyR4Mock(handlers, { settings }); // status `cause` from the backend's wording (src/dev/w5-r4.ts)
 
   mockWindows("main");
   mockIPC(

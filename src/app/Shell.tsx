@@ -7,11 +7,13 @@ import { LogoMark } from "@/app/Logo";
 import { useAppSettings } from "@/app/state";
 import { StatusBlock } from "@/app/StatusBlock";
 import { Kbd } from "@/components/ui/kbd";
+import { PortalContainer } from "@/components/ui/portal-container";
 import { toast } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { href, useRoute, type Section } from "@/lib/router";
 import type { Appearance } from "@/lib/theme";
 import { cn, errorText } from "@/lib/utils";
+import { AgentsFrameHost } from "@/views/agents/frame-host";
 
 export interface NavItem {
   id: Section;
@@ -244,6 +246,9 @@ export function Shell({ children, onOpenCommand }: { children: React.ReactNode; 
   const { section } = useRoute();
   const collapsed = useCollapsedRail();
   const recapNew = useRecapBadge(section);
+  // Menus, popovers and tooltips open inside the landmark they belong to (components/ui/portal-container).
+  const [railEl, setRailEl] = React.useState<HTMLElement | null>(null);
+  const [mainEl, setMainEl] = React.useState<HTMLElement | null>(null);
   return (
     <div className="flex h-full min-w-0 bg-background">
       <a
@@ -259,36 +264,42 @@ export function Shell({ children, onOpenCommand }: { children: React.ReactNode; 
       {/* The rail, one landmark: search, the section links, the status block, Settings and the
           theme switch. The section and Settings links are navigation landmarks inside it. */}
       <aside
+        ref={setRailEl}
         aria-label="Daytrace"
         className="scroll-thin flex w-(--rail-w-collapsed) shrink-0 flex-col gap-1 overflow-y-auto px-2 pt-3 pb-2 wide:w-(--rail-w) wide:px-3"
       >
-        <div className="mb-3 flex h-8 items-center gap-2.5 px-1.5 max-wide:justify-center max-wide:px-0">
-          <LogoMark className="size-6 shrink-0" />
-          <span className="hidden font-display text-[1.0625rem] font-semibold tracking-[-0.01em] wide:inline" translate="no">
-            Daytrace
-          </span>
-        </div>
-        <SearchButton onClick={onOpenCommand} collapsed={collapsed} />
-        <nav aria-label="Sections" className="mt-2 flex flex-col gap-0.5">
-          {NAV.map((n) => (
-            <NavLink key={n.id} item={n} active={section === n.id} collapsed={collapsed} badge={n.id === "daily" && recapNew ? "New recap" : undefined} />
-          ))}
-        </nav>
-        <div className="min-h-4 flex-1" />
-        <StatusBlock />
-        <nav aria-label="Settings" className="flex flex-col">
-          <NavLink item={SETTINGS_NAV} active={section === "settings"} collapsed={collapsed} />
-        </nav>
-        <ThemeSwitch collapsed={collapsed} />
+        <PortalContainer container={railEl}>
+          <div className="mb-3 flex h-8 items-center gap-2.5 px-1.5 max-wide:justify-center max-wide:px-0">
+            <LogoMark className="size-6 shrink-0" />
+            <span className="hidden font-display text-[1.0625rem] font-semibold tracking-[-0.01em] wide:inline" translate="no">
+              Daytrace
+            </span>
+          </div>
+          <SearchButton onClick={onOpenCommand} collapsed={collapsed} />
+          <nav aria-label="Sections" className="mt-2 flex flex-col gap-0.5">
+            {NAV.map((n) => (
+              <NavLink key={n.id} item={n} active={section === n.id} collapsed={collapsed} badge={n.id === "daily" && recapNew ? "New recap" : undefined} />
+            ))}
+          </nav>
+          <div className="min-h-4 flex-1" />
+          <StatusBlock />
+          <nav aria-label="Settings" className="flex flex-col">
+            <NavLink item={SETTINGS_NAV} active={section === "settings"} collapsed={collapsed} />
+          </nav>
+          <ThemeSwitch collapsed={collapsed} />
+        </PortalContainer>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col py-2 pr-2">
         <main
+          ref={setMainEl}
           id="content"
           tabIndex={-1}
           aria-label={SECTION_TITLES[section]}
           className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border bg-surface-1 shadow-xs outline-none"
         >
-          {children}
+          <PortalContainer container={mainEl}>{children}</PortalContainer>
+          {/* The Agents dashboard frame, kept loaded across section switches (views/agents/frame-host.tsx). */}
+          <AgentsFrameHost />
         </main>
       </div>
     </div>

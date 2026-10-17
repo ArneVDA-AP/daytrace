@@ -725,11 +725,162 @@ pub fn agents_open_in_browser(app: tauri::AppHandle) -> CmdResult<()> {
     app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
 }
 
+// ---- links and keys from the dashboard frame ----
+//
+// Daytrace never injects scripts or styles into the dashboard. Its links and keys are handled
+// from outside: new-window requests on the main window, and WebView2's accelerator keys.
+
+/// At most one browser tab per this interval from the dashboard, so a page that calls
+/// window.open in a loop cannot flood the browser.
+const POPUP_INTERVAL: Duration = Duration::from_secs(1);
+
+static LAST_POPUP: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Where a new-window request on the main window goes: the address to open in the default
+/// browser, or None (nothing opens). Daytrace's own page never opens windows (its links go
+/// through `shell_open_link`), and the frame's sandbox allows popups only for the dashboard, so a
+/// request can only come from the dashboard while it runs. Its web links open in the browser, as
+/// in Dayflow; any other scheme, or a request while the dashboard is not running, is refused.
+pub fn popup_target(url: &str, dashboard_running: bool) -> Option<String> {
+    if !dashboard_running {
+        return None;
+    }
+    let u = reqwest::Url::parse(url.trim()).ok()?;
+    matches!(u.scheme(), "http" | "https").then(|| u.to_string())
+}
+
+fn popup_allowed(last: &mut Option<Instant>, now: Instant) -> bool {
+    if last.is_some_and(|t| now.duration_since(t) < POPUP_INTERVAL) {
+        return false;
+    }
+    *last = Some(now);
+    true
+}
+
+/// The main window's new-window handler (tray.rs): opens the dashboard's links in the default
+/// browser. The window itself is always denied.
+pub fn on_new_window(app: &tauri::AppHandle, url: &str) {
+    use tauri_plugin_opener::OpenerExt;
+    let running = matches!(host().state(), RunState::Running { .. });
+    let Some(target) = popup_target(url, running) else {
+        log::info!("new window refused: {}", url.split(['?', '#']).next().unwrap_or(""));
+        return;
+    };
+    if !popup_allowed(&mut lock(&LAST_POPUP), Instant::now()) {
+        return;
+    }
+    if let Err(e) = app.opener().open_url(target, None::<&str>) {
+        log::warn!("could not open a dashboard link: {e}");
+    }
+}
+
+/// Event for the frame host (src/views/agents/frame-host.tsx) with a shell key pressed while
+/// the WebView had focus; the page acts on it only while the focus is inside the dashboard frame
+/// (key events there stay in the frame's own document).
+pub const FRAME_KEY_EVENT: &str = "agents-frame-key";
+
+/// The shell keys the page needs while focus is inside the dashboard, as KeyboardEvent.code
+/// names: Esc (back to the page), Ctrl+K, Ctrl+1…9 and Ctrl+, (Settings). `vk` is the Windows
+/// virtual-key code, which names the number row's keys the same on AZERTY and QWERTY. Ctrl+Alt
+/// is AltGr (typing on many layouts), so it never counts.
+pub fn frame_key(vk: u32, ctrl: bool, alt: bool, shift: bool) -> Option<&'static str> {
+    const DIGITS: [&str; 9] = ["Digit1", "Digit2", "Digit3", "Digit4", "Digit5", "Digit6", "Digit7", "Digit8", "Digit9"];
+    if alt || shift {
+        return None;
+    }
+    match (vk, ctrl) {
+        (0x1B, false) => Some("Escape"),
+        (0x4B, true) => Some("KeyK"),
+        (0x31..=0x39, true) => Some(DIGITS[(vk - 0x31) as usize]),
+        (0xBC, true) => Some("Comma"),
+        _ => None,
+    }
+}
+
+/// Watches the main window's keys through WebView2's AcceleratorKeyPressed (it sees keys before
+/// any frame does, the dashboard's included) and sends the shell keys to the page. The keys still
+/// reach the page or the frame as usual.
+#[cfg(windows)]
+pub fn watch_frame_keys(window: &tauri::WebviewWindow) {
+    use tauri::{Emitter, Manager};
+    use webview2_com::AcceleratorKeyPressedEventHandler;
+    use webview2_com::Microsoft::Web::WebView2::Win32::{COREWEBVIEW2_KEY_EVENT_KIND, COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN, COREWEBVIEW2_PHYSICAL_KEY_STATUS};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VIRTUAL_KEY, VK_CONTROL, VK_MENU, VK_SHIFT};
+
+    let app = window.app_handle().clone();
+    let watched = window.with_webview(move |webview| {
+        let controller = webview.controller();
+        let handler = AcceleratorKeyPressedEventHandler::create(Box::new(move |_, args| {
+            let Some(args) = args else { return Ok(()) };
+            let mut kind = COREWEBVIEW2_KEY_EVENT_KIND::default();
+            let mut vk = 0u32;
+            let mut status = COREWEBVIEW2_PHYSICAL_KEY_STATUS::default();
+            unsafe {
+                args.KeyEventKind(&mut kind)?;
+                args.VirtualKey(&mut vk)?;
+                args.PhysicalKeyStatus(&mut status)?;
+            }
+            // Key down only, no auto-repeat.
+            if kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN || status.WasKeyDown.as_bool() {
+                return Ok(());
+            }
+            let down = |k: VIRTUAL_KEY| (unsafe { GetKeyState(k.0 as i32) }) < 0;
+            if let Some(code) = frame_key(vk, down(VK_CONTROL), down(VK_MENU), down(VK_SHIFT)) {
+                let _ = app.emit_to("main", FRAME_KEY_EVENT, code);
+            }
+            Ok(())
+        }));
+        let mut token = 0i64;
+        if let Err(e) = unsafe { controller.add_AcceleratorKeyPressed(&handler, &mut token) } {
+            log::warn!("could not watch the window's keys: {e}");
+        }
+    });
+    if let Err(e) = watched {
+        log::warn!("could not reach the webview to watch keys: {e}");
+    }
+}
+
+/// Elsewhere the dashboard frame's keys are not watched (Daytrace ships for Windows only).
+#[cfg(not(windows))]
+pub fn watch_frame_keys(_window: &tauri::WebviewWindow) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::llm::cli::discover::fake::FakeEnv;
     use crate::llm::cli::process::FakeRunner;
+
+    #[test]
+    fn dashboard_links_open_in_the_browser_while_it_runs() {
+        assert_eq!(popup_target("https://dayflow.so/", true).as_deref(), Some("https://dayflow.so/"));
+        assert_eq!(popup_target("http://127.0.0.1:40404/session/3", true).as_deref(), Some("http://127.0.0.1:40404/session/3"));
+        assert_eq!(popup_target("https://github.com/JerryZLiu/AgentPlayback", false), None, "not running: nothing opens");
+        for bad in ["file:///C:/Windows/System32/calc.exe", "javascript:alert(1)", "daytrace://pause?minutes=30", "about:blank", "not a url"] {
+            assert_eq!(popup_target(bad, true), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn popups_are_throttled() {
+        let mut last = None;
+        let t = Instant::now();
+        assert!(popup_allowed(&mut last, t));
+        assert!(!popup_allowed(&mut last, t + Duration::from_millis(300)));
+        assert!(popup_allowed(&mut last, t + Duration::from_millis(1100)));
+    }
+
+    #[test]
+    fn shell_keys_from_the_frame() {
+        assert_eq!(frame_key(0x1B, false, false, false), Some("Escape"));
+        assert_eq!(frame_key(0x4B, true, false, false), Some("KeyK"));
+        assert_eq!(frame_key(0x31, true, false, false), Some("Digit1"));
+        assert_eq!(frame_key(0x36, true, false, false), Some("Digit6"));
+        assert_eq!(frame_key(0xBC, true, false, false), Some("Comma"));
+        assert_eq!(frame_key(0x4B, false, false, false), None, "a plain K is typing");
+        assert_eq!(frame_key(0x31, true, true, false), None, "AltGr+1 types a character");
+        assert_eq!(frame_key(0x1B, true, false, false), None);
+        assert_eq!(frame_key(0x4B, true, false, true), None);
+    }
 
     const VARS: &[(&str, &str)] = &[
         ("PATH", r#"C:\Windows\system32;"C:\Tools\";C:\Users\arne\AppData\Roaming\npm"#),

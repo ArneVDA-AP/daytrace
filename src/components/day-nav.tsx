@@ -97,7 +97,7 @@ export function DayNav({ unit = "day" }: { unit?: "day" | "week" }) {
           </TooltipTrigger>
           <TooltipContent>Go to a day</TooltipContent>
         </Tooltip>
-        <PopoverContent align="start" className="w-auto p-2" onOpenAutoFocus={(e) => e.preventDefault()}>
+        <PopoverContent align="start" aria-label="Go to a day" className="w-auto p-2" onOpenAutoFocus={(e) => e.preventDefault()}>
           <DayPicker
             day={day}
             today={today}

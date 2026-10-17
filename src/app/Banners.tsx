@@ -1,7 +1,6 @@
 import * as React from "react";
 import { FileWarning, KeyRound, PlugZap, ScreenShareOff } from "lucide-react";
-import { api } from "@/api";
-import type { FixAction } from "@/app/failure";
+import { api, type FixAction } from "@/api";
 import { shellApi } from "@/app/shell-api";
 import { useAppState } from "@/app/state";
 import { providerLabel } from "@/app/status";

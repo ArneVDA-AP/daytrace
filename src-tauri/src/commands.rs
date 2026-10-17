@@ -78,19 +78,28 @@ pub struct StatusDto {
     last_capture_at: Option<i64>,
     tokens_today: (i64, i64),
     today: String,
+    /// Why the last analysis failed, in plain words with its fixes (llm/failure.rs); None while
+    /// the last batch went through.
+    cause: Option<crate::llm::failure::cause::Cause>,
 }
 
 #[tauri::command]
 pub fn get_status(state: S) -> CmdResult<StatusDto> {
     let today = logical_day(now_ts());
     let (day_start, _) = logical_day_bounds(&today).unwrap_or((now_ts() - 86400, now_ts()));
+    let analysis = state.analysis.lock().unwrap().clone();
+    let cause = analysis.last_error.as_deref().map(|e| {
+        let s = state.settings();
+        crate::llm::failure::cause::describe(e, crate::llm::failure::cause::CauseCtx { provider: s.provider, base_url: &s.base_url, recording: s.recording_enabled })
+    });
     Ok(StatusDto {
         recorder: state.recorder.lock().unwrap().clone(),
-        analysis: state.analysis.lock().unwrap().clone(),
+        analysis,
         pending_batches: state.db.count_batches_with_status(&["pending", "processing"]).map_err(err)?,
         last_capture_at: state.db.last_capture_ts().map_err(err)?,
         tokens_today: state.db.token_usage_since(day_start).map_err(err)?,
         today,
+        cause,
     })
 }
 

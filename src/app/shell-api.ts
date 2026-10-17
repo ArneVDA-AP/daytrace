@@ -2,7 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 
 /*
  * The shell's own backend commands (src-tauri/src/features/shell.rs): the "new recap" badge on
- * Daily, the taskbar overlay dot that mirrors it, and the fixed help pages fix buttons open.
+ * Daily, the taskbar overlay dot that mirrors it, and the one link opener (named pages, or https
+ * links to a few allowed sites; the backend refuses everything else).
  */
 
 export interface ShellBadges {
@@ -10,7 +11,8 @@ export interface ShellBadges {
   recapDay: string | null;
 }
 
-export type HelpLink = "console_billing" | "console_keys";
+/** Named pages the backend opens by name. */
+export type HelpLink = "console_billing" | "console_keys" | "releases" | "nodejs";
 
 export const shellApi = {
   badges: () => invoke<ShellBadges>("shell_badges"),
@@ -18,7 +20,13 @@ export const shellApi = {
   recapOpened: () => invoke<void>("shell_recap_opened"),
   /** The dot on the taskbar button (Windows only). */
   setOverlay: (on: boolean) => invoke<void>("shell_set_overlay", { on }),
+  /** Opens a named page in the default browser. */
   openLink: (target: HelpLink) => invoke<void>("shell_open_link", { target }),
+  /**
+   * Opens an https link in the default browser when it points to Daytrace's repository or a help
+   * site the backend allows (links in the release notes); rejects with the reason otherwise.
+   */
+  openUrl: (url: string) => invoke<void>("shell_open_link", { target: url }),
 };
 
 /**
