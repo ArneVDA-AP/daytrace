@@ -1,8 +1,63 @@
+<div align="center">
+
+<img src="docs/images/logo.png" alt="" width="96" height="96">
+
 # Daytrace
 
-An automatic timeline of your day on Windows. Daytrace takes a screenshot every few seconds, has a vision model describe what you were doing every 15 minutes, and turns that into a timeline of activity cards you can review, search by day and export.
+**An automatic timeline of your workday on Windows.**<br>
+Daytrace takes a screenshot every few seconds, has a vision model describe what you were doing every 15 minutes,
+and turns that into a timeline you can review, ask questions about and export.
 
-Daytrace is an unofficial port of [Dayflow](https://github.com/JerryZLiu/Dayflow) by Jerry Liu, which is macOS-only. The analysis design, constants and prompt texts come from Dayflow (MIT); the app around them is a new implementation in Rust and Tauri. It is not affiliated with or endorsed by the Dayflow project.
+[![Build](https://github.com/ArneVDA-AP/daytrace/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/ArneVDA-AP/daytrace/actions/workflows/build.yml)
+[![Latest release](https://img.shields.io/github/v/release/ArneVDA-AP/daytrace?label=release)](https://github.com/ArneVDA-AP/daytrace/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+![Windows 10 and 11](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4)
+![Tauri 2](https://img.shields.io/badge/Tauri-2-24C8DB)
+
+[Install](#install) · [Features](#what-it-does) · [Models](#models) · [AI tools](#ai-tools) · [Privacy](#privacy) · [Building](#building)
+
+</div>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-dark.webp">
+  <img src="docs/images/hero-light.webp" alt="The Daytrace timeline: a strip of the whole day by category, the list of activity cards, and the selected card with its summary, step-by-step log and rating.">
+</picture>
+
+Daytrace is an unofficial Windows port of [Dayflow](https://github.com/JerryZLiu/Dayflow) by Jerry Liu, which is macOS-only. The analysis design, constants and prompt texts come from Dayflow (MIT); the app around them is a new implementation in Rust and Tauri. It is not affiliated with or endorsed by the Dayflow project.
+
+<sub>All screenshots in this README show the built-in preview with invented sample data.</sub>
+
+## How it works
+
+```mermaid
+flowchart LR
+    A["Screenshot every 10 s<br/>(active monitor)"] --> B["15-minute batch"]
+    B -->|"away from the PC"| C["Idle card<br/>(no model call)"]
+    B --> D["Vision model<br/>Claude, local or CLI"]
+    D --> E["Timeline cards<br/>summary, log, interruptions"]
+    E --> F["Daily recap, Weekly,<br/>Goals, Chat, MCP"]
+```
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/week.webp" alt="Week mode: seven days side by side on one time scale"><br><b>Week view.</b> Seven days on one time scale; select a card to open it.</td>
+    <td width="50%"><img src="docs/images/day-so-far.webp" alt="Your day so far: recorded time, focus, longest focus block, distractions and where the time went"><br><b>Your day so far.</b> Recorded time, focus, the longest focus block and where the time went.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/daily.webp" alt="Daily: standup recap, stats and an activity grid by quarter hour"><br><b>Daily.</b> A standup recap, the day's numbers and an activity grid by quarter hour.</td>
+    <td><img src="docs/images/weekly.webp" alt="Weekly: time per day by category and the week by hour"><br><b>Weekly.</b> Time per day, the week by hour and a focus heat map, each with a table view.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/goals.webp" alt="Goals: focus target, distraction limit and a to-do list checked against the timeline"><br><b>Goals.</b> A focus target, a distraction limit and a to-do list checked against your cards.</td>
+    <td><img src="docs/images/chat.webp" alt="Chat: an answer with charts drawn from the timeline"><br><b>Chat.</b> Ask about your days; answers cite their cards and can include charts.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/settings.webp" alt="Settings, AI tools: the Claude Code plugin and one-click setup for MCP clients"><br><b>AI tools.</b> The Claude Code plugin and one-click setup for Claude Code, Claude Desktop, Codex, Cursor and VS Code.</td>
+    <td><img src="docs/images/onboarding.webp" alt="First-run setup: what Daytrace records and where screenshots go"><br><b>Setup.</b> First run explains what is recorded and where it goes, then sets up a model provider.</td>
+  </tr>
+</table>
 
 ## What it does
 
@@ -132,6 +187,16 @@ DAYTRACE_API_KEY=... DAYTRACE_REPLAY_DIR=path/to/frames DAYTRACE_PIPELINE=cloud 
 | `claude-plugin/`, `.claude-plugin/` | Claude Code plugin and its marketplace file |
 
 Tests: `cargo test --lib --bins` in `src-tauri`, and `npm test` for the UI's pure modules (`src/**/*.test.mjs`). CI runs both on pushes to `main` and on pull requests.
+
+## Contributing
+
+Issues and pull requests are welcome. Before a pull request, run `cargo test --lib --bins` in `src-tauri` and `npm test && npm run build` in the repository root; CI runs the same checks and builds the Windows installer. UI changes follow the design contract in [`src/design/README.md`](src/design/README.md), and `npm run dev` opens every screen in a browser with sample data, no Windows needed.
+
+## Acknowledgements
+
+- [Dayflow](https://github.com/JerryZLiu/Dayflow) by Jerry Liu, for the product, the analysis design and the prompts.
+- [AgentPlayback](https://github.com/JerryZLiu/AgentPlayback), shown in the Agents section.
+- Built with [Tauri](https://tauri.app), [React](https://react.dev), [Radix UI](https://www.radix-ui.com), [shadcn/ui](https://ui.shadcn.com) and [Tailwind CSS](https://tailwindcss.com).
 
 ## License
 

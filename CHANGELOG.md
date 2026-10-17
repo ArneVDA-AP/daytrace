@@ -7,6 +7,7 @@ in "What's new" after an update (from GitHub, or from this file when GitHub can'
 ## 0.3.0
 
 ### New in the window
+- A Daytrace app icon (the trace mark from the rail) instead of the default Tauri icon, on the window, taskbar, tray and installer.
 - A new design: a rail with the sections and the recorder status, Pause and Resume in the rail, light, dark and Windows Contrast themes, and Ctrl+K to jump to a section, a setting or a day ("monday", "12 oct").
 - Timeline: a strip of the whole day with the time you were idle or not recording, a Week view with the seven days side by side, and a review mode that plays each unrated card so you can rate it with 1, 2 or 3.
 - Edit a card's title and category or delete it, rate it as focused, neutral or distracted, and leave feedback on how it was written. Your edits stay when Daytrace rewrites the cards around them.
