@@ -10,6 +10,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { navigate, setParams, useRoute, type Section } from "@/lib/router";
 import { OPEN_ONBOARDING_EVENT } from "@/views/platform-api";
 import { useDayRollover, useNotificationNavigation } from "@/views/platform-hooks";
+import { GoalPrompt } from "@/views/journal/goal-prompt";
 import TimelineSection from "@/views/timeline";
 
 /*
@@ -126,6 +127,7 @@ function Root() {
           <CommandMenu open={commandOpen} onOpenChange={setCommandOpen} />
         </React.Suspense>
       )}
+      <GoalPrompt />
     </>
   );
 }

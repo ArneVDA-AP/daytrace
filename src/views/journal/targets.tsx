@@ -9,14 +9,34 @@ import type { Plan, Progress, Reference, Review } from "@/views/journal-api";
 import { Panel, ResultBadge, Swatch, pct } from "@/views/journal/parts";
 
 /*
- * Dayflow's day goals: a focus target and a distraction budget with progress bars, the setup
+ * Dayflow's day goals: a focus target and a distraction limit with progress bars, the setup
  * ("Where do you want to spend your time today?"), Skip, and yesterday's review in the morning.
- * Which categories count as focus or distraction follows the categories in Settings.
+ * What counts as focus or distraction is each category's "Counts as" in Settings > Categories.
  */
 
 function names(list: string[]): string {
   if (list.length <= 1) return list.join("");
   return `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}`;
+}
+
+/** What the distraction numbers include, in the Daily view's words. */
+export function distractionCounts(categories: string[]): string {
+  if (!categories.length) return "Counts the distractions noted inside cards. No category counts as distraction.";
+  return `Counts ${names(categories)} cards and the distractions noted inside other cards.`;
+}
+
+/** What the focus numbers include. */
+export function focusCounts(categories: string[]): string {
+  if (!categories.length) return "No category counts as focus.";
+  return `Counts ${names(categories)}, without the distractions noted inside them.`;
+}
+
+function OpenCategories() {
+  return (
+    <Button variant="link" size="xs" className="h-auto px-0 text-caption" onClick={() => navigate("settings", { section: "categories" })}>
+      Change in Settings
+    </Button>
+  );
 }
 
 /** A track with stacked fills; `target` draws a tick where the target sits when the fills pass it. */
@@ -132,15 +152,21 @@ export function TargetsView({
           </ul>
         ) : (
           <p className="text-caption text-muted-foreground">
-            {progress.focusCategories.length ? `No time in ${names(progress.focusCategories.map((c) => c.name))} yet.` : "No category counts as focus."}
+            {progress.focusCategories.length ? (
+              `No time in ${names(progress.focusCategories.map((c) => c.name))} yet.`
+            ) : (
+              <>
+                No category counts as focus. <OpenCategories />
+              </>
+            )}
           </p>
         )}
       </div>
 
-      {/* Distraction budget */}
+      {/* Distraction limit */}
       <div className="flex flex-col gap-2">
         <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-          <h3 className="text-meta text-muted-foreground">Distraction budget</h3>
+          <h3 className="text-meta text-muted-foreground">Distraction limit</h3>
           {verdicts ? (
             <ResultBadge met={!over}>{over ? `Over by ${formatDuration(used - limit)}` : "Met"}</ResultBadge>
           ) : over ? (
@@ -164,7 +190,7 @@ export function TargetsView({
           )}
         </p>
         <Bar
-          label="Distraction budget used"
+          label="Distraction limit used"
           valueText={`${formatDuration(used)} of ${formatDuration(limit)} used${over ? `, ${formatDuration(used - limit)} over` : ""}`}
           max={limit}
           now={used}
@@ -176,16 +202,7 @@ export function TargetsView({
           ]}
         />
         <p className="text-caption text-muted-foreground">
-          {progress.distractionCategories.length ? (
-            `Counts ${names(progress.distractionCategories)}.`
-          ) : (
-            <>
-              No category counts as distraction. Name a category “Distraction” in Settings to track it.{" "}
-              <Button variant="link" size="xs" className="h-auto px-0 text-caption" onClick={() => navigate("settings", { section: "categories" })}>
-                Open categories
-              </Button>
-            </>
-          )}
+          {distractionCounts(progress.distractionCategories)} <OpenCategories />
         </p>
       </div>
 
@@ -250,6 +267,9 @@ export function GoalSetup({
   onSave,
   onSkip,
   onCancel,
+  cancelLabel = "Cancel",
+  idPrefix = "goal",
+  onDirty,
 }: {
   plan: Plan;
   progress: Progress;
@@ -259,10 +279,18 @@ export function GoalSetup({
   onSave: (focusMinutes: number, distractionMinutes: number) => void;
   onSkip: () => void;
   onCancel?: () => void;
+  cancelLabel?: string;
+  /** Ids of the fields start with it (two setups can be on screen: the page and the prompt). */
+  idPrefix?: string;
+  /** The targets differ from the plan (unsaved choices). */
+  onDirty?: (dirty: boolean) => void;
 }) {
   const [focus, setFocus] = React.useState(plan.focusTargetMinutes);
   const [distraction, setDistraction] = React.useState(plan.distractionLimitMinutes);
   const focusNames = progress.focusCategories.map((c) => c.name);
+  const dirty = focus !== plan.focusTargetMinutes || distraction !== plan.distractionLimitMinutes;
+  React.useEffect(() => onDirty?.(dirty), [dirty, onDirty]);
+  React.useEffect(() => () => onDirty?.(false), [onDirty]);
   return (
     <form
       className="@container flex flex-col gap-4"
@@ -280,25 +308,25 @@ export function GoalSetup({
       <div className="grid gap-3 @lg:grid-cols-2">
         <div className="flex flex-col gap-2 rounded-md border bg-surface-2/40 p-3">
           <h3 className="text-meta font-semibold">Focus target</h3>
-          <DurationPicker id="goal-focus" label="Focus target" minutes={focus} onChange={setFocus} />
+          <DurationPicker id={`${idPrefix}-focus`} label="Focus target" minutes={focus} onChange={setFocus} />
           <p className="text-caption text-muted-foreground tnum">
             Yesterday {formatDuration(reference.yesterdayFocusMinutes * 60)} · last week’s average {formatDuration(reference.lastWeekFocusMinutes * 60)}
           </p>
-          <p className="text-caption text-muted-foreground">{focusNames.length ? `Counts ${names(focusNames)}.` : "No category counts as focus."}</p>
+          <p className="text-caption text-muted-foreground">{focusCounts(focusNames)}</p>
         </div>
         <div className="flex flex-col gap-2 rounded-md border bg-surface-2/40 p-3">
           <h3 className="text-meta font-semibold">Distraction limit</h3>
-          <DurationPicker id="goal-distraction" label="Distraction limit" minutes={distraction} onChange={setDistraction} />
+          <DurationPicker id={`${idPrefix}-distraction`} label="Distraction limit" minutes={distraction} onChange={setDistraction} />
           <p className="text-caption text-muted-foreground tnum">
             Yesterday {formatDuration(reference.yesterdayDistractionMinutes * 60)} · last week’s average{" "}
             {formatDuration(reference.lastWeekDistractionMinutes * 60)}
           </p>
-          <p className="text-caption text-muted-foreground">
-            {progress.distractionCategories.length ? `Counts ${names(progress.distractionCategories)}.` : "No category counts as distraction."}
-          </p>
+          <p className="text-caption text-muted-foreground">{distractionCounts(progress.distractionCategories)}</p>
         </div>
       </div>
-      <p className="text-caption text-muted-foreground">Focus and distraction follow your categories in Settings, the same as on the Daily page.</p>
+      <p className="text-caption text-muted-foreground">
+        What counts as focus or distraction is set per category in Settings, the same for Daily and Weekly. <OpenCategories />
+      </p>
       <div className="flex flex-wrap items-center gap-2">
         <Button type="submit" disabled={busy}>
           {busy ? "Saving…" : "Save targets"}
@@ -308,7 +336,7 @@ export function GoalSetup({
         </Button>
         {onCancel && (
           <Button type="button" variant="ghost" onClick={onCancel} disabled={busy}>
-            Cancel
+            {cancelLabel}
           </Button>
         )}
       </div>
@@ -316,7 +344,7 @@ export function GoalSetup({
   );
 }
 
-export function SkippedView({ isToday, onSet }: { isToday: boolean; onSet: () => void }) {
+export function SkippedView({ isToday, onSet, setRef }: { isToday: boolean; onSet: () => void; setRef?: React.Ref<HTMLButtonElement> }) {
   return (
     <div className="flex flex-col items-start gap-3 rounded-md border border-dashed p-4">
       <p className="text-meta text-muted-foreground">
@@ -324,7 +352,7 @@ export function SkippedView({ isToday, onSet }: { isToday: boolean; onSet: () =>
           ? "You skipped goals for today. Set targets to see focus and distraction progress here and on the Timeline."
           : "Goals were skipped for this day."}
       </p>
-      <Button variant="outline" size="sm" onClick={onSet}>
+      <Button ref={setRef} variant="outline" size="sm" onClick={onSet}>
         Set targets
       </Button>
     </div>
@@ -333,10 +361,19 @@ export function SkippedView({ isToday, onSet }: { isToday: boolean; onSet: () =>
 
 /** Morning flow: how yesterday went against yesterday's targets. */
 export function YesterdayReview({ review, day, colorFor }: { review: Review; day: string; colorFor: (c: string) => string }) {
+  return (
+    <Panel title="Yesterday’s review" description={formatDayTitle(day)}>
+      <ReviewBody review={review} colorFor={colorFor} />
+    </Panel>
+  );
+}
+
+/** Yesterday's focus and distraction against its targets (the page panel and the prompt). */
+export function ReviewBody({ review, colorFor }: { review: Review; colorFor: (c: string) => string }) {
   const p = review.progress;
   const cats = p.focusCategories.filter((c) => c.secs > 0);
   return (
-    <Panel title="Yesterday’s review" description={formatDayTitle(day)}>
+    <>
       <div className="@container">
         <div className="grid gap-3 @lg:grid-cols-2">
           <div className="flex flex-col gap-2 rounded-md border p-3">
@@ -373,13 +410,13 @@ export function YesterdayReview({ review, day, colorFor }: { review: Review; day
           </div>
         </div>
       </div>
-    </Panel>
+    </>
   );
 }
 
-export function TargetsActions({ onEdit }: { onEdit: () => void }) {
+export function TargetsActions({ onEdit, editRef }: { onEdit: () => void; editRef?: React.Ref<HTMLButtonElement> }) {
   return (
-    <Button variant="ghost" size="sm" onClick={onEdit}>
+    <Button ref={editRef} variant="ghost" size="sm" onClick={onEdit}>
       <Pencil aria-hidden="true" /> Edit targets
     </Button>
   );
