@@ -1,10 +1,23 @@
-import React from "react";
-import ReactDOM from "react-dom/client";
-import App from "./App";
+// Stylesheets first: index.css declares the cascade layer order (legacy CSS files repeat it).
+import "./index.css";
 import "./styles.css";
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import { App } from "@/app/App";
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-);
+async function boot() {
+  // Browser preview (npm run dev outside Tauri): answer every IPC call with synthetic data.
+  // import.meta.env.DEV is false in production builds, so this branch and the whole src/dev
+  // folder are removed from dist (scripts/check-dist.mjs verifies it).
+  if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
+    const { installMockIpc } = await import("./dev/mock-ipc");
+    installMockIpc();
+  }
+  createRoot(document.getElementById("root") as HTMLElement).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
+}
+
+void boot();

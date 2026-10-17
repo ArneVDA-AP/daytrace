@@ -232,7 +232,7 @@ export function Timelapse({ cardId }: { cardId: number }) {
           return (
             <button
               key={s.id}
-              className={`thumb${isFrame(s) ? "" : " hidden"}${i === index ? " on" : ""}`}
+              className={`thumb${isFrame(s) ? "" : " thumb-hidden"}${i === index ? " on" : ""}`}
               onClick={() => {
                 setPlaying(false);
                 setIndex(i);

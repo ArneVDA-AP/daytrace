@@ -2,8 +2,7 @@ import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api, type NotificationPrefs } from "../api";
 import type { SectionProps } from "./types";
-import { applyAppearance, OPEN_ONBOARDING_EVENT, platformApi, type Appearance, type UpdateStatus } from "../views/platform-api";
-import { DEFAULT_PRESETS, minutesLabel } from "../StatusPill";
+import { applyAppearance, DEFAULT_PRESETS, minutesLabel, OPEN_ONBOARDING_EVENT, platformApi, type Appearance, type UpdateStatus } from "../views/platform-api";
 import "../views/platform.css";
 
 /** Dayflow's PausePresets.minuteOptions. */
