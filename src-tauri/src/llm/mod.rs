@@ -7,8 +7,14 @@
 //! last 45 minutes, validated for coverage and the 10-minute minimum.
 
 pub mod chat_api;
+pub mod cli;
 pub mod client;
+pub mod failure;
+pub mod one_step;
+mod one_step_prompts;
 pub mod prompts;
+pub mod provider_cmds;
+pub mod routing;
 
 use crate::db::Shot;
 use crate::timeutil::{clock_minutes, clock_span_minutes, fmt_clock, fmt_hhmmss, fmt_mmss, minutes_to_clock, parse_elapsed};
@@ -25,6 +31,8 @@ pub struct Ctx<'a> {
     pub categories: &'a [Category],
     pub language: &'a str,
     pub capture_interval: i64,
+    /// User edits of the card prompt blocks.
+    pub prompts: &'a crate::config::PromptOverrides,
 }
 
 /// A stored screenshot ready to send: frames already ≤720 px high are sent as stored; larger
@@ -494,7 +502,7 @@ pub async fn cards_local(ctx: &Ctx<'_>, batch_obs: &[Observation], existing: &[A
     let summary: SummaryResp = local_json_call(
         ctx,
         "generate_summary",
-        &prompts::local_summary(&observations_text, ctx.categories, ctx.language),
+        &prompts::local_summary(&observations_text, ctx.categories, ctx.language, ctx.prompts),
         prompts::local_summary_retry,
     )
     .await?;
@@ -506,7 +514,7 @@ pub async fn cards_local(ctx: &Ctx<'_>, batch_obs: &[Observation], existing: &[A
         .map(|t| format!("- {t}"))
         .collect::<Vec<_>>()
         .join("\n");
-    let title_base = prompts::local_title(&bullets, ctx.language);
+    let title_base = prompts::local_title(&bullets, ctx.language, ctx.prompts);
     let mut prompt = title_base.clone();
     let mut title = String::new();
     let mut last_err = None;
@@ -687,7 +695,7 @@ pub async fn cards_cloud(ctx: &Ctx<'_>, window_obs: &[Observation], existing: &[
         .collect();
     let previous = serde_json::to_string_pretty(&slim)?;
     let transcript = obs_lines(window_obs).join("\n");
-    let base = prompts::cloud_cards(&previous, &transcript, ctx.categories, ctx.language);
+    let base = prompts::cloud_cards(&previous, &transcript, ctx.categories, ctx.language, ctx.prompts);
     with_cloud_retries(&base, |prompt| async move {
         let text = ctx
             .client

@@ -70,6 +70,8 @@ impl Target {
                 .ok()
                 .and_then(|u| u.host_str().map(String::from))
                 .unwrap_or_else(|| "OpenAI-compatible server".into()),
+            ProviderKind::ClaudeCli => "Claude Code CLI".into(),
+            ProviderKind::CodexCli => "Codex CLI".into(),
         }
     }
 
@@ -79,6 +81,8 @@ impl Target {
             ProviderKind::Ollama => "ollama",
             ProviderKind::LmStudio => "lm_studio",
             ProviderKind::OpenaiCompatible => "openai_compatible",
+            ProviderKind::ClaudeCli => "claude_cli",
+            ProviderKind::CodexCli => "codex_cli",
         }
     }
 
@@ -86,6 +90,9 @@ impl Target {
     fn problem(&self) -> Option<String> {
         if self.model.is_empty() {
             return Some("No model is set. Choose one in Settings.".into());
+        }
+        if self.kind.is_cli() {
+            return Some(format!("Chat does not work with the {} yet. Choose an API or local model provider in Settings to chat.", self.kind.label()));
         }
         let host = reqwest::Url::parse(&self.base_url).ok().and_then(|u| u.host_str().map(str::to_lowercase)).unwrap_or_default();
         let needs_key = match self.kind {

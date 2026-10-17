@@ -95,6 +95,10 @@ pub fn run() {
             // journal commands
             // platform_extras commands
             // provider commands
+            llm::provider_cmds::provider_prompt_defaults,
+            llm::provider_cmds::provider_key_status,
+            llm::provider_cmds::provider_save_key,
+            llm::provider_cmds::provider_check_cli,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Daytrace")

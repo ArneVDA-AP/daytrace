@@ -13,6 +13,62 @@ pub enum ProviderKind {
     LmStudio,
     /// Any other OpenAI-compatible endpoint (OpenAI, OpenRouter, Gemini's /openai endpoint, ...).
     OpenaiCompatible,
+    /// The Claude Code CLI (`claude -p`), signed in with the user's Claude subscription.
+    /// `base_url` holds the path to the executable; empty means auto-detect.
+    ClaudeCli,
+    /// The Codex CLI (`codex exec`), signed in with the user's ChatGPT account.
+    /// `base_url` holds the path to the executable; empty means auto-detect.
+    CodexCli,
+}
+
+impl ProviderKind {
+    /// Providers that run a local command-line tool instead of calling an HTTP endpoint.
+    pub fn is_cli(self) -> bool {
+        matches!(self, ProviderKind::ClaudeCli | ProviderKind::CodexCli)
+    }
+
+    /// Short name for messages ("Claude Code CLI could not ...").
+    pub fn label(self) -> &'static str {
+        match self {
+            ProviderKind::Anthropic => "Claude API",
+            ProviderKind::Ollama => "Ollama",
+            ProviderKind::LmStudio => "LM Studio",
+            ProviderKind::OpenaiCompatible => "OpenAI-compatible API",
+            ProviderKind::ClaudeCli => "Claude Code CLI",
+            ProviderKind::CodexCli => "Codex CLI",
+        }
+    }
+
+    /// The analysis mode that suits the provider when it is used as the fallback.
+    pub fn natural_pipeline(self) -> Pipeline {
+        match self {
+            ProviderKind::Ollama | ProviderKind::LmStudio => Pipeline::Local,
+            _ => Pipeline::Cloud,
+        }
+    }
+}
+
+/// User edits of the instruction blocks inside the card prompts (Dayflow's
+/// ActivityCardPromptOverrides / OllamaPromptOverrides). Empty means the default text.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PromptOverrides {
+    /// Title instructions of the Detailed mode card prompt.
+    pub detailed_title: String,
+    /// Summary instructions of the Detailed mode card prompt.
+    pub detailed_summary: String,
+    /// Title instructions of the Lightweight mode title prompt.
+    pub lightweight_title: String,
+    /// Summary guidelines of the Lightweight mode summary prompt.
+    pub lightweight_summary: String,
+}
+
+impl PromptOverrides {
+    /// Dayflow's compose rule: a trimmed, non-empty override replaces the default block.
+    pub fn pick<'a>(custom: &'a str, default: &'a str) -> &'a str {
+        let t = custom.trim();
+        if t.is_empty() { default } else { t }
+    }
 }
 
 /// How much hidden reasoning Claude may spend. Haiku 5.5 thinks by default (effort "medium"),
@@ -73,6 +129,15 @@ pub struct Settings {
     pub recap_time: String,
     /// Model for chat, on the same provider; empty uses `model`.
     pub chat_model: String,
+    /// Second provider that takes over a step when the main one fails (Dayflow's secondary
+    /// provider in LLMProviderRouting). None turns the fallback off.
+    pub fallback_provider: Option<ProviderKind>,
+    /// Server address of the fallback provider (CLI path for the CLI providers).
+    pub fallback_base_url: String,
+    /// Model of the fallback provider.
+    pub fallback_model: String,
+    /// Edited instruction blocks of the card prompts.
+    pub prompt_overrides: PromptOverrides,
 }
 
 impl Default for Settings {
@@ -98,6 +163,10 @@ impl Default for Settings {
             recap_auto: true,
             recap_time: "08:00".into(),
             chat_model: String::new(),
+            fallback_provider: None,
+            fallback_base_url: String::new(),
+            fallback_model: String::new(),
+            prompt_overrides: PromptOverrides::default(),
         }
     }
 }
@@ -108,6 +177,8 @@ pub fn default_base_url(kind: ProviderKind) -> &'static str {
         ProviderKind::Ollama => "http://localhost:11434",
         ProviderKind::LmStudio => "http://localhost:1234",
         ProviderKind::OpenaiCompatible => "https://api.openai.com/v1",
+        // Empty: find the executable automatically.
+        ProviderKind::ClaudeCli | ProviderKind::CodexCli => "",
     }
 }
 
@@ -117,7 +188,8 @@ pub fn key_slot(kind: ProviderKind, base_url: &str) -> Option<String> {
     match kind {
         ProviderKind::Anthropic => Some("anthropic".into()),
         ProviderKind::LmStudio => Some("lm_studio".into()),
-        ProviderKind::Ollama => None,
+        // Ollama needs no key; the CLIs use their own sign-in.
+        ProviderKind::Ollama | ProviderKind::ClaudeCli | ProviderKind::CodexCli => None,
         ProviderKind::OpenaiCompatible => {
             let host = reqwest::Url::parse(base_url.trim()).ok()?.host_str()?.to_lowercase();
             Some(format!("openai:{host}"))
@@ -136,6 +208,10 @@ pub fn default_model(kind: ProviderKind) -> &'static str {
         ProviderKind::Ollama => "qwen3-vl:4b",
         ProviderKind::LmStudio => "qwen3-vl-4b-instruct",
         ProviderKind::OpenaiCompatible => "gpt-5-mini",
+        // Dayflow's one-step timeline models (ClaudeProvider+Timeline.swift,
+        // CodexProvider+Timeline.swift).
+        ProviderKind::ClaudeCli => "haiku",
+        ProviderKind::CodexCli => "gpt-6-luna",
     }
 }
 
@@ -180,6 +256,21 @@ impl Settings {
         }
         if self.model.trim().is_empty() {
             self.model = default_model(self.provider).into();
+        }
+        if let Some(kind) = self.fallback_provider {
+            if self.fallback_base_url.trim().is_empty() {
+                self.fallback_base_url = default_base_url(kind).into();
+            }
+            if self.fallback_model.trim().is_empty() {
+                self.fallback_model = default_model(kind).into();
+            }
+            // Dayflow drops a secondary that equals the primary.
+            if kind == self.provider
+                && self.fallback_base_url.trim().trim_end_matches('/') == self.base_url.trim().trim_end_matches('/')
+                && self.fallback_model.trim() == self.model.trim()
+            {
+                self.fallback_provider = None;
+            }
         }
         self
     }
