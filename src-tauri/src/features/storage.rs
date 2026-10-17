@@ -200,13 +200,17 @@ fn dir_size(p: &Path) -> u64 {
         .sum()
 }
 
-/// Groups `(captured_at, size)` rows by Daytrace day, newest day first.
-pub fn per_day(rows: &[(i64, i64)]) -> Vec<DayUsage> {
+/// Slices for per-day accounting: 15 minutes, so every UTC offset in use (down to +5:45) puts
+/// the 4 AM day boundary on a slice edge.
+const BUCKET_SECS: i64 = 900;
+
+/// Groups `(slice start, count, bytes)` rows by Daytrace day, newest day first.
+pub fn per_day(buckets: &[(i64, i64, i64)]) -> Vec<DayUsage> {
     let mut m: BTreeMap<String, (i64, i64)> = BTreeMap::new();
-    for (ts, size) in rows {
+    for (ts, n, bytes) in buckets {
         let e = m.entry(logical_day(*ts)).or_default();
-        e.0 += 1;
-        e.1 += size;
+        e.0 += n;
+        e.1 += bytes;
     }
     m.into_iter().rev().map(|(day, (n, b))| DayUsage { day, screenshots: n, bytes: b }).collect()
 }
@@ -225,8 +229,9 @@ pub fn observed_bytes_per_hour(rows: &[(i64, i64)], since: i64) -> Option<i64> {
 }
 
 pub fn usage(state: &AppState) -> Result<StorageUsage> {
-    let rows = state.db.live_screenshot_sizes()?;
-    let days = per_day(&rows);
+    let days = per_day(&state.db.live_screenshot_buckets(BUCKET_SECS)?);
+    let since = now_ts() - 3600;
+    let recent = state.db.live_screenshot_sizes_since(since)?;
     let today = logical_day(now_ts());
     let full: Vec<&DayUsage> = days.iter().filter(|d| d.day != today).collect();
     let average_day_bytes = (!full.is_empty()).then(|| full.iter().map(|d| d.bytes).sum::<i64>() / full.len() as i64);
@@ -236,13 +241,13 @@ pub fn usage(state: &AppState) -> Result<StorageUsage> {
     Ok(StorageUsage {
         data_dir: state.paths.root.to_string_lossy().to_string(),
         screenshots_bytes: dir_size(&state.paths.screenshots),
-        screenshot_count: rows.len() as i64,
+        screenshot_count: days.iter().map(|d| d.screenshots).sum(),
         days,
         database_bytes: file_len(db) + file_len(&sidecar("-wal")) + file_len(&sidecar("-shm")),
         backups_bytes: backups.iter().map(|b| b.bytes).sum(),
         backups,
         logs_bytes: file_len(&state.paths.root.join("daytrace.log")),
-        bytes_per_hour: observed_bytes_per_hour(&rows, now_ts() - 3600),
+        bytes_per_hour: observed_bytes_per_hour(&recent, since),
         average_day_bytes,
         health: backup::health(),
     })
@@ -348,20 +353,23 @@ mod tests {
         shot(&st, d1 + 3600, 100);
         shot(&st, d1 + 7200, 300);
         shot(&st, d2 + 3600, 50);
+        // 3:59:30 AM belongs to the day before, 4:00:00 AM to the new day.
+        shot(&st, d2 - 30, 7);
+        shot(&st, d2, 3);
         // Rows without an image (idle, private app) do not count.
         st.db.insert_screenshot(d2 + 3700, "", 0, 0, None, None, Some("KeePass.exe"), None).unwrap();
         let u = usage(&st).unwrap();
-        assert_eq!(u.screenshot_count, 3);
+        assert_eq!(u.screenshot_count, 5);
         assert_eq!(
             u.days,
             vec![
-                DayUsage { day: "2026-03-11".into(), screenshots: 1, bytes: 50 },
-                DayUsage { day: "2026-03-10".into(), screenshots: 2, bytes: 400 },
+                DayUsage { day: "2026-03-11".into(), screenshots: 2, bytes: 53 },
+                DayUsage { day: "2026-03-10".into(), screenshots: 3, bytes: 407 },
             ]
         );
-        assert_eq!(u.screenshots_bytes, 450);
+        assert_eq!(u.screenshots_bytes, 460);
         assert!(u.database_bytes > 0);
-        assert_eq!(u.average_day_bytes, Some(225));
+        assert_eq!(u.average_day_bytes, Some(230));
         assert_eq!(u.backups_bytes, 0);
 
         let now = 1_000_000;

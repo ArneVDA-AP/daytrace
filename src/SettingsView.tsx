@@ -3,6 +3,7 @@ import { api, Category, Pipeline, ProviderKind, Settings, SettingsDto } from "./
 import { ProviderAdvanced } from "./settings/ProviderAdvanced";
 import { RecapSection } from "./settings/RecapSection";
 import { PlatformSection } from "./settings/PlatformSection";
+import { StorageSection } from "./settings/StorageSection";
 
 const PROVIDERS: { id: ProviderKind; label: string; needsKey: boolean }[] = [
   { id: "anthropic", label: "Claude (Anthropic API)", needsKey: true },
@@ -257,6 +258,7 @@ export function SettingsView({ dto, onSaved, onClose }: { dto: SettingsDto; onSa
           <p className="hint">Screenshots, the timeline database and logs are stored in {dto.dataDir}</p>
           <button className="ghost" onClick={() => api.openDataDir()}>Open folder</button>
         </section>
+        <StorageSection s={s} set={set} />
       </div>
 
       <footer className="settings-foot">

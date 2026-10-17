@@ -31,6 +31,8 @@ export interface Settings {
   recapAuto: boolean;
   recapTime: string;
   chatModel: string;
+  /** Maximum disk space for screenshots in GB (10^9 bytes); 0 turns the limit off. */
+  storageLimitGb: number;
 }
 
 export interface SettingsDto {

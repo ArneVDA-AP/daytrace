@@ -367,11 +367,23 @@ impl Db {
 
     // ---- storage accounting and purges (features/storage) ----
 
-    /// `(captured_at, file_size)` of every live screenshot that has an image file.
-    pub fn live_screenshot_sizes(&self) -> Result<Vec<(i64, i64)>> {
+    /// `(captured_at, file_size)` of live screenshots with an image file captured since `since`.
+    pub fn live_screenshot_sizes_since(&self, since: i64) -> Result<Vec<(i64, i64)>> {
         let c = self.c();
-        let mut st = c.prepare("SELECT captured_at, COALESCE(file_size, 0) FROM screenshots WHERE is_deleted = 0 AND file_path != ''")?;
-        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut st = c.prepare("SELECT captured_at, COALESCE(file_size, 0) FROM screenshots WHERE is_deleted = 0 AND file_path != '' AND captured_at >= ?")?;
+        let rows = st.query_map([since], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// Live screenshot images grouped in `bucket_secs` slices of time:
+    /// `(slice start, count, bytes)`, oldest first.
+    pub fn live_screenshot_buckets(&self, bucket_secs: i64) -> Result<Vec<(i64, i64, i64)>> {
+        let c = self.c();
+        let mut st = c.prepare(
+            "SELECT (captured_at / ?1) * ?1 AS b, COUNT(*), COALESCE(SUM(file_size), 0) FROM screenshots
+             WHERE is_deleted = 0 AND file_path != '' GROUP BY b ORDER BY b",
+        )?;
+        let rows = st.query_map([bucket_secs.max(1)], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
 
