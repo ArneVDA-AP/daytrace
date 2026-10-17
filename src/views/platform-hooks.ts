@@ -3,12 +3,23 @@ import { listen } from "@tauri-apps/api/event";
 import { applyAppearance, platformApi, type Appearance, type NavTarget } from "./platform-api";
 import { rolloverDay, shouldIdleReset } from "./rollover";
 
+// Unsaved work in the card panel (a title or category edit, a feedback note). While it is there,
+// the idle reset and the 4 AM rollover leave the view alone; they happen once it is saved or
+// dropped.
+let unsavedWork = false;
+
+/** The card panel reports whether it holds unsaved work. */
+export function setUnsavedWork(busy: boolean) {
+  unsavedWork = busy;
+}
+
 /**
  * Keeps the open day current: at the 4 AM rollover a view on "today" moves to the new day, and
  * after 15 minutes without interaction the view returns to today (not while Settings is open;
- * then it happens when Settings closes, like Dayflow).
+ * then it happens when Settings closes, like Dayflow). Neither happens while the card panel holds
+ * unsaved work. `onReset(dayChanged)`: the view moved to another day.
  */
-export function useDayRollover(opts: { day: string | null; today: string | null; inSettings: boolean; setDay: (d: string) => void; onReset: () => void }) {
+export function useDayRollover(opts: { day: string | null; today: string | null; inSettings: boolean; setDay: (d: string) => void; onReset: (dayChanged: boolean) => void }) {
   const { day, today, inSettings, setDay, onReset } = opts;
   const prevToday = useRef<string | null>(null);
   const lastInteraction = useRef(Date.now());
@@ -19,11 +30,11 @@ export function useDayRollover(opts: { day: string | null; today: string | null;
   // Day change at 4 AM.
   useEffect(() => {
     if (!today) return;
-    if (day && prevToday.current && prevToday.current !== today) {
+    if (day && prevToday.current && prevToday.current !== today && !unsavedWork) {
       const next = rolloverDay(day, prevToday.current, today);
       if (next !== day) {
         setDay(next);
-        onReset();
+        onReset(true);
       }
     }
     prevToday.current = today;
@@ -37,12 +48,13 @@ export function useDayRollover(opts: { day: string | null; today: string | null;
     };
     const check = () => {
       const o = latest.current;
-      if (!o.today || o.inSettings) return;
+      if (!o.today || o.inSettings || unsavedWork) return;
       const now = Date.now();
       if (!shouldIdleReset(now, lastInteraction.current, lastReset.current)) return;
       lastReset.current = now;
-      if (o.day !== o.today) o.setDay(o.today);
-      o.onReset();
+      const dayChanged = o.day !== o.today;
+      if (dayChanged) o.setDay(o.today);
+      o.onReset(dayChanged);
     };
     const onVisible = () => {
       if (document.visibilityState === "visible") check();
@@ -65,12 +77,13 @@ export function useDayRollover(opts: { day: string | null; today: string | null;
 
   // A reset that waited for Settings to close.
   useEffect(() => {
-    if (inSettings) return;
+    if (inSettings || unsavedWork) return;
     const now = Date.now();
     if (today && shouldIdleReset(now, lastInteraction.current, lastReset.current)) {
       lastReset.current = now;
-      if (day !== today) setDay(today);
-      onReset();
+      const dayChanged = day !== today;
+      if (dayChanged) setDay(today);
+      onReset(dayChanged);
     }
   }, [inSettings]);
 }

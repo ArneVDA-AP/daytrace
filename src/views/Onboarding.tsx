@@ -2,18 +2,24 @@ import { useEffect, useRef, useState } from "react";
 import { api, type Pipeline, type ProviderKind, type Settings, type SettingsDto } from "../api";
 import { platformApi, withLiveRecordingState } from "./platform-api";
 import { PrivateAppPicker, addPrivateApp } from "../settings/PrivateAppPicker";
+import { CliPathField } from "../settings/CliPathField";
+import { cliSignIn, PROVIDERS, providerInfo } from "../settings/providerInfo";
 import "./platform.css";
 
 // First-run setup, after Dayflow's onboarding (Views/Onboarding/OnboardingFlow.swift): how it
 // works, the model provider with a connection test, privacy, then start. Skippable; Settings can
 // open it again.
 
-const PROVIDERS: { id: ProviderKind; label: string; hint: string; needsKey: boolean }[] = [
-  { id: "anthropic", label: "Claude (Anthropic API)", hint: "Best cards. Screenshots are sent to Anthropic under your API key.", needsKey: true },
-  { id: "ollama", label: "Ollama (on this PC)", hint: "Free and private: nothing leaves your PC. Needs a vision model such as qwen3-vl:4b.", needsKey: false },
-  { id: "lm_studio", label: "LM Studio (on this PC)", hint: "Free and private, like Ollama.", needsKey: false },
-  { id: "openai_compatible", label: "Other OpenAI-compatible API", hint: "OpenAI, OpenRouter, Gemini’s OpenAI endpoint and similar.", needsKey: true },
-];
+// The providers are the shared list Settings uses (settings/providerInfo.ts); these are the
+// setup's one-line explanations.
+const HINTS: Record<ProviderKind, string> = {
+  anthropic: "Best cards. Screenshots are sent to Anthropic under your API key.",
+  claude_cli: "Uses your Claude subscription through Claude Code on this PC. Screenshots are sent to Anthropic under that account.",
+  ollama: "Free and private: nothing leaves your PC. Needs a vision model such as qwen3-vl:4b.",
+  lm_studio: "Free and private, like Ollama.",
+  openai_compatible: "OpenAI, OpenRouter, Gemini’s OpenAI endpoint and similar.",
+  codex_cli: "Uses your ChatGPT account through the Codex CLI on this PC. Screenshots are sent to OpenAI under that account.",
+};
 
 const STEPS = ["How it works", "Model", "Privacy", "Start"] as const;
 
@@ -26,20 +32,31 @@ export function Onboarding({ dto, firstRun, onDone }: { dto: SettingsDto; firstR
   const [test, setTest] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [damagedCopy, setDamagedCopy] = useState<string | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
     heading.current?.focus();
   }, [step]);
 
+  // An unreadable settings file brings the setup back; say so.
+  useEffect(() => {
+    platformApi
+      .info()
+      .then((i) => setDamagedCopy(i.damagedSettingsCopy))
+      .catch(() => {});
+  }, []);
+
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => setS((p) => ({ ...p, [k]: v }));
-  const provider = PROVIDERS.find((p) => p.id === s.provider) ?? PROVIDERS[0];
+  const provider = providerInfo(s.provider);
   const local = s.provider === "ollama" || s.provider === "lm_studio";
 
   async function changeProvider(id: ProviderKind) {
     const [baseUrl, model] = await api.providerDefaults(id);
     const pipeline: Pipeline = id === "ollama" || id === "lm_studio" ? "local" : "cloud";
     setS((p) => ({ ...p, provider: id, baseUrl, model, pipeline }));
+    // A key typed for the previous provider is not saved under the new one.
+    setApiKey("");
     setModels([]);
     setTest(null);
   }
@@ -102,7 +119,7 @@ export function Onboarding({ dto, firstRun, onDone }: { dto: SettingsDto; firstR
     }
   }
 
-  const keyMissing = provider.needsKey && !hasKey && !apiKey.trim();
+  const keyMissing = provider.key === "required" && !hasKey && !apiKey.trim();
 
   return (
     <div className="onboarding">
@@ -118,6 +135,12 @@ export function Onboarding({ dto, firstRun, onDone }: { dto: SettingsDto; firstR
         {step === 0 && (
           <>
             <h1 tabIndex={-1} ref={heading}>{firstRun ? "Welcome to Daytrace" : "How Daytrace works"}</h1>
+            {damagedCopy && (
+              <p className="bad" role="alert">
+                Daytrace could not read its settings file, so the setup starts again with the default settings. Recording waits until you finish it. The
+                unreadable file was kept as {damagedCopy}.
+              </p>
+            )}
             <p className="lead">Daytrace builds a timeline of your day from screenshots, so you can see where the time went without tracking it yourself.</p>
             <div className="onboarding-cards">
               <article>
@@ -137,7 +160,7 @@ export function Onboarding({ dto, firstRun, onDone }: { dto: SettingsDto; firstR
               <h2 id="leaves-h">What leaves your PC</h2>
               <ul>
                 <li>Every 15 minutes, a sample of that period’s screenshots goes to the model provider you pick in the next step, to write the cards.</li>
-                <li>With Claude or another cloud API, those screenshots are sent to that company under your API key.</li>
+                <li>With Claude, ChatGPT or another cloud service, those screenshots are sent to that company under your API key or account.</li>
                 <li>With Ollama or LM Studio, the model runs on this PC and nothing is sent.</li>
                 <li>Apps on your private list are never captured.</li>
                 <li>Once a day Daytrace asks GitHub whether a new version exists. You can turn that off in Settings.</li>
@@ -157,16 +180,23 @@ export function Onboarding({ dto, firstRun, onDone }: { dto: SettingsDto; firstR
                 {PROVIDERS.map((p) => (
                   <label key={p.id}>
                     <input type="radio" name="provider" checked={s.provider === p.id} onChange={() => changeProvider(p.id)} />
-                    <b>{p.label}</b> {p.hint}
+                    <b>{p.label}</b> {HINTS[p.id]}
                   </label>
                 ))}
               </div>
             </fieldset>
-            {s.provider !== "anthropic" && (
-              <label className="field">
-                <span>Server address</span>
-                <input value={s.baseUrl} onChange={(e) => set("baseUrl", e.target.value)} spellCheck={false} />
-              </label>
+            {provider.cli ? (
+              <>
+                <CliPathField id="onboarding-cli-path" provider={s.provider} path={s.baseUrl} onChange={(v) => set("baseUrl", v)} />
+                <p className="hint">Sign in once: {cliSignIn(s.provider)}. Leave the path empty unless Daytrace can’t find it.</p>
+              </>
+            ) : (
+              s.provider !== "anthropic" && (
+                <label className="field">
+                  <span>Server address</span>
+                  <input value={s.baseUrl} onChange={(e) => set("baseUrl", e.target.value)} spellCheck={false} />
+                </label>
+              )
             )}
             <label className="field">
               <span>Model</span>
@@ -174,13 +204,13 @@ export function Onboarding({ dto, firstRun, onDone }: { dto: SettingsDto; firstR
                 <input value={s.model} list="onboarding-models" onChange={(e) => set("model", e.target.value)} spellCheck={false} />
                 <datalist id="onboarding-models">{models.map((m) => <option key={m} value={m} />)}</datalist>
                 <button className="ghost" type="button" onClick={loadModels} disabled={busy !== null}>
-                  {busy === "models" ? "Loading…" : "Show available models"}
+                  {busy === "models" ? "Loading…" : provider.cli ? "Show suggested models" : "Show available models"}
                 </button>
               </div>
             </label>
-            {(provider.needsKey || s.provider === "lm_studio") && (
+            {provider.key !== "none" && (
               <label className="field">
-                <span>API key{s.provider === "lm_studio" ? " (if set)" : ""}</span>
+                <span>API key{provider.key === "optional" ? " (if set)" : ""}</span>
                 <input
                   type="password"
                   value={apiKey}

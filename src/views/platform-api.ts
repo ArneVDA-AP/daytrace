@@ -9,8 +9,11 @@ export interface UpdateStatus {
   releaseUrl: string | null;
   available: boolean;
   noReleases: boolean;
+  /** The last check that reached GitHub. */
   checkedAt: number | null;
   error: string | null;
+  /** The last check, also a failed one. */
+  attemptedAt: number | null;
 }
 
 export interface PauseOption {
@@ -24,6 +27,8 @@ export interface PlatformInfo {
   pauseOptions: PauseOption[];
   minuteOptions: number[];
   update: UpdateStatus;
+  /** Set when settings.json could not be read at startup: where that file was kept. */
+  damagedSettingsCopy: string | null;
 }
 
 export interface AppCandidate {

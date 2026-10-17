@@ -19,8 +19,9 @@ const NOTIFICATIONS: { key: keyof NotificationPrefs; label: string }[] = [
 ];
 
 function updateText(u: UpdateStatus): { text: string; tone: "ok" | "bad" | "muted" } {
+  // A failed check keeps the release found before.
+  if (u.available && u.latestVersion) return { text: `Version ${u.latestVersion} available${u.error ? `. The last check failed: ${u.error}` : ""}`, tone: "ok" };
   if (u.error) return { text: u.error, tone: "bad" };
-  if (u.available && u.latestVersion) return { text: `Version ${u.latestVersion} available`, tone: "ok" };
   if (u.noReleases) return { text: "No release has been published yet.", tone: "muted" };
   if (u.checkedAt) return { text: "Daytrace is up to date.", tone: "muted" };
   return { text: "Not checked yet.", tone: "muted" };

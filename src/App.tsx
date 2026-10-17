@@ -74,7 +74,8 @@ export default function App() {
     return () => window.removeEventListener(OPEN_ONBOARDING_EVENT, open);
   }, []);
   useAppearance(settings?.settings.appearance);
-  useDayRollover({ day, today: status?.today ?? null, inSettings: view === "settings", setDay, onReset: () => setSelected(null) });
+  // On the same day the selected card stays; on another day the newest card is selected.
+  useDayRollover({ day, today: status?.today ?? null, inSettings: view === "settings", setDay, onReset: (dayChanged) => dayChanged && setSelected(null) });
   useNotificationNavigation((target) => {
     if (target === "daily" && status) setDay(status.today);
     if (target === "daily" || target === "settings" || target === "timeline") setView(target);

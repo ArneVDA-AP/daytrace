@@ -138,8 +138,9 @@ export const api = {
   analyzeNow: () => invoke<void>("analyze_now"),
   listModels: (provider: ProviderKind, baseUrl: string, apiKey?: string) =>
     invoke<string[]>("list_models", { provider, baseUrl, apiKey: apiKey || null }),
-  testProvider: (provider: ProviderKind, baseUrl: string, model: string, apiKey?: string) =>
-    invoke<string>("test_provider", { provider, baseUrl, model, apiKey: apiKey || null }),
+  /** `fallback`: test with the fallback provider's stored key. */
+  testProvider: (provider: ProviderKind, baseUrl: string, model: string, apiKey?: string, fallback = false) =>
+    invoke<string>("test_provider", { provider, baseUrl, model, apiKey: apiKey || null, fallback }),
   exportMarkdown: (fromDay: string, toDay: string, path: string) => invoke<number>("export_markdown", { fromDay, toDay, path }),
   openDataDir: () => invoke<void>("open_data_dir"),
   // provider settings

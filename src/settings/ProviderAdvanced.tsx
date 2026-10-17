@@ -72,7 +72,7 @@ function FallbackProvider({ s, set }: SectionProps) {
     setBusy("test");
     setMessage(null);
     try {
-      const out = await api.testProvider(kind, s.fallbackBaseUrl, s.fallbackModel, key || undefined);
+      const out = await api.testProvider(kind, s.fallbackBaseUrl, s.fallbackModel, key || undefined, true);
       setMessage({ ok: true, text: `The fallback model answered: ${out}` });
     } catch (e) {
       setMessage({ ok: false, text: String(e) });

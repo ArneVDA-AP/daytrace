@@ -29,6 +29,8 @@ export function SettingsView({ dto, onSaved, onClose }: { dto: SettingsDto; onSa
     // The CLIs write cards in one step; when that fails they fall back to the Detailed mode.
     const pipeline: Pipeline = id === "ollama" || id === "lm_studio" ? "local" : "cloud";
     setS((p) => ({ ...p, provider: id, baseUrl, model, pipeline }));
+    // A key typed for the previous provider is not saved under the new one.
+    setApiKey("");
     setModels([]);
     setTest(null);
     setSaved(false);
@@ -148,7 +150,7 @@ export function SettingsView({ dto, onSaved, onClose }: { dto: SettingsDto; onSa
           {provider.cli ? (
             <p className="hint">
               The CLI reads the screenshots and writes the cards in one step. If that step fails, Daytrace tries again in the Detailed mode with the same
-              CLI, or with the fallback provider below when the CLI is signed out or out of usage.
+              CLI, or with the fallback provider below when the CLI is signed out, out of usage or does not answer within five minutes.
             </p>
           ) : (
             <fieldset className="field">

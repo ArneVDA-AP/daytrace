@@ -12,8 +12,7 @@ import { api, Shot, clock } from "./api";
 
 const SPEEDS = [20, 40, 60];
 const SPEED_KEY = "daytrace.timelapseSpeed";
-/** Frames asked for (all of them for any realistic card) and frames played (an even sample). */
-const FETCH_FRAMES = 5000;
+/** Frames played: an even sample over the whole card, picked by the backend. */
 const MAX_FRAMES = 600;
 const PREFETCH = 8;
 const PARALLEL = 3;
@@ -72,8 +71,8 @@ export function Timelapse({ cardId }: { cardId: number }) {
     setPlaying(false);
     setViewer(null);
     api
-      .getCardScreenshots(cardId, FETCH_FRAMES)
-      .then((s) => live && setFrames(sample(s, MAX_FRAMES)))
+      .getCardScreenshots(cardId, MAX_FRAMES)
+      .then((s) => live && setFrames(s))
       .catch(() => live && setFrames([]));
     return () => {
       live = false;

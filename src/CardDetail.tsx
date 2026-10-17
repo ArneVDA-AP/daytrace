@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Card, Category, clock, formatDuration } from "./api";
 import { Timelapse } from "./Timelapse";
 import { BatchProgress, DayExtras, Feedback, RetryItem, ReviewRating, errorText, retryLine, teApi } from "./timeline-extras-api";
+import { setUnsavedWork } from "./views/platform-hooks";
 import "./timeline-extras.css";
 
 const RATINGS: { id: ReviewRating; label: string }[] = [
@@ -51,6 +52,13 @@ export function CardDetail({
 
   const feedback: Feedback | undefined = extras?.feedback.find((f) => f.cardId === card?.id);
   useEffect(() => setNote(feedback?.note ?? ""), [card?.id, feedback?.note]);
+
+  // An open edit or an unsaved note holds off the idle reset and the 4 AM rollover.
+  const unsaved = mode === "edit" || (!!feedback && note.trim() !== feedback.note.trim());
+  useEffect(() => {
+    setUnsavedWork(unsaved);
+    return () => setUnsavedWork(false);
+  }, [unsaved]);
 
   // Progress of "Reprocess this card" (the card is replaced when it finishes).
   useEffect(() => {
