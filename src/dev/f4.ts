@@ -72,6 +72,5 @@ export function applyF4Mock(base: Record<string, (a: Args) => unknown>, ctx: { q
       if (v.has("debugfail")) throw "database is locked";
       return DEBUG;
     },
-    platform_open_link: () => null,
   });
 }

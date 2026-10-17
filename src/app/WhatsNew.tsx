@@ -1,8 +1,16 @@
 import * as React from "react";
 import { ExternalLink } from "lucide-react";
+import { shellApi } from "@/app/shell-api";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { toast } from "@/components/ui/toast";
+import { errorText } from "@/lib/utils";
 import { platformApi, type WhatsNew as Notes } from "@/views/platform-api";
+
+/** Links in the notes go through the one link opener, which allows Daytrace's own pages and a few help sites. */
+function openLink(url: string) {
+  shellApi.openUrl(url).catch((e) => toast("Couldn’t open the link", { description: errorText(e), tone: "error" }));
+}
 
 /**
  * "What's new" once after an update (Dayflow's WhatsNewView): the notes of the running version,
@@ -26,7 +34,7 @@ export function WhatsNew() {
         if (!alive) return;
         const { nodes } = renderMarkdown(info.notes, {
           cardChip: () => null,
-          onExternalLink: (url) => void platformApi.openLink(url).catch(() => {}),
+          onExternalLink: openLink,
         });
         setNotes({ info, nodes });
         setOpen(true);
@@ -67,7 +75,7 @@ export function WhatsNew() {
         </section>
         <DialogFooter>
           {info.releaseUrl && (
-            <Button variant="outline" onClick={() => void platformApi.openLink(info.releaseUrl!).catch(() => {})}>
+            <Button variant="outline" onClick={() => openLink(info.releaseUrl!)}>
               <ExternalLink aria-hidden /> Open the release page
             </Button>
           )}

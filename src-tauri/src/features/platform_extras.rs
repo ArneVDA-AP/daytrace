@@ -901,17 +901,6 @@ pub async fn platform_debug_info(state: S<'_>) -> CmdResult<String> {
     .map_err(err)
 }
 
-/// Opens a web link from the release notes in the browser.
-#[tauri::command]
-pub fn platform_open_link(app: AppHandle, url: String) -> CmdResult<()> {
-    use tauri_plugin_opener::OpenerExt;
-    let parsed = reqwest::Url::parse(url.trim()).map_err(|_| "That link is not a valid web address.".to_string())?;
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err("Only web links can be opened.".into());
-    }
-    app.opener().open_url(parsed.as_str(), None::<&str>).map_err(err)
-}
-
 /// Opens the screenshots folder (tray menu).
 pub fn open_screenshots(app: &AppHandle) {
     use tauri_plugin_opener::OpenerExt;
