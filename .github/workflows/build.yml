@@ -27,8 +27,11 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Node tests of the UI's pure modules (src/**/*.test.mjs).
+      - run: npm test
       - run: npm run build
-      - run: cargo test --lib
+      # The library and both binaries (the app and daytrace-mcp).
+      - run: cargo test --lib --bins
         working-directory: src-tauri
 
   windows:

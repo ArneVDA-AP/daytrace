@@ -1,7 +1,7 @@
 {
   "name": "daytrace",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,6 +9,7 @@
     "check:dist": "node scripts/check-dist.mjs",
     "screenshots": "python3 scripts/screenshots.py",
     "contrast": "node scripts/contrast.mjs",
+    "test": "node --experimental-strip-types --test \"src/**/*.test.mjs\"",
     "preview": "vite preview",
     "tauri": "tauri"
   },
