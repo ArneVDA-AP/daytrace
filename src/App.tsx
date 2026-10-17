@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { api, Card, Category, SettingsDto, Status, shiftDay, formatDayTitle } from "./api";
+import { api, Card, Category, SettingsDto, Status, shiftDay } from "./api";
 import { Timeline } from "./Timeline";
 import { CardDetail } from "./CardDetail";
 import { DayRibbon } from "./DayRibbon";
+import { DayCalendar } from "./DayCalendar";
 import { SettingsView } from "./SettingsView";
 import { ExportPanel } from "./ExportPanel";
 import { StatusPill } from "./StatusPill";
@@ -19,7 +20,7 @@ const TABS: { id: View; label: string }[] = [
   { id: "timeline", label: "Timeline" },
   { id: "daily", label: "Daily" },
   { id: "weekly", label: "Weekly" },
-  { id: "journal", label: "Journal" },
+  { id: "journal", label: "Goals" },
   { id: "chat", label: "Chat" },
 ];
 
@@ -98,7 +99,7 @@ export default function App() {
       <header className="topbar">
         <div className="daynav">
           <button className="icon" aria-label="Previous day" onClick={() => setDay(shiftDay(day, -1))}>‹</button>
-          <h1>{formatDayTitle(day)}</h1>
+          <DayCalendar day={day} today={status.today} onPick={setDay} />
           <button className="icon" aria-label="Next day" disabled={isToday} onClick={() => setDay(shiftDay(day, 1))}>›</button>
           {!isToday && <button className="link" onClick={() => setDay(status.today)}>Today</button>}
         </div>
@@ -169,7 +170,10 @@ export default function App() {
           {exportOpen && <ExportPanel day={day} onClose={() => setExportOpen(false)} />}
           <main className="split">
             <Timeline
+              day={day}
               cards={cards}
+              categories={categories}
+              onChanged={loadCards}
               colorFor={colorFor}
               selected={selected}
               onSelect={setSelected}
@@ -180,6 +184,8 @@ export default function App() {
             <CardDetail
               card={selectedCard}
               color={selectedCard ? colorFor(selectedCard.category) : ""}
+              categories={categories}
+              onChanged={loadCards}
               onRetry={async (id) => {
                 await api.retryCard(id);
                 loadStatus();

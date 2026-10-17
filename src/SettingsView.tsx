@@ -79,6 +79,15 @@ export function SettingsView({ dto, onSaved, onClose }: { dto: SettingsDto; onSa
     set("categories", s.categories.map((c, j) => (j === i ? { ...c, ...patch } : c)));
   }
 
+  // category reorder (timeline-extras)
+  function moveCat(i: number, d: -1 | 1) {
+    const j = i + d;
+    if (j < 0 || j >= s.categories.length) return;
+    const next = [...s.categories];
+    [next[i], next[j]] = [next[j], next[i]];
+    set("categories", next);
+  }
+
   return (
     <div className="settings">
       <div className="settings-inner">
@@ -210,7 +219,7 @@ export function SettingsView({ dto, onSaved, onClose }: { dto: SettingsDto; onSa
 
         <section>
           <h2>Categories</h2>
-          <p className="hint">The model picks one category for each card, using these descriptions.</p>
+          <p className="hint">The model picks one category for each card, using these descriptions. The arrows set the order used by the timeline filters and charts.</p>
           <div className="cats">
             {s.categories.map((c, i) => (
               <div className="cat" key={i}>
@@ -223,7 +232,11 @@ export function SettingsView({ dto, onSaved, onClose }: { dto: SettingsDto; onSa
                   aria-label="Description"
                 />
                 {!c.isIdle && (
-                  <button className="link" onClick={() => set("categories", s.categories.filter((_, j) => j !== i))}>Remove</button>
+                  <span className="row">
+                    <button className="icon" aria-label={`Move ${c.name} up`} disabled={i === 0} onClick={() => moveCat(i, -1)}>↑</button>
+                    <button className="icon" aria-label={`Move ${c.name} down`} disabled={i === s.categories.length - 1} onClick={() => moveCat(i, 1)}>↓</button>
+                    <button className="link" onClick={() => set("categories", s.categories.filter((_, j) => j !== i))}>Remove</button>
+                  </span>
                 )}
               </div>
             ))}
