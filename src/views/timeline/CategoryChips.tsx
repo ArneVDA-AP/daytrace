@@ -1,8 +1,8 @@
 import * as React from "react";
-import { api, type Category } from "@/api";
+import type { Category } from "@/api";
+import { savePatch } from "@/app/settings-writes";
 import { useAppState } from "@/app/state";
 import { cn, errorText } from "@/lib/utils";
-import { withLiveRecordingState } from "@/views/platform-api";
 import { keyOf, type Lane } from "./model";
 
 /*
@@ -59,10 +59,9 @@ export function CategoryChips({
     setError(null);
     setOrder(next.filter((c) => !c.isIdle).map((c) => keyOf(c.name)));
     try {
-      // Start from the backend's copy so a pause made from the tray meanwhile is kept.
-      const fresh = (await api.getSettings()).settings;
-      const freshNext = reorder(fresh.categories, key, targetKey) ?? fresh.categories;
-      const dto = await api.saveSettings(await withLiveRecordingState({ ...fresh, categories: freshNext }));
+      // Through the app's one settings write queue (app/settings-writes.ts): a patch on the
+      // backend's current copy, so a pause from the tray or a change by an AI tool is kept.
+      const dto = await savePatch((cur) => ({ categories: reorder(cur.categories, key, targetKey) ?? cur.categories }));
       app.setSettings(dto);
     } catch (e) {
       setError(`Couldn’t save the new order: ${errorText(e)}`);
