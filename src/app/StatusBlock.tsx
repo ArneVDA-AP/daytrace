@@ -158,7 +158,7 @@ function StatusPanel({ analysis, className }: { analysis: AnalysisView; classNam
               Resume
             </Button>
           ) : (
-            <DropdownMenu>
+            <DropdownMenu modal={false}>
               <DropdownMenuTrigger asChild>
                 <Button ref={actionRef} size="sm" variant="outline" className="-mr-1 gap-1 pr-1.5" disabled={busy} aria-label="Pause recording for…">
                   Pause

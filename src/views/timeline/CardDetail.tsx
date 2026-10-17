@@ -315,7 +315,8 @@ export function CardDetail({
           <div className="ml-auto flex items-center gap-0.5">
             <NavButton label="Previous card" keys="K" onClick={onPrev} icon={<ChevronUp aria-hidden="true" />} />
             <NavButton label="Next card" keys="J" onClick={onNext} icon={<ChevronDown aria-hidden="true" />} />
-            <DropdownMenu>
+            {/* Non-modal: the rest of the window stays readable for assistive tech while it is open. */}
+            <DropdownMenu modal={false}>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <DropdownMenuTrigger asChild>

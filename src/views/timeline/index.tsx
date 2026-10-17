@@ -283,7 +283,8 @@ export default function TimelineSection() {
                     <div className="min-w-0 flex-1">
                       <CategoryChips lanes={lanes} colorFor={app.colorFor} muted={muted} onToggle={toggleMute} />
                     </div>
-                    <DropdownMenu>
+                    {/* Non-modal: the rest of the window stays readable for assistive tech while it is open. */}
+                    <DropdownMenu modal={false}>
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <DropdownMenuTrigger asChild>
