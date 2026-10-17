@@ -7,6 +7,7 @@ pub mod chat;
 pub mod insights;
 pub mod journal;
 pub mod platform_extras;
+pub mod shell;
 pub mod timeline_extras;
 pub mod storage;
 

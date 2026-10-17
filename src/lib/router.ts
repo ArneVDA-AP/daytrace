@@ -85,12 +85,21 @@ export function setParams(patch: Params, opts: { replace?: boolean; section?: Se
   navigate(r.section, next, { replace: opts.replace ?? true });
 }
 
-const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const DAY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** True for a real calendar date written YYYY-MM-DD (2026-02-30 is not one). */
+export function isDayKey(d: string): boolean {
+  const m = DAY_RE.exec(d);
+  if (!m) return false;
+  const [y, mo, da] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const dt = new Date(y, mo - 1, da);
+  return dt.getFullYear() === y && dt.getMonth() === mo - 1 && dt.getDate() === da;
+}
 
 /** A valid `day` param, or null. */
 export function dayParam(params: URLSearchParams): string | null {
   const d = params.get("day");
-  return d && DAY_RE.test(d) ? d : null;
+  return d && isDayKey(d) ? d : null;
 }
 
 /** A numeric param (e.g. `card`), or null. */

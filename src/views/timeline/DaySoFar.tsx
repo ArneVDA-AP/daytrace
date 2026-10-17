@@ -9,14 +9,15 @@ import { clock, dayBounds, formatDuration } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import type { Card, DayExtras, DayStatsLite, GoalsLite } from "./api";
 import { laneTotals, type Lane } from "./model";
-import { Targets } from "./Targets";
 
 /*
  * "Your day so far" (Dayflow Views/Components/DaySummaryView.swift and its sections), shown in the
  * detail pane while no card is selected: where the time went per category (a 100 % bar plus the
- * numbers), time captured, focus total and the longest focus block, distractions so far, today's
- * targets and the review summary. Category times come from the cards (overlaps counted once, the
- * same numbers as the trace's lane totals); focus and distraction from insights_day.
+ * numbers), recorded time, focus total and the longest focus block, distractions so far, and the
+ * review summary. The day's targets are shown once, above the card list (Targets.tsx), with a
+ * link to Goals here. Category times come from the cards (overlaps counted once, the same numbers
+ * as the trace's lane totals); focus and distraction from insights_day. Every percentage of the
+ * day is "of active time": recorded minus idle (the glossary in src/design/README.md).
  */
 
 function Stat({ label, value, sub }: { label: string; value: React.ReactNode; sub?: React.ReactNode }) {
@@ -41,6 +42,7 @@ export function DaySoFar({
   goals,
   extras,
   onSelect,
+  onRate,
 }: {
   day: string;
   isToday: boolean;
@@ -53,6 +55,8 @@ export function DaySoFar({
   goals: GoalsLite | null;
   extras: DayExtras | null;
   onSelect: (id: number) => void;
+  /** Jump to the next card to rate (with its rating focused). */
+  onRate?: () => void;
 }) {
   const [from, to] = dayBounds(day);
   const totals = React.useMemo(() => laneTotals(cards, lanes, from, to), [cards, lanes, from, to]);
@@ -62,6 +66,8 @@ export function DaySoFar({
   const reviewed = review ? review.focusedSecs + review.neutralSecs + review.distractedSecs : 0;
   const longest = stats?.longestFocus ?? null;
   const longestCard = longest ? cards.find((c) => c.startTs <= longest.startTs && c.endTs > longest.startTs) : undefined;
+  const active = stats ? Math.max(0, stats.capturedSecs - stats.idleSecs) : 0;
+  const distractedPct = stats && active > 0 ? Math.round((stats.distractedSecs / active) * 100) : 0;
 
   return (
     <section aria-labelledby="dsf-title" className="mx-auto flex w-full max-w-[52rem] flex-col gap-6 px-6 pt-5 pb-10 max-split:px-4">
@@ -93,23 +99,23 @@ export function DaySoFar({
       )}
 
       <dl className="grid grid-cols-2 gap-2 xwide:grid-cols-4">
-        <Stat label="Time captured" value={formatDuration(captured)} sub={`${cards.length} ${cards.length === 1 ? "card" : "cards"}`} />
+        <Stat label="Recorded" value={formatDuration(captured)} sub={`${cards.length} ${cards.length === 1 ? "card" : "cards"}`} />
         {stats ? (
           <>
             <Stat label="Focus" value={formatDuration(stats.focusSecs)} sub={`${stats.focusBlocks.length} ${stats.focusBlocks.length === 1 ? "block" : "blocks"}`} />
             <Stat
-              label="Longest focus"
-              value={longest ? formatDuration(longest.secs) : "–"}
+              label="Longest focus block"
+              value={formatDuration(longest ? longest.secs : 0)}
               sub={longest ? `${clock(longest.startTs)} – ${clock(longest.endTs)}` : "No focus block yet"}
             />
             <Stat
               label="Distracted"
               value={formatDuration(stats.distractedSecs)}
-              sub={`${Math.round(stats.distractedRatio * 100)}% of captured · ${stats.interruptions} ${stats.interruptions === 1 ? "interruption" : "interruptions"}`}
+              sub={`${distractedPct}% of active time · ${stats.interruptions} ${stats.interruptions === 1 ? "interruption" : "interruptions"}`}
             />
           </>
         ) : (
-          ["Focus", "Longest focus", "Distracted"].map((label) => (
+          ["Focus", "Longest focus block", "Distracted"].map((label) => (
             <Stat key={label} label={label} value={<Skeleton className="mt-1 h-6 w-24" />} sub={<Skeleton className="mt-1 h-3 w-16" />} />
           ))
         )}
@@ -166,18 +172,13 @@ export function DaySoFar({
         )}
       </section>
 
-      {goals && !goals.plan.isSkipped && (
-        <section aria-labelledby="dsf-targets" className="flex flex-col gap-2.5">
-          <div className="flex items-baseline justify-between gap-3">
-            <h3 id="dsf-targets" className="text-body font-semibold">
-              {isToday ? "Today’s targets" : "Targets"}
-            </h3>
-            <a href={href("journal", { day })} className="text-meta text-muted-foreground underline underline-offset-2 hover:text-foreground">
-              Change in Goals
-            </a>
-          </div>
-          <Targets goals={goals} day={day} />
-        </section>
+      {goals && !goals.plan.isSkipped && !goals.prompt && (
+        <p className="text-meta text-muted-foreground">
+          {isToday ? "Today’s targets" : "The targets of this day"} are above the cards.{" "}
+          <a href={href("journal", { day })} className="text-foreground underline underline-offset-2">
+            Change them in Goals
+          </a>
+        </p>
       )}
 
       {review && (
@@ -206,8 +207,8 @@ export function DaySoFar({
           )}
           {review.firstUnreviewed !== null && review.unreviewedCards > 0 && (
             <div>
-              <Button variant="outline" size="sm" onClick={() => onSelect(review.firstUnreviewed!)}>
-                Review the next card
+              <Button variant="outline" size="sm" onClick={() => (onRate ? onRate() : onSelect(review.firstUnreviewed!))}>
+                Rate the next card
               </Button>
             </div>
           )}
@@ -216,7 +217,7 @@ export function DaySoFar({
 
       {longestCard && (
         <p className="text-meta text-muted-foreground">
-          Longest focus started with{" "}
+          The longest focus block started with{" "}
           <button type="button" className="font-medium text-foreground underline underline-offset-2" onClick={() => onSelect(longestCard.id)}>
             {longestCard.title}
           </button>

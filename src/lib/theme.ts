@@ -7,7 +7,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
  * WebView2's prefers-color-scheme already matches before any script runs: no flash.
  *
  * applyAppearance() mirrors the choice onto <html data-theme> (tokens.css reads it) and onto the
- * native window: title bar theme (setTheme) and the window/webview background colour, which shows
+ * native window: title bar theme (setTheme) and the window/webview background color, which shows
  * while the window resizes or before the page paints.
  */
 

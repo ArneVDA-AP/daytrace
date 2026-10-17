@@ -209,9 +209,9 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* Windows Contrast themes (designer-fluent): data marks keep their own colour and get a system
-     outline, so a category segment never disappears into the forced Canvas colour. Marks carry
-     data-mark or set their colour inline (style="background…"); default category tokens become
+  /* Windows Contrast themes (designer-fluent): data marks keep their own color and get a system
+     outline, so a category segment never disappears into the forced Canvas color. Marks carry
+     data-mark or set their color inline (style="background…"); default category tokens become
      CanvasText there (tokens.css), so labels and texture carry identity. */
   @media (forced-colors: active) {
     [data-mark],
@@ -224,11 +224,43 @@
     [data-slot="button"][data-variant="destructive"] {
       border: 1px solid ButtonText;
     }
+    /* Hatches are background images, which the system drops: keep them, on the system canvas
+       (their colors are system colors here, tokens.css). */
+    .hatch-gap,
+    .hatch-idle,
+    .stripes-failed {
+      forced-color-adjust: none;
+      background-color: Canvas !important;
+    }
+    /* The selected page in a list of links (Settings sections; the rail draws its own marker):
+       a Highlight bar on the left, like Windows Settings in a Contrast theme. */
+    a[aria-current="page"]:not([data-rail-link]) {
+      position: relative;
+    }
+    a[aria-current="page"]:not([data-rail-link])::before {
+      content: "";
+      position: absolute;
+      top: 4px;
+      bottom: 4px;
+      left: 0;
+      width: 4px;
+      border-radius: 2px;
+      background: Highlight;
+      forced-color-adjust: none;
+    }
+    /* The chosen option of a small set of buttons (data-choice: the theme switch, the export
+       ranges) in Highlight, like the pressed Toggle. */
+    [data-choice][aria-checked="true"],
+    [data-choice][aria-pressed="true"] {
+      forced-color-adjust: none;
+      background-color: Highlight !important;
+      color: HighlightText !important;
+    }
   }
 }
 
 @layer components {
-  /* Diagonal hatches. Texture, not colour, carries meaning: "idle" (thin) and "not recorded" (wide). */
+  /* Diagonal hatches. Texture, not color, carries meaning: "idle" (thin) and "not recorded" (wide). */
   .hatch-idle {
     background-image: repeating-linear-gradient(135deg, var(--cat-idle) 0 1.5px, transparent 1.5px 5px);
   }

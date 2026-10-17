@@ -2,7 +2,7 @@ import { clsx, type ClassValue } from "clsx";
 import { extendTailwindMerge } from "tailwind-merge";
 
 // Daytrace adds named type sizes (text-caption, text-meta, ...). Tell tailwind-merge they are font
-// sizes; otherwise it treats them as colours and drops text-muted-foreground next to them.
+// sizes; otherwise it treats them as colors and drops text-muted-foreground next to them.
 const twMerge = extendTailwindMerge({
   extend: {
     classGroups: {

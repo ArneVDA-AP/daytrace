@@ -25,7 +25,8 @@ import {
  * The day trace (designer-bespoke's hypnogram on shadcn's strip): the logical day, 4 AM to 4 AM,
  * as one lane per category with the day's total next to each lane. Bars are cards at their real
  * time; thin risers join cards that follow each other; idle is a hatch, a failed card red stripes
- * across all lanes, stretches between cards without recording a light hatch; night hours are
+ * across all lanes, stretches between cards without recording a light hatch ("Not recorded");
+ * night hours are
  * shaded and today has a now line. "Fit to recorded hours" (the design review's fix) cuts out
  * stretches of an hour or more without recording and marks the cut on the axis, so a night-owl or
  * evening-only day fills the width.
@@ -53,6 +54,7 @@ export function DayTrace({
   muted,
   fit,
   onFitChange,
+  error = false,
 }: {
   day: string;
   /** null while loading: the frame (lanes, axis) is drawn so nothing moves when cards arrive. */
@@ -66,6 +68,8 @@ export function DayTrace({
   muted: Set<string>;
   fit: boolean;
   onFitChange: (fit: boolean) => void;
+  /** The day could not be loaded: totals read "–" instead of waiting. */
+  error?: boolean;
 }) {
   const [from, to] = dayBounds(day);
   const list = React.useMemo(() => (cards ?? []).filter((c) => c.endTs > from && c.startTs < to).sort((a, b) => a.startTs - b.startTs), [cards, from, to]);
@@ -161,8 +165,7 @@ export function DayTrace({
               />
               <span className={cn("min-w-0 truncate", muted.has(l.key) ? "text-subtle-foreground line-through" : "text-foreground")}>{l.name}</span>
               <span className="ml-auto shrink-0 text-muted-foreground tnum">
-                {cards === null ? "" : totals.get(l.key) ? formatDuration(totals.get(l.key)!) : "–"}
-                <span className="sr-only">{cards !== null && !totals.get(l.key) ? "none" : ""}</span>
+                {cards === null ? (error ? "–" : "") : formatDuration(totals.get(l.key) ?? 0)}
               </span>
             </li>
           ))}
@@ -281,8 +284,9 @@ export function DayTrace({
             })}
             {nowX !== null && nowX !== undefined && (
               <div aria-hidden="true" className="pointer-events-none absolute -top-1 z-20 w-0" style={{ left: nowX, height: plotH + 7 }}>
-                <span className="absolute inset-y-0 -left-px w-0.5 rounded-full bg-(--trace-now)" />
-                <span className="absolute -bottom-0.5 -left-[3px] size-1.5 rounded-full bg-(--trace-now)" />
+                {/* data-mark keeps the line in Contrast themes (CanvasText there, UX6). */}
+                <span data-mark="" className="absolute inset-y-0 -left-px w-0.5 rounded-full bg-(--trace-now) forced-colors:outline-0" />
+                <span data-mark="" className="absolute -bottom-0.5 -left-[3px] size-1.5 rounded-full bg-(--trace-now) forced-colors:outline-0" />
               </div>
             )}
           </div>
@@ -337,7 +341,7 @@ export function DayTrace({
         {gaps.length > 0 && (
           <span className="inline-flex items-center gap-1.5">
             <span aria-hidden="true" className="hatch-gap inline-block h-2.5 w-3.5 rounded-[2px] border border-border" />
-            Not recording
+            Not recorded
           </span>
         )}
         {failedCount > 0 && (
@@ -358,20 +362,23 @@ export function DayTrace({
         <span className="inline-flex items-center gap-1.5">
           {nowX !== null && nowX !== undefined && now !== null && (
             <>
-              <span aria-hidden="true" className="inline-block h-3 w-0.5 rounded-full bg-(--trace-now)" />
+              <span aria-hidden="true" data-mark="" className="inline-block h-3 w-0.5 rounded-full bg-(--trace-now) forced-colors:outline-0" />
               <span>Now {clock(now)}</span>
               <span aria-hidden="true">·</span>
             </>
           )}
           <span>
-            Recorded <span className="tnum text-foreground">{cards === null ? "…" : formatDuration(recorded)}</span>
+            Recorded <span className="tnum text-foreground">{cards === null ? (error ? "–" : "…") : formatDuration(recorded)}</span>
           </span>
         </span>
-        {/* A view option that is on by default: a switch reads quieter than a pressed button. */}
-        <label className={cn("ml-auto inline-flex items-center gap-2 text-meta text-foreground", list.length === 0 && "opacity-50")}>
-          <Switch checked={fit} onCheckedChange={onFitChange} disabled={list.length === 0} />
-          Fit to recorded hours
-        </label>
+        {/* A view option that is on by default: a switch reads quieter than a pressed button. With
+            no cards there is nothing to fit, so it is not shown (UX23). */}
+        {list.length > 0 && (
+          <label className="ml-auto inline-flex items-center gap-2 text-meta text-foreground">
+            <Switch checked={fit} onCheckedChange={onFitChange} />
+            Fit to recorded hours
+          </label>
+        )}
       </div>
     </section>
   );

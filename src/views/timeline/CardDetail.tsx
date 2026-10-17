@@ -22,6 +22,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/toast";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { canFocus } from "@/components/ui/focus-return";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { href } from "@/lib/router";
 import { clock, formatDuration } from "@/lib/time";
@@ -40,7 +41,30 @@ import { Timelapse } from "./Timelapse";
  * (edited cards are kept by later analysis), reprocess the card, delete with a confirmation,
  * Focused / Neutral / Distracted rating (Dayflow timeline review), thumbs up/down with a note,
  * and the unsaved-work flag that holds off the 4 AM rollover and the idle reset.
+ *
+ * An open edit and an unsaved note are kept per card while you move to other cards and back
+ * (FE3). Focus stays put when a control swaps: Edit gets it back after Save or Esc, the next card
+ * after a delete (UX4). `generatedBy` (gap 6): the model in the details at the end, and a visible
+ * "Written by … (fallback provider)" next to the category when the fallback provider wrote it.
  */
+
+interface Draft {
+  /** The open title/category edit. */
+  edit?: { title: string; category: string; subcategory: string };
+  /** The feedback note as typed, when it differs from the saved one. */
+  note?: string;
+}
+
+// Unsaved work per card id; survives switching cards and sections (the panel remounts per card).
+const drafts = new Map<number, Draft>();
+
+function putDraft(id: number, patch: { edit?: Draft["edit"]; note?: string }) {
+  const next: Draft = { ...drafts.get(id), ...patch };
+  if (next.edit === undefined) delete next.edit;
+  if (next.note === undefined) delete next.note;
+  if (next.edit === undefined && next.note === undefined) drafts.delete(id);
+  else drafts.set(id, next);
+}
 
 const RATINGS: { id: ReviewRating; label: string }[] = [
   { id: "focused", label: "Focused" },
@@ -57,11 +81,14 @@ export function CardDetail({
   colorFor,
   idleKey,
   onChanged,
+  onDeleted,
   onPrev,
   onNext,
   onClose,
   retry,
   now,
+  focusRating = false,
+  onRatingFocused,
 }: {
   card: Card;
   /** The failed-card group this card belongs to (a run when it has more than one card). */
@@ -73,11 +100,16 @@ export function CardDetail({
   idleKey: string | null;
   /** Reload the day's cards after an edit, delete or reprocess. */
   onChanged: () => void;
+  /** The card was deleted: the parent selects the card after it and returns its id (or null). */
+  onDeleted: () => number | null;
   onPrev?: () => void;
   onNext?: () => void;
   onClose: () => void;
   retry: RetryUi;
   now: number;
+  /** Put the focus on the Focused / Neutral / Distracted choice ("N cards to rate"). */
+  focusRating?: boolean;
+  onRatingFocused?: () => void;
 }) {
   const failed = isFailed(card);
   const idle = !failed && isIdleCard(card, idleKey);
@@ -90,35 +122,59 @@ export function CardDetail({
     .map((l) => l.trim())
     .filter(Boolean);
 
-  const [editing, setEditing] = React.useState(false);
-  const [draft, setDraft] = React.useState({ title: "", category: "", subcategory: "" });
+  const saved = drafts.get(card.id);
+  const [editing, setEditing] = React.useState(() => saved?.edit !== undefined);
+  const [draft, setDraft] = React.useState(() => saved?.edit ?? { title: "", category: "", subcategory: "" });
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [confirm, setConfirm] = React.useState<"delete" | "reprocess" | null>(null);
   const [reprocess, setReprocess] = React.useState<{ batchId: number; progress: BatchProgress | null } | null>(null);
-  const [note, setNote] = React.useState(feedback?.note ?? "");
+  const savedNote = feedback?.note ?? "";
+  const [note, setNote] = React.useState(() => saved?.note ?? savedNote);
   const [noteSaved, setNoteSaved] = React.useState(false);
   const titleRef = React.useRef<HTMLInputElement>(null);
+  const editButtonRef = React.useRef<HTMLButtonElement>(null);
+  const ratingRef = React.useRef<HTMLDivElement>(null);
+  const articleRef = React.useRef<HTMLElement>(null);
 
-  // Card-level state resets when another card is shown.
+  // The saved note arrives with the day's extras (and changes after Save note); it replaces the
+  // text only while nothing unsaved is typed.
   React.useEffect(() => {
-    setEditing(false);
-    setError(null);
-    setNoteSaved(false);
-    setConfirm(null);
-  }, [card.id]);
-  React.useEffect(() => setNote(feedback?.note ?? ""), [card.id, feedback?.note]);
+    if (drafts.get(card.id)?.note === undefined) setNote(savedNote);
+  }, [card.id, savedNote]);
+
+  // Keep the drafts current for when this card is shown again.
+  React.useEffect(() => {
+    putDraft(card.id, { edit: editing ? draft : undefined, note: feedback && note.trim() !== savedNote.trim() ? note : undefined });
+  }, [card.id, editing, draft, note, savedNote, feedback]);
 
   // An open edit or an unsaved note holds off the idle reset and the 4 AM rollover.
-  const unsaved = editing || (!!feedback && note.trim() !== feedback.note.trim());
+  const unsaved = editing || (!!feedback && note.trim() !== savedNote.trim());
   React.useEffect(() => {
     setUnsavedWork(unsaved);
     return () => setUnsavedWork(false);
   }, [unsaved]);
 
+  // Into the title field when an edit opens; back to Edit when it closes (Save, Cancel, Esc).
+  const wasEditing = React.useRef(editing);
   React.useEffect(() => {
-    if (editing) titleRef.current?.focus();
+    if (editing && !wasEditing.current) titleRef.current?.focus();
+    if (!editing && wasEditing.current) {
+      const a = document.activeElement;
+      if (!a || a === document.body || articleRef.current?.contains(a)) editButtonRef.current?.focus();
+    }
+    wasEditing.current = editing;
   }, [editing]);
+
+  // "N cards to rate": the rating choice takes the focus once.
+  React.useEffect(() => {
+    if (!focusRating) return;
+    const group = ratingRef.current;
+    const target = group?.querySelector<HTMLElement>('[data-state="on"]') ?? group?.querySelector<HTMLElement>("button");
+    target?.focus();
+    target?.scrollIntoView({ block: "nearest" });
+    onRatingFocused?.();
+  }, [focusRating, onRatingFocused]);
 
   // Progress of "Reprocess card" (the card is replaced when it finishes).
   React.useEffect(() => {
@@ -166,6 +222,9 @@ export function CardDetail({
     setError(null);
     setEditing(true);
   };
+  // A subcategory belongs to its category: another category starts without one (UX15).
+  const changeCategory = (category: string) =>
+    setDraft((d) => ({ ...d, category, subcategory: keyOf(category) === keyOf(card.category) ? card.subcategory : "" }));
   const saveEdit = () =>
     act(
       () => timelineApi.updateCard(card.id, { ...draft, title: draft.title.trim() || card.title }),
@@ -191,21 +250,31 @@ export function CardDetail({
     act(
       () => timelineApi.setFeedback(card.id, feedback.direction, note),
       () => {
+        putDraft(card.id, { note: undefined });
         setNoteSaved(true);
         reloadExtras();
       },
     );
 
   const deleteIds = run ? run.cardIds : [card.id];
+  // After a delete the next card is shown; focus goes to its row in the list, or to its title
+  // when the list is not on screen (UX4).
+  const nextAfterDelete = React.useRef<number | null>(null);
+  const focusAfterDelete = React.useCallback(() => {
+    const id = nextAfterDelete.current;
+    const row = id !== null ? document.querySelector<HTMLElement>(`a[data-row-id="${id}"]`) : null;
+    return canFocus(row) ? row : document.getElementById("card-title");
+  }, []);
   const doDelete = () =>
     act(
       async () => {
         for (const id of deleteIds) await timelineApi.deleteCard(id);
       },
       () => {
-        setConfirm(null);
+        deleteIds.forEach((id) => drafts.delete(id));
         toast(deleteIds.length > 1 ? `${deleteIds.length} cards deleted` : "Card deleted");
-        onChanged();
+        nextAfterDelete.current = onDeleted();
+        setConfirm(null);
       },
     );
   const doReprocess = () =>
@@ -234,6 +303,7 @@ export function CardDetail({
 
   return (
     <article
+      ref={articleRef}
       aria-labelledby="card-title"
       className="mx-auto flex w-full max-w-[52rem] flex-col gap-5 px-6 pt-4 pb-10 max-split:px-4 xwide:grid xwide:max-w-[110rem] xwide:grid-cols-[minmax(0,40rem)_minmax(0,1fr)] xwide:content-start xwide:gap-x-10"
     >
@@ -245,7 +315,8 @@ export function CardDetail({
           <div className="ml-auto flex items-center gap-0.5">
             <NavButton label="Previous card" keys="K" onClick={onPrev} icon={<ChevronUp aria-hidden="true" />} />
             <NavButton label="Next card" keys="J" onClick={onNext} icon={<ChevronDown aria-hidden="true" />} />
-            <DropdownMenu>
+            {/* Non-modal: the rest of the window stays readable for assistive tech while it is open. */}
+            <DropdownMenu modal={false}>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <DropdownMenuTrigger asChild>
@@ -322,7 +393,7 @@ export function CardDetail({
             <div className="grid grid-cols-2 gap-3 max-split:grid-cols-1">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="card-edit-category">Category</Label>
-                <NativeSelect id="card-edit-category" value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })} wrapperClassName="w-full">
+                <NativeSelect id="card-edit-category" value={draft.category} onChange={(e) => changeCategory(e.target.value)} wrapperClassName="w-full">
                   {catNames.map((n) => (
                     <NativeSelectOption key={n} value={n}>
                       {n}
@@ -357,7 +428,7 @@ export function CardDetail({
           </form>
         ) : (
           <>
-            <h2 id="card-title" className="font-display text-title font-semibold tracking-[-0.01em] text-balance">
+            <h2 id="card-title" tabIndex={-1} className="font-display text-title font-semibold tracking-[-0.01em] text-balance outline-offset-2">
               {run ? `Processing failed · ${run.cardIds.length} intervals` : card.title}
             </h2>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-meta">
@@ -383,9 +454,14 @@ export function CardDetail({
                 </span>
               ))}
               {edited && <span className="rounded-sm border px-1.5 py-px text-caption text-muted-foreground">Edited</span>}
+              {card.generatedBy?.fallback && (
+                <span className="rounded-sm border border-border-strong px-1.5 py-px text-caption text-muted-foreground" title={`Provider: ${card.generatedBy.provider}`}>
+                  Written by <span translate="no">{card.generatedBy.model}</span> (fallback provider)
+                </span>
+              )}
               {card.isIdleShortcut && <span className="text-caption text-muted-foreground">No model call: nothing changed on screen</span>}
               {!failed && (
-                <Button variant="ghost" size="sm" className="ml-auto h-7 text-muted-foreground" onClick={startEdit}>
+                <Button ref={editButtonRef} variant="ghost" size="sm" className="ml-auto h-7 text-muted-foreground" onClick={startEdit}>
                   <Pencil aria-hidden="true" /> Edit
                 </Button>
               )}
@@ -505,6 +581,7 @@ export function CardDetail({
               How was this time?
             </span>
             <ToggleGroup
+              ref={ratingRef}
               type="single"
               variant="outline"
               size="sm"
@@ -604,8 +681,15 @@ export function CardDetail({
         <Timelapse card={card} />
       </section>
 
+      {card.generatedBy && (
+        <p className="text-caption text-muted-foreground xwide:col-start-1">
+          Written by <span translate="no">{card.generatedBy.model}</span> with <span translate="no">{card.generatedBy.provider}</span>
+          {card.generatedBy.fallback ? ", the fallback provider. Reprocess the card to write it with your main model." : "."}
+        </p>
+      )}
+
       <AlertDialog open={confirm === "delete"} onOpenChange={(o) => !o && setConfirm(null)}>
-        <AlertDialogContent>
+        <AlertDialogContent returnFocus={focusAfterDelete}>
           <AlertDialogHeader>
             <AlertDialogTitle>{run ? `Delete these ${run.cardIds.length} failed cards?` : failed ? "Delete this failed card?" : "Delete this card?"}</AlertDialogTitle>
             <AlertDialogDescription>

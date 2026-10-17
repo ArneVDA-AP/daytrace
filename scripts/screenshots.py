@@ -86,6 +86,12 @@ ROUTES = [
     ("shell-command-menu", f"/#/timeline?day={DAY}", "keys=Control+k|wait=600"),
     ("shell-day-picker", f"/#/daily?day={DAY}", "click=[aria-label='Go to a day']|wait=400"),
     ("shell-pause-menu", f"/#/chat", "click=[aria-label='Pause recording for…']|wait=400"),
+    ("shell-paused", f"/?status=paused#/timeline?day={DAY}", "w=760"),
+    ("shell-failure-key", f"/?fail=apikey#/timeline?day={DAY}", ""),
+    ("shell-failure-busy", f"/?fail=busy#/weekly?day={DAY}", ""),
+    ("shell-failure-signed-out", f"/?provider=claude_cli&fail=login#/daily?day={DAY}", "w=760"),
+    ("shell-recap-badge", f"/?badge=recap#/timeline?day={DAY}", ""),
+    ("shell-recap-badge", f"/?badge=recap#/timeline?day={DAY}", "w=760"),
 ]
 
 # One face per weight, so semibold and bold render as Inter SemiBold and Bold, not synthesized.

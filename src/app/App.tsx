@@ -2,11 +2,12 @@ import * as React from "react";
 import { DayProvider, isDaySection, useDay } from "@/app/day";
 import { LogoMark } from "@/app/Logo";
 import { NAV, SECTION_TITLES, Shell } from "@/app/Shell";
-import { AppStateProvider, useAppState } from "@/app/state";
+import { AppStateProvider, useAppSettings } from "@/app/state";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Toaster } from "@/components/ui/toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { digitOf, isKey, modsAre } from "@/lib/keys";
 import { navigate, setParams, useRoute, type Section } from "@/lib/router";
 import { OPEN_ONBOARDING_EVENT } from "@/views/platform-api";
 import { useDayRollover, useNotificationNavigation } from "@/views/platform-hooks";
@@ -45,10 +46,16 @@ export function App() {
   );
 }
 
+/**
+ * Reads the settings (the setup flag), the route and the day; not the status, so a status poll
+ * does not re-render it or the open section (FE5). Sections read what they need themselves.
+ */
 function Root() {
-  const app = useAppState();
+  const app = useAppSettings();
   const route = useRoute();
   const { day, today, setDay } = useDay();
+  const todayRef = React.useRef(today);
+  todayRef.current = today;
   const [commandOpen, setCommandOpen] = React.useState(false);
   const [commandUsed, setCommandUsed] = React.useState(false);
   if (commandOpen && !commandUsed) setCommandUsed(true);
@@ -64,7 +71,7 @@ function Root() {
     document.title = `${SECTION_TITLES[route.section]} · Daytrace`;
   }, [route.section]);
 
-  // 4 AM rollover and the return to today after 15 idle minutes (Dayflow's behaviour).
+  // 4 AM rollover and the return to today after 15 idle minutes (Dayflow's behavior).
   useDayRollover({
     day,
     today,
@@ -78,26 +85,28 @@ function Root() {
 
   // Clicks on Windows notifications.
   useNotificationNavigation((target) => {
-    if (target === "daily" || target === "timeline") navigate(target, { day: app.today });
+    if (target === "daily" || target === "timeline") navigate(target, { day: todayRef.current });
     else if (target === "settings") navigate("settings");
   });
 
-  // Global keys: Ctrl+K command menu, Ctrl+1…5 sections, Ctrl+, Settings.
+  // Global keys: Ctrl+K command menu, Ctrl+1…5 sections, Ctrl+, Settings. Matched by physical key
+  // (lib/keys.ts): on Belgian AZERTY Ctrl+1 is e.key "&", e.code "Digit1".
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!e.ctrlKey || e.altKey || e.shiftKey || e.metaKey) return;
-      const k = e.key.toLowerCase();
-      if (k === "k") {
+      if (!modsAre(e, { ctrl: true })) return;
+      if (isKey(e, "KeyK", { ctrl: true })) {
         e.preventDefault();
         setCommandOpen((o) => !o);
         return;
       }
-      if (k === ",") {
+      // Ctrl+, by the "," key of the layout or the key in its US place (";" on Belgian AZERTY).
+      if (e.code === "Comma" || e.key === ",") {
         e.preventDefault();
         navigate("settings");
         return;
       }
-      const item = NAV.find((n) => n.key === k);
+      const digit = digitOf(e);
+      const item = digit === null ? undefined : NAV.find((n) => n.key === String(digit));
       if (item) {
         e.preventDefault();
         navigate(item.id, isDaySection(item.id) ? { day } : {});
@@ -106,6 +115,12 @@ function Root() {
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
   }, [day]);
+
+  // The same element while the section stays, so Root re-rendering (a day change, a settings
+  // change) does not re-render the section; it updates from its own hooks.
+  const View = SECTIONS[route.section];
+  const view = React.useMemo(() => <View key={route.section} />, [View, route.section]);
+  const openCommand = React.useCallback(() => setCommandOpen(true), []);
 
   const firstRun = !app.settings.settings.onboardingCompleted;
   if (firstRun || setupOpen) {
@@ -116,13 +131,10 @@ function Root() {
     );
   }
 
-  const View = SECTIONS[route.section];
   return (
     <>
-      <Shell onOpenCommand={() => setCommandOpen(true)}>
-        <React.Suspense fallback={<SectionFallback />}>
-          <View key={route.section} />
-        </React.Suspense>
+      <Shell onOpenCommand={openCommand}>
+        <React.Suspense fallback={<SectionFallback />}>{view}</React.Suspense>
       </Shell>
       {commandUsed && (
         <React.Suspense fallback={null}>
@@ -153,7 +165,7 @@ function SectionFallback() {
   );
 }
 
-/** Before settings and status arrive: the window colour only, then a quiet line if it takes long. */
+/** Before settings and status arrive: the window color only, then a quiet line if it takes long. */
 function Boot({ error, retry }: { error: string | null; retry: () => void }) {
   const [slow, setSlow] = React.useState(false);
   React.useEffect(() => {

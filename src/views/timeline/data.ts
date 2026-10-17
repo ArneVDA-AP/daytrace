@@ -154,6 +154,8 @@ export type ReprocessState =
   | { stage: "idle" }
   | { stage: "loading" }
   | { stage: "confirm"; plan: DayPlan }
+  /** The confirmed request is on its way; the dialog stays, with its button disabled (FE8). */
+  | { stage: "starting"; plan: DayPlan }
   | { stage: "running"; batchIds: number[]; progress: BatchProgress | null }
   | { stage: "done"; failed: number; total: number }
   | { stage: "error"; message: string };
@@ -213,7 +215,12 @@ export function useReprocessDay(day: string, onChanged: () => void) {
     }
   }, [day]);
 
+  // One request per confirmation: a second click while it runs does nothing (FE8).
+  const starting = React.useRef(false);
   const start = React.useCallback(async () => {
+    if (starting.current) return;
+    starting.current = true;
+    setRp((cur) => (cur.stage === "confirm" ? { stage: "starting", plan: cur.plan } : cur));
     try {
       const plan = await timelineApi.reprocessDay(day);
       activeReprocess = { day, batchIds: plan.batchIds };
@@ -221,10 +228,12 @@ export function useReprocessDay(day: string, onChanged: () => void) {
       onChangedRef.current();
     } catch (e) {
       setRp({ stage: "error", message: errorText(e) });
+    } finally {
+      starting.current = false;
     }
   }, [day]);
 
-  const close = React.useCallback(() => setRp({ stage: "idle" }), []);
+  const close = React.useCallback(() => setRp((cur) => (cur.stage === "starting" ? cur : { stage: "idle" })), []);
   return { rp, ask, start, close };
 }
 

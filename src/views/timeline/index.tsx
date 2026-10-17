@@ -1,7 +1,8 @@
 import * as React from "react";
-import { ArrowLeft, CalendarDays, ClipboardCopy, Clock3, Download, ListRestart, MoreHorizontal, Moon, PanelRight, Settings2 } from "lucide-react";
+import { ArrowLeft, CalendarDays, ClipboardCopy, Clock3, Download, ListChecks, ListRestart, MoreHorizontal, Moon, PanelRight, Settings2 } from "lucide-react";
 import { useDay } from "@/app/day";
-import { useAppState } from "@/app/state";
+import { announceCardsChanged } from "@/app/shell-api";
+import { useAppSettings, useAppStatusSelect } from "@/app/state";
 import { Banner } from "@/components/banner";
 import { DayNav } from "@/components/day-nav";
 import { PageHeader, TitleBadge } from "@/components/page-header";
@@ -22,6 +23,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { isKey } from "@/lib/keys";
 import { navigate, numParam, setParams, useRoute } from "@/lib/router";
 import { formatDayTitle, formatWeekRange, shiftDay, weekStart } from "@/lib/time";
 import { useDelayedLoading } from "@/lib/use-delayed";
@@ -34,7 +36,7 @@ import { useDayCards, useLoad, useMedia, useNow, useReprocessDay, useRetryStatus
 import { DaySoFar } from "./DaySoFar";
 import { DayTrace } from "./DayTrace";
 import { ExportDialog } from "./ExportDialog";
-import { buildRows, lanesFor, navIds, navIndexOf } from "./model";
+import { buildRows, lanesFor, navIds, navIndexOf, nextUnrated } from "./model";
 import { Targets } from "./Targets";
 
 /*
@@ -42,8 +44,12 @@ import { Targets } from "./Targets";
  * card list and the detail side by side from 960 px (below that the detail opens over the list,
  * with "All cards" to go back). With no card selected the detail pane shows "Your day so far".
  *
- * URL: #/timeline?day=YYYY-MM-DD&card=<id>&detail=1&export=1. Keys: J next card, K previous card,
- * Esc closes the card (plus [ and ] for days from DayNav, arrows inside the trace and the list).
+ * URL: #/timeline?day=YYYY-MM-DD&card=<id>&detail=1&export=1. Keys: J next card, K previous card
+ * (by physical key), Esc closes the card (plus [ and ] for days from DayNav, arrows inside the
+ * trace and the list).
+ *
+ * Reads only what it shows from the status (recording or not, paused, the queue), so a status
+ * poll does not re-render the card list (FE5).
  */
 
 const FIT_KEY = "daytrace.timelineFit";
@@ -51,8 +57,15 @@ const FIT_KEY = "daytrace.timelineFit";
 // Dimmed categories survive switching sections (the view unmounts), like the old timeline.
 let mutedKeys = new Set<string>();
 
+const selectRecording = (s: { recorder: { tone: string } }) => s.recorder.tone === "live";
+const selectUserPaused = (s: { recorder: { userPaused: boolean } }) => s.recorder.userPaused;
+const selectPending = (s: { status: { pendingBatches: number } }) => s.status.pendingBatches;
+
 export default function TimelineSection() {
-  const app = useAppState();
+  const app = useAppSettings();
+  const recording = useAppStatusSelect(selectRecording);
+  const userPaused = useAppStatusSelect(selectUserPaused);
+  const pending = useAppStatusSelect(selectPending);
   const { day, today, setDay } = useDay();
   const route = useRoute();
   const isToday = day === today;
@@ -63,11 +76,14 @@ export default function TimelineSection() {
 
   const reloadRef = React.useRef<() => void>(() => {});
   const retry = useRetryStatus(() => reloadRef.current());
-  const rpRef = React.useRef<() => void>(() => {});
-  const reprocessDay = useReprocessDay(day, () => rpRef.current());
+  const reprocessDay = useReprocessDay(day, () => reloadRef.current());
   const data = useDayCards(day, retry.active || reprocessDay.rp.stage === "running");
-  reloadRef.current = data.reload;
-  rpRef.current = data.reload;
+  // Every change to the cards also tells the rail (its count of "Not analyzed" cards).
+  reloadRef.current = () => {
+    data.reload();
+    announceCardsChanged();
+  };
+  const reloadCards = React.useCallback(() => reloadRef.current(), []);
 
   const cards = data.cards;
   const extras = useLoad(day, timelineApi.dayExtras, cards);
@@ -99,6 +115,8 @@ export default function TimelineSection() {
     (id: number, open = true) => setParams({ card: id, detail: split ? null : open ? 1 : 0 }, { section: "timeline" }),
     [split],
   );
+  // Keyboard moves in the list keep the list on screen below 960 px (FE10); a click opens the card.
+  const selectFromList = React.useCallback((id: number, via: "keyboard" | "pointer") => select(id, via === "pointer"), [select]);
   const detailOpen = detailParam === "1" || (selected !== null && detailParam !== "0");
   const deselect = React.useCallback(() => setParams({ card: null, detail: null }, { section: "timeline" }), []);
 
@@ -113,7 +131,7 @@ export default function TimelineSection() {
     setParams({ card: replacement?.id ?? null, detail: replacement ? route.params.get("detail") : null }, { section: "timeline" });
   }, [cards, selected, day]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // J / K: next / previous card (one step per collapsed run). Esc closes the card.
+  // J / K: next / previous card (one step per collapsed run), by physical key. Esc closes the card.
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.altKey || e.metaKey || e.defaultPrevented || isTypingTarget(e.target)) return;
@@ -122,10 +140,11 @@ export default function TimelineSection() {
         deselect();
         return;
       }
-      const k = e.key.toLowerCase();
-      if ((k !== "j" && k !== "k") || ids.length === 0) return;
+      const down = isKey(e, "KeyJ");
+      const up = isKey(e, "KeyK");
+      if ((!down && !up) || ids.length === 0) return;
       const i = navIndexOf(rows, selected);
-      const next = i < 0 ? (k === "j" ? 0 : ids.length - 1) : k === "j" ? Math.min(ids.length - 1, i + 1) : Math.max(0, i - 1);
+      const next = i < 0 ? (down ? 0 : ids.length - 1) : down ? Math.min(ids.length - 1, i + 1) : Math.max(0, i - 1);
       e.preventDefault();
       select(ids[next], detailOpen);
     };
@@ -146,21 +165,40 @@ export default function TimelineSection() {
     writePref(FIT_KEY, v ? "1" : "0");
   };
 
+  const { reloadStatus } = app;
+  const refreshRetry = retry.refresh;
   const startRetry = React.useCallback(
     async (rowId: number, group: FailedGroup | null, card: Card) => {
       setRetryError(null);
       try {
         if (group) await timelineApi.retryBatches(group.batchIds);
         else await timelineApi.retryCard(card.id);
-        await retry.refresh();
-        void app.reloadStatus();
+        await refreshRetry();
+        void reloadStatus();
       } catch (e) {
         setRetryError({ id: rowId, message: errorText(e) });
       }
     },
-    [retry, app],
+    [refreshRetry, reloadStatus],
   );
-  const retryUi: RetryUi = { items: retry.items, error: retryError, start: (id, g, c) => void startRetry(id, g, c) };
+  const retryUi: RetryUi = React.useMemo(
+    () => ({ items: retry.items, error: retryError, start: (id, g, c) => void startRetry(id, g, c) }),
+    [retry.items, retryError, startRetry],
+  );
+
+  // "N cards to rate" (Dayflow CardsToReviewBadge): jumps to the next unrated card and puts the
+  // focus on its rating (gap 11).
+  const toRate = extras.data?.reviewSummary.unreviewedCards ?? 0;
+  const [rateFocus, setRateFocus] = React.useState<number | null>(null);
+  const clearRateFocus = React.useCallback(() => setRateFocus(null), []);
+  const rateNext = () => {
+    if (!cards || !extras.data) return;
+    const coverage = new Map(extras.data.reviews.map((r) => [r.cardId, r.coverage]));
+    const id = nextUnrated(cards, coverage, selected);
+    if (id === null) return;
+    setRateFocus(id);
+    select(id, true);
+  };
 
   const copyTimeline = async () => {
     setToolError(null);
@@ -173,16 +211,12 @@ export default function TimelineSection() {
   };
 
   const lastEnd = cards?.length ? Math.max(...cards.map((c) => c.endTs)) : null;
-  const live: LiveInfo | null =
-    isToday && cards
-      ? {
-          since: lastEnd,
-          recording: app.recorder.tone === "live",
-          writing: app.analysis.tone === "busy" && !!app.status.analysis.currentStep,
-          label: app.recorder.label,
-          detail: app.recorder.detail,
-        }
-      : null;
+  const live: LiveInfo | null = React.useMemo(() => (isToday && cards ? { since: lastEnd } : null), [isToday, cards, lastEnd]);
+
+  // The card list needs the clock only for "tries again by itself" (within 24 hours): an hourly
+  // value, so the 30-second tick does not re-render the list.
+  const nowHour = Math.floor(now / 3600) * 3600;
+  const onListSelect = selectFromList;
 
   const showSkeleton = useDelayedLoading(cards === null && !data.error);
   const index = navIndexOf(rows, selected);
@@ -202,7 +236,7 @@ export default function TimelineSection() {
         badge={isToday ? <TitleBadge>Today</TitleBadge> : undefined}
         nav={<DayNav />}
         actions={
-          <Button variant="outline" size="sm" aria-haspopup="dialog" aria-expanded={exportOpen} onClick={() => setParams({ export: 1 })}>
+          <Button id="timeline-export" variant="outline" size="sm" aria-haspopup="dialog" aria-expanded={exportOpen} onClick={() => setParams({ export: 1 })}>
             <Download aria-hidden="true" />
             Export…
           </Button>
@@ -220,6 +254,7 @@ export default function TimelineSection() {
           muted={muted}
           fit={fit}
           onFitChange={changeFit}
+          error={data.error !== null && cards === null}
         />
 
         {data.error && cards === null ? (
@@ -238,7 +273,7 @@ export default function TimelineSection() {
             </Banner>
           </div>
         ) : empty ? (
-          <EmptyDay day={day} today={today} recording={app.recorder.tone === "live"} userPaused={app.recorder.userPaused} pending={app.status.pendingBatches} onDay={setDay} onResume={app.resume} />
+          <EmptyDay day={day} today={today} recording={recording} userPaused={userPaused} pending={pending} onDay={setDay} onResume={app.resume} />
         ) : (
           <div className="flex min-h-0 flex-1">
             {showList && (
@@ -248,7 +283,8 @@ export default function TimelineSection() {
                     <div className="min-w-0 flex-1">
                       <CategoryChips lanes={lanes} colorFor={app.colorFor} muted={muted} onToggle={toggleMute} />
                     </div>
-                    <DropdownMenu>
+                    {/* Non-modal: the rest of the window stays readable for assistive tech while it is open. */}
+                    <DropdownMenu modal={false}>
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <DropdownMenuTrigger asChild>
@@ -265,7 +301,7 @@ export default function TimelineSection() {
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           onSelect={() => void reprocessDay.ask()}
-                          disabled={!cards?.length || reprocessDay.rp.stage === "running" || reprocessDay.rp.stage === "loading"}
+                          disabled={!cards?.length || reprocessDay.rp.stage === "running" || reprocessDay.rp.stage === "loading" || reprocessDay.rp.stage === "starting"}
                         >
                           <ListRestart aria-hidden="true" /> Reprocess day…
                         </DropdownMenuItem>
@@ -276,11 +312,26 @@ export default function TimelineSection() {
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
-                  <Targets goals={goals.data} day={day} compact />
-                  {!split && (
-                    <Button variant="outline" size="sm" className="self-start" onClick={() => setParams({ card: null, detail: 1 })}>
-                      <PanelRight aria-hidden="true" /> {isToday ? "Your day so far" : "Your day"}
-                    </Button>
+                  <Targets goals={goals.data} day={day} colorFor={app.colorFor} compact />
+                  {(!split || toRate > 0) && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      {!split && (
+                        <Button variant="outline" size="sm" onClick={() => setParams({ card: null, detail: 1 })}>
+                          <PanelRight aria-hidden="true" /> {isToday ? "Your day so far" : "Your day"}
+                        </Button>
+                      )}
+                      {toRate > 0 && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button variant="outline" size="sm" onClick={rateNext} aria-label={`${toRate} ${toRate === 1 ? "card" : "cards"} to rate. Rate the next card`}>
+                              <ListChecks aria-hidden="true" />
+                              {toRate} {toRate === 1 ? "card" : "cards"} to rate
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Rate the next card: Focused, Neutral or Distracted</TooltipContent>
+                        </Tooltip>
+                      )}
+                    </div>
                   )}
                   {toolError && (
                     <p role="alert" className="text-caption text-destructive">
@@ -302,10 +353,10 @@ export default function TimelineSection() {
                       idleKey={idleKey}
                       colorFor={app.colorFor}
                       selectedId={selected}
-                      onSelect={(id) => select(id)}
+                      onSelect={onListSelect}
                       muted={muted}
                       retry={retryUi}
-                      now={now}
+                      now={nowHour}
                       live={live}
                     />
                     <WeekFooter day={day} today={today} secs={week.data?.capturedSecs ?? null} />
@@ -334,12 +385,22 @@ export default function TimelineSection() {
                     categories={app.categories}
                     colorFor={app.colorFor}
                     idleKey={idleKey}
-                    onChanged={data.reload}
+                    onChanged={reloadCards}
+                    onDeleted={() => {
+                      // The card after it (or before it, at the end) takes its place (UX4).
+                      const after = nextId ?? prevId;
+                      if (after !== undefined) select(after, detailOpen);
+                      else deselect();
+                      reloadCards();
+                      return after ?? null;
+                    }}
                     onPrev={prevId !== undefined ? () => select(prevId, detailOpen) : undefined}
                     onNext={nextId !== undefined ? () => select(nextId, detailOpen) : undefined}
                     onClose={() => (split ? deselect() : setParams({ card: null, detail: null }))}
                     retry={retryUi}
-                    now={now}
+                    now={nowHour}
+                    focusRating={rateFocus === selectedCard.id}
+                    onRatingFocused={clearRateFocus}
                   />
                 ) : (
                   <DaySoFar
@@ -354,6 +415,7 @@ export default function TimelineSection() {
                     goals={goals.data}
                     extras={extras.data}
                     onSelect={(id) => select(id, true)}
+                    onRate={toRate > 0 ? rateNext : undefined}
                   />
                 )}
               </div>
@@ -363,7 +425,13 @@ export default function TimelineSection() {
       </div>
 
       <ReprocessDialog state={reprocessDay.rp} onStart={() => void reprocessDay.start()} onClose={reprocessDay.close} day={day} />
-      <ExportDialog open={exportOpen} onOpenChange={(o) => setParams({ export: o ? 1 : null })} day={day} today={today} />
+      <ExportDialog
+        open={exportOpen}
+        onOpenChange={(o) => setParams({ export: o ? 1 : null })}
+        day={day}
+        today={today}
+        returnFocus={() => document.getElementById("timeline-export")}
+      />
     </>
   );
 }
@@ -420,7 +488,7 @@ function EmptyDay({
     <Empty className="flex-1">
       <EmptyHeader>
         <EmptyMedia variant="icon">{isToday ? <Clock3 aria-hidden="true" /> : <Moon aria-hidden="true" />}</EmptyMedia>
-        <EmptyTitle>{isToday ? "No cards yet today" : `No recording on ${formatDayTitle(day)}`}</EmptyTitle>
+        <EmptyTitle>{isToday ? "No cards yet today" : `Nothing recorded on ${formatDayTitle(day)}`}</EmptyTitle>
         <EmptyDescription>
           {isToday
             ? recording
@@ -439,6 +507,9 @@ function EmptyDay({
               setResuming(true);
               try {
                 await onResume();
+                toast("Recording resumed", { tone: "success" });
+              } catch (e) {
+                toast("Couldn’t resume recording", { description: errorText(e), tone: "error" });
               } finally {
                 setResuming(false);
               }
@@ -523,8 +594,9 @@ function ReprocessStatus({ state, onClose }: { state: ReturnType<typeof useRepro
 }
 
 function ReprocessDialog({ state, onStart, onClose, day }: { state: ReturnType<typeof useReprocessDay>["rp"]; onStart: () => void; onClose: () => void; day: string }) {
-  const open = state.stage === "loading" || state.stage === "confirm";
-  const plan = state.stage === "confirm" ? state.plan : null;
+  const open = state.stage === "loading" || state.stage === "confirm" || state.stage === "starting";
+  const starting = state.stage === "starting";
+  const plan = state.stage === "confirm" || state.stage === "starting" ? state.plan : null;
   const n = plan?.batchIds.length ?? 0;
   return (
     <AlertDialog open={open} onOpenChange={(o) => !o && onClose()}>
@@ -561,11 +633,13 @@ function ReprocessDialog({ state, onStart, onClose, day }: { state: ReturnType<t
           {plan && !plan.blocked && (
             <AlertDialogAction
               variant="destructive"
+              disabled={starting}
               onClick={(e) => {
                 e.preventDefault();
-                onStart();
+                if (!starting) onStart();
               }}
             >
+              {starting && <Spinner className="size-4" aria-hidden="true" role="presentation" />}
               Reprocess {n} {n === 1 ? "batch" : "batches"}
             </AlertDialogAction>
           )}

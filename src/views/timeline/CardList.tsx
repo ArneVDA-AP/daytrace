@@ -1,5 +1,6 @@
 import * as React from "react";
 import { AlertTriangle, RotateCcw } from "lucide-react";
+import { useAppStatus } from "@/app/state";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { href } from "@/lib/router";
@@ -12,11 +13,13 @@ import { isFailed, isIdleCard, keyOf, navIds, navIndexOf, type Row } from "./mod
 /*
  * The card list on a vertical trace (designer-shadcn's TimelineList with designer-bespoke's summary
  * lines). Row height follows duration (--px-per-min, at least --card-min-h); cards of 30 minutes
- * and more show the first lines of their summary. Gaps of 5 minutes or more are "Not recording"
+ * and more show the first lines of their summary. Gaps of 5 minutes or more are "Not recorded"
  * rows, runs of failed cards collapse into one row with Try again, and today ends with a "now" row.
  *
  * One tab stop: ↑/↓ move between rows and select, Home/End jump; → reaches a row's Try again.
  * Rows are links (#/timeline?day=…&card=…), so middle-click and Back work.
+ *
+ * Memoized: only the "now" row reads the status, so a status change re-renders that row only.
  */
 
 const RATING_LABEL: Record<string, string> = { focused: "Focused", neutral: "Neutral", distracted: "Distracted" };
@@ -33,10 +36,6 @@ export function autoRetryText(endTs: number, now: number, retryable: boolean): s
 export interface LiveInfo {
   /** Start of the next card (end of the last one), null before the first card. */
   since: number | null;
-  recording: boolean;
-  writing: boolean;
-  label: string;
-  detail: string;
 }
 
 export interface RetryUi {
@@ -46,7 +45,7 @@ export interface RetryUi {
   start: (rowId: number, group: FailedGroup | null, card: Card) => void;
 }
 
-export function CardList({
+export const CardList = React.memo(function CardList({
   day,
   rows,
   extras,
@@ -65,13 +64,16 @@ export function CardList({
   idleKey: string | null;
   colorFor: (category: string) => string;
   selectedId: number | null;
-  onSelect: (id: number) => void;
+  /** `via`: keyboard moves keep the list on screen in the narrow layout (FE10). */
+  onSelect: (id: number, via: "keyboard" | "pointer") => void;
   muted: Set<string>;
   retry: RetryUi;
+  /** Unix seconds; only compared with card ends (24-hour retry window). */
   now: number;
   live: LiveInfo | null;
 }) {
   const ids = navIds(rows);
+  const pick = (id: number) => onSelect(id, "pointer");
   const current = navIndexOf(rows, selectedId);
   const tabbable = current >= 0 ? ids[current] : ids[ids.length - 1];
   const listRef = React.useRef<HTMLOListElement>(null);
@@ -106,7 +108,7 @@ export function CardList({
     }
     if (next === undefined) return;
     e.preventDefault();
-    onSelect(next);
+    onSelect(next, "keyboard");
     focusRow(next);
   };
 
@@ -123,7 +125,7 @@ export function CardList({
               row={r}
               selected={selectedId !== null && r.group.cardIds.includes(selectedId)}
               tabbable={tabbable === r.id}
-              onSelect={onSelect}
+              onSelect={pick}
               status={retry.error?.id === r.id ? null : retryLine(retry.items, r.group.batchIds)}
               error={retry.error?.id === r.id ? retry.error.message : null}
               busy={busy}
@@ -148,7 +150,7 @@ export function CardList({
             dimmed={!failed && muted.has(c.isIdleShortcut && idleKey ? idleKey : keyOf(c.category))}
             edited={edited.has(c.id)}
             rating={review ? RATING_LABEL[review.rating] : null}
-            onSelect={onSelect}
+            onSelect={pick}
             failure={
               failed
                 ? {
@@ -164,10 +166,10 @@ export function CardList({
           />
         );
       })}
-      {live && <LiveRows live={live} lastEnd={live.since} />}
+      {live && <LiveRows lastEnd={live.since} />}
     </ol>
   );
-}
+});
 
 function Rail({ children }: { children?: React.ReactNode }) {
   return <div className="relative flex w-2.5 justify-center self-stretch">{children}</div>;
@@ -276,7 +278,7 @@ function CardRow({
             className={cn(
               "flex min-w-0 flex-1 flex-col justify-start rounded-md border border-transparent px-3 py-2 transition-[background-color,border-color,box-shadow] duration-(--dur-fast) focus-visible:-outline-offset-2",
               "hover:bg-surface-2",
-              selected && SELECTED,
+              selected ? SELECTED : "forced-colors:border-[Canvas]",
             )}
           >
             <span className={cn("line-clamp-2 text-body font-medium text-pretty", idle && "font-normal text-muted-foreground")}>{c.title}</span>
@@ -363,7 +365,10 @@ function RunRow({
   );
 }
 
-const SELECTED = "border-border-strong bg-surface-1 shadow-md hover:bg-surface-1 dark:bg-surface-2 dark:hover:bg-surface-2";
+// Contrast themes drop the shadow and color every border: unselected rows get the canvas color
+// (no border), the selected one Highlight (UX6).
+const SELECTED =
+  "border-border-strong bg-surface-1 shadow-md hover:bg-surface-1 dark:bg-surface-2 dark:hover:bg-surface-2 forced-colors:border-2 forced-colors:border-[Highlight]";
 
 /** A failed card or run: the link (title, "Not analyzed") and, below it, Try again and what
  * Daytrace does by itself. Buttons cannot sit inside the link, so the box holds both. */
@@ -442,34 +447,38 @@ function GapRow({ seconds }: { seconds: number }) {
       </Rail>
       <div className="hatch-gap my-1 flex h-8 items-center rounded-md px-3 text-meta text-muted-foreground">
         <span className="rounded-sm bg-surface-1 px-1.5 py-0.5">
-          Not recording, <span className="tnum">{formatDuration(seconds)}</span>
+          Not recorded, <span className="tnum">{formatDuration(seconds)}</span>
         </span>
       </div>
     </li>
   );
 }
 
-function LiveRows({ live, lastEnd }: { live: LiveInfo; lastEnd: number | null }) {
+/** Today's last row: recording now and when the next card comes, from the status. */
+function LiveRows({ lastEnd }: { lastEnd: number | null }) {
+  const { recorder, analysis, status } = useAppStatus();
+  const recording = recorder.tone === "live";
+  const writing = analysis.tone === "busy" && !!status.analysis.currentStep;
   const nowTs = Math.floor(Date.now() / 1000);
   // Cards cover about 15 minutes and are written by the next analysis pass (every minute).
   const eta = lastEnd !== null ? lastEnd + 16 * 60 : null;
-  const text = live.writing
+  const text = writing
     ? "Daytrace is writing the next card now."
-    : live.recording
+    : recording
       ? lastEnd === null
         ? "The first card appears about 15 minutes after recording starts."
         : eta !== null && eta > nowTs
           ? `The next card covers ${clock(lastEnd)} onwards and appears around ${clock(eta)}.`
           : `The next card covers ${clock(lastEnd)} onwards and appears within a few minutes.`
-      : live.detail;
+      : recorder.detail;
   return (
     <li className={cn(ROW_GRID, "pt-0.5")} style={{ minHeight: "var(--card-min-h)" }}>
       <div className="pt-2 text-right font-mono text-caption leading-4 text-muted-foreground tnum">{lastEnd !== null ? clock(lastEnd) : "Now"}</div>
       <Rail>
-        <span aria-hidden="true" className={cn("absolute inset-y-0.5 w-1 rounded-full", live.recording ? "bg-live/70 motion-safe:animate-pulse-live" : "bg-paused/50")} />
+        <span aria-hidden="true" className={cn("absolute inset-y-0.5 w-1 rounded-full", recording ? "bg-live/70 motion-safe:animate-pulse-live" : "bg-paused/50")} />
       </Rail>
       <div className="mb-1 rounded-md border border-dashed border-border-strong px-3 py-2">
-        <p className="text-body font-medium">{live.recording ? "Recording now" : live.label}</p>
+        <p className="text-body font-medium">{recording ? "Recording now" : recorder.label}</p>
         <p className="mt-0.5 text-meta text-muted-foreground">{text}</p>
       </div>
     </li>

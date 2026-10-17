@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Command as CommandPrimitive } from "cmdk"
+import { Command as CommandPrimitive, useCommandState } from "cmdk"
 import { cn } from "@/lib/utils"
 import { SearchIcon } from "lucide-react"
 
@@ -10,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import type { ReturnFocus } from "@/components/ui/focus-return"
 
 function Command({
   className,
@@ -33,12 +34,15 @@ function CommandDialog({
   children,
   className,
   showCloseButton = false,
+  returnFocus,
   ...props
 }: React.ComponentProps<typeof Dialog> & {
   title?: string
   description?: string
   className?: string
   showCloseButton?: boolean
+  /** Where focus goes on close when the element that opened it is gone. */
+  returnFocus?: ReturnFocus
 }) {
   return (
     <Dialog {...props}>
@@ -49,6 +53,7 @@ function CommandDialog({
       <DialogContent
         className={cn("top-[15%] translate-y-0 overflow-hidden p-0 sm:max-w-xl", className)}
         showCloseButton={showCloseButton}
+        returnFocus={returnFocus}
       >
         <Command className="**:data-[slot=command-input-wrapper]:h-12 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group]]:px-2 [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-input]]:h-12 [&_[cmdk-item]]:px-2.5 [&_[cmdk-item]]:py-2">
           {children}
@@ -124,17 +129,20 @@ function CommandGroup({
   )
 }
 
+/**
+ * A line between groups. Drawn as a hidden div, not cmdk's role="separator": a listbox may only
+ * contain options and groups (axe aria-required-children). Hidden while searching, like cmdk's.
+ */
 function CommandSeparator({
   className,
-  ...props
-}: React.ComponentProps<typeof CommandPrimitive.Separator>) {
-  return (
-    <CommandPrimitive.Separator
-      data-slot="command-separator"
-      className={cn("-mx-1 h-px bg-border", className)}
-      {...props}
-    />
-  )
+  alwaysRender = false,
+}: {
+  className?: string
+  alwaysRender?: boolean
+}) {
+  const searching = useCommandState((s) => s.search !== "")
+  if (searching && !alwaysRender) return null
+  return <div aria-hidden="true" data-slot="command-separator" className={cn("-mx-1 h-px bg-border", className)} />
 }
 
 function CommandItem({

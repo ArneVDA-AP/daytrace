@@ -1,6 +1,16 @@
 import * as React from "react";
 import { GlobalBanners } from "@/app/Banners";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+/** "Today" / "This week" from DayNav, drawn right of the title (UX16: the title never moves). */
+export interface JumpBack {
+  label: string;
+  go: () => void;
+}
+
+/** DayNav hands its jump-back button to the page header through this. */
+export const JumpBackSlot = React.createContext<((j: JumpBack | null) => void) | null>(null);
 
 /**
  * The header row every section starts with: optional navigation (DayNav), a small section label
@@ -28,16 +38,22 @@ export function PageHeader({
   banners?: boolean;
   className?: string;
 }) {
+  const [jump, setJump] = React.useState<JumpBack | null>(null);
   return (
     <>
       <header className={cn("flex min-h-14 shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b px-(--page-x) py-2.5", className)}>
         <div className="flex min-w-0 items-center gap-2">
-          {nav}
+          <JumpBackSlot.Provider value={setJump}>{nav}</JumpBackSlot.Provider>
           <div className="min-w-0">
             {label && <p className="text-caption text-muted-foreground">{label}</p>}
             <h1 className="truncate font-display text-title font-semibold tracking-[-0.01em]">{title}</h1>
           </div>
           {badge}
+          {jump && (
+            <Button variant="outline" size="xs" className="mt-4 text-caption" onClick={jump.go}>
+              {jump.label}
+            </Button>
+          )}
         </div>
         {actions && <div className="ml-auto flex flex-wrap items-center gap-2">{actions}</div>}
       </header>

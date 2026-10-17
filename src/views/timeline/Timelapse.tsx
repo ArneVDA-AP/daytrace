@@ -8,7 +8,7 @@ import { clock, formatDuration } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import { timelineApi, type Card, type Shot } from "./api";
 import { readPref, writePref } from "./data";
-import { cachedThumb, hasThumb, useThumbTick, wantThumbs } from "./shots";
+import { cachedThumb, clearWantedThumbs, hasThumb, useThumbTick, wantThumbs } from "./shots";
 import { ShotViewer } from "./ShotViewer";
 
 /*
@@ -17,7 +17,9 @@ import { ShotViewer } from "./ShotViewer";
  * screenshot slideshow (Views/UI/MainView/ScreenshotSlideshow*.swift): frames at their real spacing
  * sped up 20×, 40× or 60× (remembered), held on a frame until its image has loaded. It never plays
  * by itself. Keys inside: Space plays and pauses, ← and → step one frame; Full size opens the
- * viewer. Thumbnails load a few at a time, ahead of the playhead.
+ * viewer. The contact strip is one tab stop: ← → Home End move along it and jump the playhead
+ * (UX10). Thumbnails load a few at a time, ahead of the playhead; closing the player drops the
+ * rest of the queue (FE11).
  */
 
 const SPEEDS = [20, 40, 60];
@@ -79,6 +81,8 @@ export function Timelapse({ card }: { card: Card }) {
     const ahead = frames.slice(index, index + PREFETCH + 1).filter(isFrame).map((s) => s.id);
     wantThumbs([...ahead, ...strip.filter(isFrame).map((s) => s.id)]);
   }, [frames, index, strip]);
+  React.useEffect(() => clearWantedThumbs, []);
+  const stripRef = React.useRef<HTMLUListElement>(null);
 
   // Playback: wait the real gap to the next frame divided by the speed; hold on a frame whose
   // image has not loaded yet (this runs again when it arrives, through useThumbTick).
@@ -136,11 +140,13 @@ export function Timelapse({ card }: { card: Card }) {
   };
 
   // Space plays and pauses (a focused button keeps its own Space); ← → step one frame (the
-  // scrubber keeps its own arrows).
+  // scrubber and the strip keep their own arrows). Keys from the full-size viewer reach this
+  // handler through the React tree (it is a portal): they are the viewer's, not the player's (FE6).
   const onKey = (e: React.KeyboardEvent) => {
+    if (!e.currentTarget.contains(e.target as Node)) return;
     const t = e.target as HTMLElement;
     const isRange = t instanceof HTMLInputElement && t.type === "range";
-    const inGroup = !!t.closest('[role="group"],[role="radiogroup"]');
+    const inGroup = !!t.closest('[role="group"],[role="radiogroup"],[data-strip]');
     if (e.key === " " && !(t instanceof HTMLButtonElement)) {
       e.preventDefault();
       togglePlay();
@@ -151,6 +157,11 @@ export function Timelapse({ card }: { card: Card }) {
   };
 
   const seconds = (card.endTs - card.startTs) / speed;
+  // The strip's one tab stop: the last strip frame at or before the playhead.
+  let stripStop = 0;
+  strip.forEach((f, n) => {
+    if (frames.indexOf(f) <= index) stripStop = n;
+  });
 
   return (
     <section aria-label="Screenshots and timelapse" className="flex max-w-[44rem] flex-col gap-2" onKeyDown={onKey}>
@@ -242,8 +253,24 @@ export function Timelapse({ card }: { card: Card }) {
         </ToggleGroup>
       </div>
 
-      <ul aria-label="Screenshots" className="grid grid-cols-6 gap-1.5 @container">
-        {strip.map((s) => {
+      <ul
+        ref={stripRef}
+        data-strip=""
+        aria-label="Screenshots, arrow keys move"
+        className="grid grid-cols-6 gap-1.5 @container"
+        onKeyDown={(e) => {
+          const items = Array.from(stripRef.current?.querySelectorAll<HTMLButtonElement>("button[data-strip-item]") ?? []);
+          const at = items.indexOf(e.target as HTMLButtonElement);
+          if (at < 0) return;
+          const to = e.key === "ArrowRight" ? at + 1 : e.key === "ArrowLeft" ? at - 1 : e.key === "Home" ? 0 : e.key === "End" ? items.length - 1 : null;
+          if (to === null || to < 0 || to >= items.length) return;
+          e.preventDefault();
+          setPlaying(false);
+          setIndex(frames.indexOf(strip[to]));
+          items[to].focus();
+        }}
+      >
+        {strip.map((s, n) => {
           const i = frames.indexOf(s);
           const t = cachedThumb(s.id);
           const on = i === index;
@@ -251,6 +278,8 @@ export function Timelapse({ card }: { card: Card }) {
             <li key={s.id} className="min-w-0">
               <button
                 type="button"
+                data-strip-item=""
+                tabIndex={n === stripStop ? 0 : -1}
                 onClick={() => {
                   setPlaying(false);
                   setIndex(i);

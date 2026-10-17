@@ -167,6 +167,11 @@ pub fn run() {
             features::agent_bridge::agent_add_to_claude_desktop,
             features::agent_bridge::agent_remove_from_claude_desktop,
             features::agent_bridge::agent_set_on_path,
+            // shell commands
+            features::shell::shell_badges,
+            features::shell::shell_recap_opened,
+            features::shell::shell_set_overlay,
+            features::shell::shell_open_link,
             // provider commands
             llm::provider_cmds::provider_prompt_defaults,
             llm::provider_cmds::provider_key_status,
