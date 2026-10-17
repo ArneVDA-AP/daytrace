@@ -15,6 +15,8 @@
  *   ?provider=anthropic|ollama|lm_studio|openai_compatible|claude_cli
  *   ?latency=400         delay every answer (ms) to see loading states
  *   ?chat=empty          no chat conversations yet (more Goals and Chat variants: src/dev/goalschat.ts)
+ *   ?recap=today|edited|generating|failed|autoerror|auto|nohistory|exported|exportfail   Daily
+ *   ?insights=error      Daily and Weekly numbers fail to load
  * Example: http://localhost:1420/?status=offline,away#/timeline
  */
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
@@ -22,12 +24,11 @@ import { emit } from "@tauri-apps/api/event";
 import type { Card, ProviderKind, Settings, SettingsDto, Shot, Status } from "@/api";
 import type { ChatInfo, ChatMessage, Conversation, ConversationDetail } from "@/views/chat-api";
 import type { GoalItem, GoalsView } from "@/views/journal-api";
-import type { RecapView } from "@/views/insights-api";
 import type { DayExtras } from "@/timeline-extras-api";
 import type { StorageUsage } from "@/settings/storage-api";
-import { at, dayBounds, shiftDay } from "@/lib/time";
+import { at, shiftDay } from "@/lib/time";
 import { allCards, DEFAULT_CATEGORIES, fmtClock, makeDataset } from "@/dev/fixtures";
-import { computeDay, computeWeek } from "@/dev/insights";
+import { computeDay, computeWeek, makeRecapMock } from "@/dev/insights";
 import { screenSvg } from "@/dev/screens";
 import { goalsChatHandlers } from "@/dev/goalschat";
 
@@ -179,27 +180,8 @@ export function installMockIpc() {
     };
   };
 
-  // Recaps: written for earlier days, not yet for today.
-  const recaps = new Map<string, RecapView["entry"]>();
-  const recapFor = (day: string): RecapView => {
-    const cards = cardsOf(day).filter((c) => c.category !== "System" && !c.isIdleShortcut);
-    let entry = recaps.get(day) ?? null;
-    if (!entry && day < ds.today && cards.length) {
-      entry = {
-        targetDay: shiftDay(day, 1),
-        sourceDay: day,
-        highlights: cards.filter((c) => c.category === "Work").slice(0, 3).map((c) => c.title),
-        tasks: ["Finish the retry scheduler persistence", "Write the test for empty days in the export"],
-        blockers: day === shiftDay(ds.today, -1) ? ["Waiting for review on the migration"] : [],
-        provider: "anthropic",
-        model: "claude-haiku-5-5",
-        edited: false,
-        createdAt: dayBounds(day)[1],
-        updatedAt: dayBounds(day)[1],
-      };
-    }
-    return { targetDay: day, entry, sourceDay: entry?.sourceDay ?? (cards.length ? day : null), generating: false, autoError: null, exportPath: null, auto: null };
-  };
+  // Recaps (src/dev/insights.ts): written for earlier days, not yet for today; ?recap=… variants.
+  const recaps = makeRecapMock({ today: ds.today, cardsOf, model: () => settings.model, q, now, sleep });
 
   // Goals (journal) items per day.
   let itemSeq = 1;
@@ -225,7 +207,9 @@ export function installMockIpc() {
     const progress = {
       focusSecs: st.focusSecs,
       distractedSecs: st.distractedSecs,
-      focusCategories: st.totals.filter((t) => t.kind === "focus").map((t) => ({ name: t.name, color: t.color, secs: t.secs })),
+      focusCategories: st.totals
+        .filter((t) => t.kind === "focus")
+        .map((t) => ({ name: t.name, color: settings.categories.find((c) => c.name === t.name)?.color ?? "#878D94", secs: t.secs })),
       distractionCategories: ["Distraction"],
     };
     return {
@@ -452,27 +436,7 @@ export function installMockIpc() {
     // insights
     insights_day: (a) => computeDay(a.day as string, cardsOf(a.day as string), settings.categories),
     insights_week: (a) => computeWeek(a.day as string, cardsOf, settings.categories),
-    insights_recap: (a) => recapFor(a.day as string),
-    insights_generate_recap: async (a) => {
-      await sleep(900);
-      const day = a.day as string;
-      const cards = cardsOf(day).filter((c) => c.category === "Work");
-      recaps.set(day, {
-        targetDay: day, sourceDay: day,
-        highlights: cards.slice(0, 3).map((c) => c.title),
-        tasks: ["Finish the retry scheduler persistence"],
-        blockers: [],
-        provider: "anthropic", model: settings.model, edited: false, createdAt: now(), updatedAt: now(),
-      });
-      return recapFor(day);
-    },
-    insights_save_recap: (a) => {
-      const day = a.day as string;
-      const cur = recapFor(day).entry;
-      if (cur) recaps.set(day, { ...cur, highlights: a.highlights as string[], tasks: a.tasks as string[], blockers: a.blockers as string[], edited: true, updatedAt: now() });
-      return recapFor(day);
-    },
-    insights_export_recap: (a) => `C:\\Users\\Preview\\OneDrive\\Daytrace\\${a.day}.md`,
+    ...recaps,
     // goals
     journal_get: (a) => goals(a.day as string),
     journal_save_plan: (a) => goals(a.day as string),

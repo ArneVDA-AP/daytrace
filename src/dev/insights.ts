@@ -1,11 +1,12 @@
 /*
  * DEV ONLY. Simplified client-side versions of the backend's insights (features/insights/*.rs),
- * so Daily, Weekly and Goals have consistent numbers in the browser preview. Not a reference
- * implementation: the Rust code is the source of truth.
+ * so Daily, Weekly and Goals have consistent numbers in the browser preview, and the recap
+ * commands with their states (makeRecapMock). Not a reference implementation: the Rust code is
+ * the source of truth.
  */
 import type { Card, Category } from "@/api";
 import { dayBounds, shiftDay, weekStart, weekday } from "@/lib/time";
-import type { AppUsage, Block, CategoryTotal, DayStats, DistractionItem, GridRow, Kind, Marker, NamedSecs, WeekStats } from "@/views/insights-api";
+import type { AppUsage, Block, CategoryTotal, DayStats, DistractionItem, GridRow, Kind, Marker, NamedSecs, RecapEntry, RecapView, WeekStats } from "@/views/insights/api";
 
 const SLOT = 15;
 const FOCUS_GAP = 5 * 60;
@@ -16,19 +17,18 @@ interface Seg {
   end: number;
   key: string;
   name: string;
-  color: string;
   kind: Kind;
   order: number;
 }
 
 function catInfo(name: string, cats: Category[]) {
   const key = name.trim().toLowerCase();
-  if (key === "system") return { key, name, color: "#B4443A", kind: "system" as Kind, order: 999 };
+  if (key === "system") return { key, name, kind: "system" as Kind, order: 999 };
   const i = cats.findIndex((c) => c.name.trim().toLowerCase() === key);
   const c = cats[i];
   const kind: Kind = c?.isIdle ? "idle" : key === "distraction" || key === "distractions" ? "distraction" : "focus";
-  // Like the backend: the stored hex. Views colour by name with colorFor(), not with this field.
-  return { key, name: c?.name ?? name, color: c ? c.color : "#BFB6AE", kind, order: i < 0 ? 500 : i };
+  // The backend also sends a stored hex per category; views colour by name with colorFor().
+  return { key, name: c?.name ?? name, kind, order: i < 0 ? 500 : i };
 }
 
 function segments(cards: Card[], cats: Category[], start: number, end: number): Seg[] {
@@ -71,7 +71,7 @@ function totals(segs: Seg[]): CategoryTotal[] {
   const m = new Map<string, CategoryTotal & { order: number }>();
   for (const s of segs) {
     if (s.kind === "system") continue;
-    const t = m.get(s.key) ?? { key: s.key, name: s.name, color: s.color, kind: s.kind, secs: 0, order: s.order };
+    const t = m.get(s.key) ?? { key: s.key, name: s.name, kind: s.kind, secs: 0, order: s.order };
     t.secs += s.end - s.start;
     m.set(s.key, t);
   }
@@ -130,7 +130,6 @@ export function computeDay(day: string, cards: Card[], cats: Category[]): DaySta
   const rows: GridRow[] = keys.map((k, ri) => ({
     key: k.key,
     name: k.name,
-    color: k.color,
     cells: Array.from({ length: slots }, (_, i) => {
       const a = gStart + i * SLOT;
       const b = a + SLOT;
@@ -181,7 +180,7 @@ export function computeWeek(day: string, cardsOf: (d: string) => Card[], cats: C
   const start = weekStart(day);
   const days = Array.from({ length: 7 }, (_, i) => shiftDay(start, i));
   const stats = days.map((d) => computeDay(d, cardsOf(d), cats));
-  const prev = Array.from({ length: 7 }, (_, i) => computeDay(shiftDay(start, i - 7), cardsOf(shiftDay(start, i - 7)), cats));
+  const prevDays = Array.from({ length: 7 }, (_, i) => shiftDay(start, i - 7));
   const add = (xs: CategoryTotal[][]) => {
     const m = new Map<string, CategoryTotal>();
     xs.flat().forEach((t) => {
@@ -191,28 +190,68 @@ export function computeWeek(day: string, cardsOf: (d: string) => Card[], cats: C
     });
     return [...m.values()].sort((a, b) => b.secs - a.secs);
   };
-  const progs = (ss: DayStats[]) => {
-    const m = new Map<string, number>();
-    ss.forEach((s) => s.programs.forEach((p) => m.set(p.name, (m.get(p.name) ?? 0) + p.secs)));
-    return m;
+
+  // App time per category (like the backend's app_seconds: card apps, idle left out).
+  const appSeconds = (ds: string[]) => {
+    const out = new Map<string, { cat: string; name: string; app: string; secs: number }>();
+    for (const d of ds) {
+      const [a, b] = dayBounds(d);
+      for (const s of segments(cardsOf(d), cats, a, b)) {
+        const app = s.card.appSites?.primary;
+        if (!app || s.kind === "idle" || s.kind === "system") continue;
+        const k = `${s.key}|${app}`;
+        const e = out.get(k) ?? { cat: s.key, name: s.name, app, secs: 0 };
+        e.secs += s.end - s.start;
+        out.set(k, e);
+      }
+    }
+    return [...out.values()];
   };
-  const now = progs(stats);
-  const before = progs(prev);
-  const topApps: AppUsage[] = [...now.entries()]
-    .map(([name, secs]) => ({ name, secs, previousSecs: before.get(name) ?? 0 }))
+  const current = appSeconds(days);
+  const before = appSeconds(prevDays);
+  const byApp = new Map<string, AppUsage>();
+  for (const e of current) {
+    const a = byApp.get(e.app) ?? { name: e.app, secs: 0, previousSecs: before.filter((x) => x.app === e.app).reduce((n, x) => n + x.secs, 0) };
+    a.secs += e.secs;
+    byApp.set(e.app, a);
+  }
+  const topApps = [...byApp.values()].sort((a, b) => b.secs - a.secs).slice(0, 10);
+  const byCat = new Map<string, WeekStats["appsByCategory"][number]>();
+  for (const e of current) {
+    const c = byCat.get(e.cat) ?? { key: e.cat, name: e.name, secs: 0, apps: [] };
+    c.secs += e.secs;
+    c.apps.push({ name: e.app, secs: e.secs, previousSecs: before.find((x) => x.cat === e.cat && x.app === e.app)?.secs ?? 0 });
+    byCat.set(e.cat, c);
+  }
+  const appsByCategory = [...byCat.values()]
+    .map((c) => ({ ...c, apps: c.apps.sort((a, b) => b.secs - a.secs).slice(0, 8) }))
     .sort((a, b) => b.secs - a.secs)
-    .slice(0, 8);
-  const wStart = 6 * 60;
-  const wEnd = 24 * 60;
+    .slice(0, 5);
+
+  // Activity window of the week: earliest start and latest end ±30 min, in 15-minute steps.
+  const offsets: [number, number][] = [];
+  stats.forEach((s, i) => {
+    const [a, b] = dayBounds(days[i]);
+    for (const g of segments(cardsOf(days[i]), cats, a, b)) {
+      if (g.kind === "idle" || g.kind === "system") continue;
+      offsets.push([(g.start - s.dayStartTs) / 60, (g.end - s.dayStartTs) / 60]);
+    }
+  });
+  const wStart = offsets.length ? Math.floor(Math.max(0, Math.min(...offsets.map((o) => o[0])) - 30) / 15) * 15 : 300;
+  const wEnd = offsets.length ? Math.ceil(Math.min(1440, Math.max(...offsets.map((o) => o[1])) + 30) / 15) * 15 : 1080;
+
   const distractionHours = stats.map((s) => {
     const secs = new Array<number>(24).fill(0);
     s.distractions.forEach((d) => {
-      const h = Math.floor((d.startTs - s.dayStartTs) / 3600);
-      if (h >= 0 && h < 24) secs[h] += d.secs;
+      for (let t = d.startTs; t < d.endTs; t += 60) {
+        const h = Math.floor((t - s.dayStartTs) / 3600);
+        if (h >= 0 && h < 24) secs[h] += Math.min(60, d.endTs - t);
+      }
     });
     return { day: s.day, label: weekday(s.day), secs };
   });
   const sumOf = (k: "capturedSecs" | "focusSecs" | "distractedSecs" | "idleSecs") => stats.reduce((a, s) => a + s[k], 0);
+  const busiest = [...stats].sort((a, b) => b.contextSwitches + b.distractions.length - (a.contextSwitches + a.distractions.length))[0];
   return {
     weekStart: start,
     weekEnd: days[6],
@@ -228,48 +267,165 @@ export function computeWeek(day: string, cardsOf: (d: string) => Card[], cats: C
       distractionCount: s.distractions.length,
       longestFocus: s.longestFocus,
     })),
-    distribution: add(stats.map((s) => s.totals)),
+    distribution: add(stats.map((s) => s.totals.filter((t) => t.kind !== "idle"))),
     capturedSecs: sumOf("capturedSecs"),
     focusSecs: sumOf("focusSecs"),
     distractedSecs: sumOf("distractedSecs"),
     idleSecs: sumOf("idleSecs"),
     workflow: {
-      startMinute: wStart - 240,
-      endMinute: wEnd - 240,
+      startMinute: wStart,
+      endMinute: wEnd,
       slotMinutes: SLOT,
-      rows: stats.map((s) => {
-        const n = (wEnd - wStart) / SLOT;
-        return {
-          day: s.day,
-          label: weekday(s.day),
-          cells: Array.from({ length: n }, (_, i) => {
-            const slot = Math.floor((wStart - 240 - s.grid.startMinute) / SLOT) + i;
-            const ri = slot >= 0 && slot < s.grid.dominant.length ? s.grid.dominant[slot] : null;
-            if (ri === null || ri === undefined) return null;
-            const row = s.grid.rows[ri];
-            const occ = row.cells[slot].occupancy;
-            return { key: row.key, name: row.name, color: row.color, occupancy: occ, secs: Math.round(occ * SLOT * 60) };
-          }),
-        };
-      }),
+      rows: stats.map((s) => ({ day: s.day, label: weekday(s.day), cells: [] })),
       totals: add(stats.map((s) => s.totals)),
     },
-    heatmap: {
-      startMinute: wStart - 240,
-      endMinute: wEnd - 240,
-      bucketMinutes: 60,
-      rows: distractionHours.map((r) => ({ day: r.day, label: r.label, values: r.secs.slice(2, 20).map((x) => Math.round(x / 60)) })),
-    },
+    heatmap: { startMinute: wStart, endMinute: wEnd, bucketMinutes: 5, rows: stats.map((s) => ({ day: s.day, label: weekday(s.day), values: [] })) },
     distractionHours,
-    contextInsight: "You switched context most on days with the most meetings. Afternoons after 3 PM hold most of the distraction time.",
+    contextInsight:
+      busiest && busiest.contextSwitches + busiest.distractions.length > 0
+        ? `${new Intl.DateTimeFormat("en-GB", { weekday: "long" }).format(new Date(`${busiest.day}T12:00:00`))} had the most interruptions, with ${busiest.contextSwitches} context shifts and ${busiest.distractions.length} distractions.`
+        : "No context shift or distraction pattern was detected in this week.",
     focusBlocks: stats
       .flatMap((s) => s.focusBlocks.map((b) => ({ day: s.day, ...b })))
       .sort((a, b) => b.secs - a.secs)
       .slice(0, 5),
-    appsByCategory: add(stats.map((s) => s.totals))
-      .filter((t) => t.kind !== "idle")
-      .map((t) => ({ key: t.key, name: t.name, color: t.color, secs: t.secs, apps: topApps.slice(0, 3) })),
+    appsByCategory,
     topApps,
-    programs: [...now.entries()].map(([name, secs]) => ({ name, secs })).sort((a, b) => b.secs - a.secs),
+    programs: [...byApp.values()].map((a) => ({ name: a.name, secs: a.secs })).sort((a, b) => b.secs - a.secs),
+  };
+}
+
+// ---- recap ----
+
+/** Captured minutes of a day without idle and failed cards (the recap's activity rule). */
+function activeMinutes(cards: Card[]): number {
+  return cards.filter((c) => c.category !== "System" && c.category !== "Idle" && !c.isIdleShortcut).reduce((a, c) => a + (c.endTs - c.startTs) / 60, 0);
+}
+
+/**
+ * The recap commands, keyed by target day as in the backend: the standup for day D is written
+ * from the most recent of the 3 days before D with 2 hours of activity. Earlier days have one;
+ * today has none unless asked for. Variants (query before the hash):
+ *   ?recap=today       today's standup is written
+ *   ?recap=edited      ...and edited by hand
+ *   ?recap=generating  the automatic recap is writing today's standup right now
+ *   ?recap=failed      Generate fails (rate limit)
+ *   ?recap=autoerror   the automatic recap failed today
+ *   ?recap=auto        automatic recaps are on (today shows when it will run)
+ *   ?recap=nohistory   no recent day has enough activity
+ *   ?recap=exported    the source day's Markdown file exists
+ *   ?recap=exportfail  Export Markdown fails
+ *   ?insights=error    the day and week numbers fail to load
+ */
+export function makeRecapMock(opts: { today: string; cardsOf: (d: string) => Card[]; model: () => string; q: URLSearchParams; now: () => number; sleep: (ms: number) => Promise<unknown> }) {
+  const { today, cardsOf, q } = opts;
+  const variant = q.get("recap") ?? "";
+  const entries = new Map<string, RecapEntry>();
+  const generatingUntil = new Map<string, number>();
+  if (variant === "generating") generatingUntil.set(today, opts.now() + 12);
+
+  const sourceFor = (target: string, minMinutes = 120): string | null => {
+    if (variant === "nohistory" && target === today) return null;
+    for (let i = 1; i <= 3; i++) {
+      const d = shiftDay(target, -i);
+      if (activeMinutes(cardsOf(d)) >= minMinutes) return d;
+    }
+    return null;
+  };
+
+  const write = (target: string, source: string, edited = false): RecapEntry => {
+    const work = cardsOf(source).filter((c) => c.category === "Work");
+    return {
+      targetDay: target,
+      sourceDay: source,
+      highlights: work.slice(0, 4).map((c) => c.title),
+      tasks: ["Finish the retry scheduler persistence", "Write the test for empty days in the export"],
+      blockers: target === today || target === shiftDay(today, -1) ? ["Waiting for a review of the activity table migration"] : [],
+      provider: "Anthropic",
+      model: opts.model(),
+      edited,
+      createdAt: dayBounds(target)[0] + 4 * 3600,
+      updatedAt: dayBounds(target)[0] + 4 * 3600,
+    };
+  };
+
+  const entryFor = (target: string): RecapEntry | null => {
+    if (entries.has(target)) return entries.get(target) ?? null;
+    if (target === today && variant !== "today" && variant !== "edited" && variant !== "exported") return null;
+    const source = sourceFor(target);
+    if (!source || !cardsOf(target).length) return null;
+    const e = write(target, source, variant === "edited" && target === today);
+    if (variant === "edited" && target === today) e.highlights = [...e.highlights.slice(0, 2), "Wrote the export test plan by hand"];
+    entries.set(target, e);
+    return e;
+  };
+
+  const view = (target: string): RecapView => {
+    const entry = entryFor(target);
+    const sourceDay = entry?.sourceDay ?? sourceFor(target);
+    const generating = (generatingUntil.get(target) ?? 0) > opts.now();
+    return {
+      targetDay: target,
+      entry,
+      sourceDay,
+      generating,
+      autoError: variant === "autoerror" && target === today && !entry ? "The model provider answered 529 Overloaded three times. Daytrace stops after three attempts a day." : null,
+      exportPath: variant === "exported" && sourceDay ? `C:\\Users\\Preview\\OneDrive\\Daytrace\\${sourceDay}.md` : null,
+      auto: variant === "auto" && target === today && !entry ? { after: "08:00", sourceDay: sourceFor(target, 180), blocked: null } : null,
+    };
+  };
+
+  // ?insights=error: the day and week numbers fail to load (the recap still answers).
+  const failing =
+    q.get("insights") === "error"
+      ? {
+          insights_day: () => {
+            throw "database is locked";
+          },
+          insights_week: () => {
+            throw "database is locked";
+          },
+        }
+      : {};
+
+  return {
+    ...failing,
+    insights_recap: (a: Record<string, unknown>) => {
+      const day = a.day as string;
+      // The automatic recap finishes after a few polls.
+      if (variant === "generating" && day === today && (generatingUntil.get(day) ?? 0) <= opts.now() && !entries.has(day)) {
+        const s = sourceFor(day);
+        if (s) entries.set(day, write(day, s));
+      }
+      return view(day);
+    },
+    insights_generate_recap: async (a: Record<string, unknown>) => {
+      const day = a.day as string;
+      await opts.sleep(1200);
+      if (variant === "failed") throw "The model provider is rate limiting requests (HTTP 429). Retry after 40 seconds.";
+      const source = entries.get(day)?.sourceDay ?? sourceFor(day);
+      if (!source) throw "Not enough captured activity in the previous 3 days to generate a standup.";
+      entries.set(day, { ...write(day, source), createdAt: opts.now(), updatedAt: opts.now() });
+      return view(day);
+    },
+    insights_save_recap: (a: Record<string, unknown>) => {
+      const day = a.day as string;
+      const cur = entryFor(day) ?? write(day, sourceFor(day) ?? shiftDay(day, -1));
+      entries.set(day, {
+        ...cur,
+        highlights: a.highlights as string[],
+        tasks: a.tasks as string[],
+        blockers: a.blockers as string[],
+        provider: entryFor(day) ? cur.provider : "",
+        model: entryFor(day) ? cur.model : "",
+        edited: true,
+        updatedAt: opts.now(),
+      });
+      return view(day);
+    },
+    insights_export_recap: (a: Record<string, unknown>) => {
+      if (q.get("recap") === "exportfail") throw "Access to the path 'C:\\Users\\Preview\\OneDrive\\Daytrace' is denied. (os error 5)";
+      return (a.path as string | null) ?? `C:\\Users\\Preview\\OneDrive\\Daytrace\\${a.day}.md`;
+    },
   };
 }

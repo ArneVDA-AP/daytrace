@@ -1,13 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 
-// Types mirror src-tauri/src/features/insights/*.rs (serde camelCase).
+/*
+ * Daily and Weekly: the insights commands. Types mirror src-tauri/src/features/insights/*.rs
+ * (serde camelCase). The backend also sends a `color` hex on categories (the stored settings hex
+ * or an old fallback palette); it is left out of these types on purpose: views colour every
+ * category mark with colorFor(name), which follows the theme and Windows Contrast themes.
+ */
 
 export type Kind = "focus" | "distraction" | "idle" | "system";
 
 export interface CategoryTotal {
   key: string;
   name: string;
-  color: string;
   kind: Kind;
   secs: number;
 }
@@ -21,7 +25,6 @@ export interface GridCell {
 export interface GridRow {
   key: string;
   name: string;
-  color: string;
   cells: GridCell[];
 }
 
@@ -31,6 +34,7 @@ export interface Marker {
   title: string;
 }
 
+/** Dayflow's per-category grid (unused by the views, which build the grid from the cards). */
 export interface DayGrid {
   /** Minutes since 4 AM. */
   startMinute: number;
@@ -47,6 +51,7 @@ export interface DistractionItem {
   secs: number;
   title: string;
   summary: string;
+  /** Title of the card the distraction was noted in; null for a Distraction-category card. */
   withinCard: string | null;
   cardId: number;
 }
@@ -67,17 +72,21 @@ export interface DayStats {
   dayStartTs: number;
   dayEndTs: number;
   cardCount: number;
+  /** All non-System time, overlaps counted once. */
   capturedSecs: number;
   focusSecs: number;
   distractedSecs: number;
   idleSecs: number;
+  /** Gaps between cards. */
   transitionSecs: number;
   contextSwitches: number;
+  /** Cards with distractions noted inside them. */
   interruptions: number;
   distractedRatio: number;
   totals: CategoryTotal[];
   grid: DayGrid;
   distractions: DistractionItem[];
+  /** Focus time merged across gaps under 5 minutes, in time order. */
   focusBlocks: Block[];
   longestFocus: Block | null;
   programs: NamedSecs[];
@@ -97,11 +106,16 @@ export interface RecapEntry {
 }
 
 export interface RecapView {
+  /** The day the standup is for. */
   targetDay: string;
   entry: RecapEntry | null;
+  /** The entry's source day, or the day a new recap would be written from. */
   sourceDay: string | null;
+  /** A generation for this day is running (the automatic recap or another window). */
   generating: boolean;
+  /** The last automatic generation error for this day. */
   autoError: string | null;
+  /** The export file of the source day, when it exists. */
   exportPath: string | null;
   /** Set for today while there is no recap and automatic recaps are on. */
   auto: AutoPlan | null;
@@ -133,20 +147,35 @@ export interface WeekDaySummary {
 export interface WeekCell {
   key: string;
   name: string;
-  color: string;
   occupancy: number;
   secs: number;
+}
+
+export interface AppUsage {
+  name: string;
+  secs: number;
+  /** The same app the week before (in `appsByCategory`: in the same category); 0 when unused. */
+  previousSecs: number;
+}
+
+export interface AppCategory {
+  key: string;
+  name: string;
+  secs: number;
+  apps: AppUsage[];
 }
 
 export interface WeekStats {
   weekStart: string;
   weekEnd: string;
   days: WeekDaySummary[];
+  /** Top four categories plus Other, without Idle and System. */
   distribution: CategoryTotal[];
   capturedSecs: number;
   focusSecs: number;
   distractedSecs: number;
   idleSecs: number;
+  /** Dayflow's weekly grid; the views use its window (minutes since 4 AM) for the hour charts. */
   workflow: {
     startMinute: number;
     endMinute: number;
@@ -160,18 +189,13 @@ export interface WeekStats {
     bucketMinutes: number;
     rows: { day: string; label: string; values: number[] }[];
   };
+  /** Distracted seconds per clock hour, index 0 = 4 AM. */
   distractionHours: { day: string; label: string; secs: number[] }[];
   contextInsight: string;
   focusBlocks: { day: string; startTs: number; endTs: number; secs: number }[];
-  appsByCategory: { key: string; name: string; color: string; secs: number; apps: AppUsage[] }[];
+  appsByCategory: AppCategory[];
   topApps: AppUsage[];
   programs: NamedSecs[];
-}
-
-export interface AppUsage {
-  name: string;
-  secs: number;
-  previousSecs: number;
 }
 
 export const insightsApi = {
@@ -181,49 +205,6 @@ export const insightsApi = {
   generateRecap: (day: string) => invoke<RecapView>("insights_generate_recap", { day }),
   saveRecap: (day: string, highlights: string[], tasks: string[], blockers: string[]) =>
     invoke<RecapView>("insights_save_recap", { day, highlights, tasks, blockers }),
-  /** Writes the recap file of `day`; without a path it goes to the export folder. Returns the path. */
+  /** Writes the recap file of `day` (a source day); without a path it goes to the export folder. Returns the path. */
   exportRecap: (day: string, path?: string) => invoke<string>("insights_export_recap", { day, path: path ?? null }),
 };
-
-// ---- formatting helpers ----
-
-/** Clock label for minutes since 4 AM, e.g. 300 → "9 AM". */
-export function hourLabel(minuteSince4am: number): string {
-  const h = (4 + Math.floor(minuteSince4am / 60)) % 24;
-  if (h === 0) return "12 AM";
-  if (h === 12) return "12 PM";
-  return h < 12 ? `${h} AM` : `${h - 12} PM`;
-}
-
-/** Whole hours inside [start, end] (minutes since 4 AM), every `step` hours. */
-export function hourTicks(start: number, end: number, step = 1): number[] {
-  const out: number[] = [];
-  for (let m = Math.ceil(start / 60) * 60; m <= end; m += 60 * step) out.push(m);
-  return out;
-}
-
-export function percent(part: number, whole: number): string {
-  return whole > 0 ? `${Math.round((part / whole) * 100)}%` : "0%";
-}
-
-/** "today", "yesterday", a weekday within the last week, else "Fri 9 Oct" (Dayflow's standupDayLabelText). */
-export function relativeDayLabel(day: string, today: string): string {
-  const d = new Date(`${day}T12:00:00`);
-  const t = new Date(`${today}T12:00:00`);
-  const diff = Math.round((t.getTime() - d.getTime()) / 86400000);
-  if (diff === 0) return "today";
-  if (diff === 1) return "yesterday";
-  if (diff >= 2 && diff <= 6) return d.toLocaleDateString("en-GB", { weekday: "long" });
-  return d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
-}
-
-export function shortDate(day: string): string {
-  return new Date(`${day}T12:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
-}
-
-/** Cell background: the category colour mixed into the empty-cell colour by occupancy. */
-export function fill(color: string, occupancy: number): string {
-  if (occupancy <= 0) return "var(--soft)";
-  const pct = Math.round(25 + Math.min(1, occupancy) * 75);
-  return `color-mix(in srgb, ${color} ${pct}%, var(--soft))`;
-}
