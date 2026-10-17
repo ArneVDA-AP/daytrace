@@ -10,7 +10,14 @@
 //!
 //! Every request is refused unless "Allow edits" is on in the app's own settings, whatever the
 //! client checked. Successful writes are appended to agent-writes.log in the data folder
-//! (arguments only, as Dayflow does), so there is something to inspect afterwards.
+//! (arguments only, as Dayflow does), so there is something to inspect afterwards. The log keeps
+//! the retention period of the screenshots and at most `LOG_MAX_BYTES` (`trim_log`), since the
+//! arguments hold activity titles.
+//!
+//! Category names and descriptions follow the Settings rules, and every description goes into
+//! each analysis prompt: a name has at most `NAME_MAX` characters, a description at most
+//! `DESCRIPTION_MAX` after its line breaks become spaces (as Settings does on save), and neither
+//! may hold other control characters.
 //!
 //! Daytrace differences: Idle can't be renamed, recolored or removed (it is drawn as a hatch and
 //! its prompt description is fixed), the last category besides Idle can't be removed, and day
@@ -27,6 +34,14 @@ use crate::types::Category;
 use serde_json::{json, Value};
 
 pub const EDITS_OFF: &str = "Edits are turned off. The user can turn on \"Allow edits\" in Daytrace, under Settings > AI tools.";
+
+/// The longest category name, in characters (Settings > Categories has the same limit).
+pub const NAME_MAX: usize = 60;
+/// The longest category description, in characters, after line breaks became spaces.
+pub const DESCRIPTION_MAX: usize = 500;
+/// agent-writes.log is cut back to half this size when it grows past it.
+pub const LOG_MAX_BYTES: u64 = 1 << 20;
+const LOG_FILE: &str = "agent-writes.log";
 
 /// Colors offered for new categories (src/views/settings/category-colors.ts), in order.
 const NEW_COLORS: [&str; 7] = ["#407BC5", "#287C42", "#73176F", "#BE6B0B", "#048F90", "#876CCA", "#8A8329"];
@@ -81,10 +96,86 @@ fn log_write(state: &AppState, operation: &str, args: &Value) {
     use std::io::Write;
     let at = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string();
     let line = json!({"at": at, "operation": operation, "arguments": args}).to_string();
-    let file = std::fs::OpenOptions::new().create(true).append(true).open(state.paths.root.join("agent-writes.log"));
-    if let Ok(mut f) = file {
-        let _ = writeln!(f, "{line}");
+    let path = log_path(state);
+    {
+        let _log = lock_log();
+        let file = std::fs::OpenOptions::new().create(true).append(true).open(&path);
+        if let Ok(mut f) = file {
+            let _ = writeln!(f, "{line}");
+        }
     }
+    maintain_log(state);
+}
+
+/// Appends and trims one at a time, so a line is never written to a file being replaced.
+fn lock_log() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+pub fn log_path(state: &AppState) -> std::path::PathBuf {
+    state.paths.root.join(LOG_FILE)
+}
+
+/// Trims agent-writes.log to the retention period and the size cap (`trim_log`). Runs after each
+/// write, at startup and hourly from the platform loop.
+pub fn maintain_log(state: &AppState) {
+    let cutoff = crate::timeutil::now_ts() - state.settings().retention_days as i64 * 86400;
+    let _log = lock_log();
+    if let Err(e) = trim_log(&log_path(state), cutoff, LOG_MAX_BYTES) {
+        log::warn!("could not trim {LOG_FILE}: {e}");
+    }
+}
+
+/// When a log line was written (its `at`, Unix seconds).
+fn line_time(line: &str) -> Option<i64> {
+    let v: Value = serde_json::from_str(line).ok()?;
+    chrono::DateTime::parse_from_rfc3339(v.get("at")?.as_str()?).ok().map(|t| t.timestamp())
+}
+
+/// Drops the lines written before `cutoff` (Unix seconds) and lines that can't be read; when the
+/// file is larger than `max_bytes`, keeps the newest lines that fit in half of it. The file is
+/// rewritten only when something goes; it is read from its last `2 * max_bytes` at most.
+pub fn trim_log(path: &std::path::Path, cutoff: i64, max_bytes: u64) -> std::io::Result<()> {
+    use std::io::{BufRead, Read, Seek, SeekFrom};
+    let Ok(mut file) = std::fs::File::open(path) else { return Ok(()) };
+    let size = file.metadata()?.len();
+    // The common case: small, and the first line is still within the retention period.
+    if size <= max_bytes {
+        let mut first = String::new();
+        std::io::BufReader::new(&file).read_line(&mut first)?;
+        if first.is_empty() || line_time(first.trim_end()).is_some_and(|t| t >= cutoff) {
+            return Ok(());
+        }
+        file.seek(SeekFrom::Start(0))?;
+    }
+    let skip = size.saturating_sub(2 * max_bytes);
+    file.seek(SeekFrom::Start(skip))?;
+    let mut raw = Vec::new();
+    (&mut file).take(2 * max_bytes).read_to_end(&mut raw)?;
+    let text = String::from_utf8_lossy(&raw);
+    let mut lines: Vec<&str> = text.lines().collect();
+    if skip > 0 && !lines.is_empty() {
+        lines.remove(0); // starts mid-line
+    }
+    let mut keep: Vec<&str> = lines.into_iter().filter(|l| line_time(l).is_some_and(|t| t >= cutoff)).collect();
+    let total = |v: &[&str]| v.iter().map(|l| l.len() as u64 + 1).sum::<u64>();
+    if total(&keep) > max_bytes {
+        let mut sum = 0u64;
+        let from = keep.iter().rposition(|l| {
+            sum += l.len() as u64 + 1;
+            sum > max_bytes / 2
+        });
+        keep.drain(..from.map(|i| i + 1).unwrap_or(0));
+    }
+    let mut out = keep.join("\n");
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    drop(file);
+    let tmp = path.with_extension("log.tmp");
+    std::fs::write(&tmp, out)?;
+    std::fs::rename(&tmp, path)
 }
 
 // ---- categories ----
@@ -97,7 +188,7 @@ fn change_settings(state: &AppState, f: impl FnOnce(&mut Settings) -> Result<Val
     let out = f(&mut s)?;
     let s = s.sanitized();
     s.save(&state.paths.settings).map_err(internal)?;
-    *state.settings.write().unwrap() = s;
+    state.replace_settings(s);
     Ok(out)
 }
 
@@ -125,9 +216,30 @@ pub fn valid_hex(value: &str) -> Result<String, BridgeError> {
     Ok(format!("#{}", hex.to_ascii_uppercase()))
 }
 
+/// A description as Settings saves it: line breaks (and the spaces around them) become one space.
+/// Refuses one that is too long or holds other control characters.
+pub fn clean_description(raw: &str) -> Result<String, BridgeError> {
+    static BREAKS: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = BREAKS.get_or_init(|| regex::Regex::new(r"\s*[\r\n]+\s*").unwrap());
+    let flat = re.replace_all(raw.trim(), " ").into_owned();
+    if flat.chars().any(char::is_control) {
+        return Err(invalid("A description can't contain control characters."));
+    }
+    if flat.chars().count() > DESCRIPTION_MAX {
+        return Err(invalid(format!("A description can be at most {DESCRIPTION_MAX} characters.")));
+    }
+    Ok(flat)
+}
+
 fn check_new_name(cats: &[Category], name: &str, skip: Option<usize>) -> Result<(), BridgeError> {
     if name.is_empty() {
         return Err(invalid("A category name is required."));
+    }
+    if name.chars().any(char::is_control) {
+        return Err(invalid("A category name can't contain control characters or line breaks."));
+    }
+    if name.chars().count() > NAME_MAX {
+        return Err(invalid(format!("A category name can be at most {NAME_MAX} characters.")));
     }
     if name.eq_ignore_ascii_case(SYSTEM_CATEGORY) {
         return Err(invalid("System is used for cards that couldn't be analyzed. Pick another name."));
@@ -141,7 +253,7 @@ fn check_new_name(cats: &[Category], name: &str, skip: Option<usize>) -> Result<
 fn category_add(state: &AppState, args: &Value) -> Result<Value, BridgeError> {
     let name = str_arg(args, "name").unwrap_or_default();
     let color = str_arg(args, "color").filter(|c| !c.is_empty()).map(|c| valid_hex(&c)).transpose()?;
-    let description = str_arg(args, "description").unwrap_or_default();
+    let description = clean_description(&str_arg(args, "description").unwrap_or_default())?;
     change_settings(state, |s| {
         check_new_name(&s.categories, &name, None)?;
         let color = color.unwrap_or_else(|| {
@@ -158,7 +270,7 @@ fn category_update(state: &AppState, args: &Value) -> Result<Value, BridgeError>
     let name = str_arg(args, "name").filter(|n| !n.is_empty()).ok_or_else(|| invalid("A category name is required."))?;
     let new_name = str_arg(args, "new_name").filter(|n| !n.is_empty());
     let color = str_arg(args, "color").map(|c| valid_hex(&c)).transpose()?;
-    let description = args.get("description").and_then(Value::as_str).map(|d| d.trim().to_string());
+    let description = args.get("description").and_then(Value::as_str).map(clean_description).transpose()?;
     change_settings(state, |s| {
         let i = resolve(&s.categories, &name)?;
         let current = s.categories[i].name.clone();
@@ -395,6 +507,77 @@ mod tests {
         let first: Value = serde_json::from_str(log.lines().next().unwrap()).unwrap();
         assert_eq!(first["operation"], "category_add");
         assert_eq!(first["arguments"]["name"], " Reading ");
+    }
+
+    #[test]
+    fn category_text_is_capped_and_flattened() {
+        let (_d, st) = state(true);
+        let long = "x".repeat(NAME_MAX + 1);
+        assert_eq!(err(handle(&st, "category_add", &json!({"name": long}))).message, "A category name can be at most 60 characters.");
+        let fits = "é".repeat(NAME_MAX);
+        handle(&st, "category_add", &json!({"name": fits})).unwrap();
+        assert_eq!(err(handle(&st, "category_add", &json!({"name": "Two\nlines"}))).code, "invalid_argument");
+        assert_eq!(err(handle(&st, "category_add", &json!({"name": "Bell\u{7}"}))).code, "invalid_argument");
+        assert_eq!(err(handle(&st, "category_update", &json!({"name": "Work", "new_name": "W".repeat(61)}))).code, "invalid_argument");
+        // Descriptions: line breaks become spaces, as in Settings; the result is capped.
+        handle(&st, "category_add", &json!({"name": "Reading", "description": "Books,\r\n  articles\n\npapers "})).unwrap();
+        let cat = |n: &str| st.settings().categories.into_iter().find(|c| c.name == n).unwrap();
+        assert_eq!(cat("Reading").description, "Books, articles papers");
+        handle(&st, "category_update", &json!({"name": "Reading", "description": "a\nb"})).unwrap();
+        assert_eq!(cat("Reading").description, "a b");
+        let e = err(handle(&st, "category_update", &json!({"name": "Reading", "description": "y".repeat(DESCRIPTION_MAX + 1)})));
+        assert_eq!(e.message, "A description can be at most 500 characters.");
+        assert_eq!(err(handle(&st, "category_update", &json!({"name": "Reading", "description": "tab\there"}))).code, "invalid_argument");
+        assert_eq!(err(handle(&st, "category_add", &json!({"name": "Huge", "description": "z\n".repeat(400_000)}))).code, "invalid_argument");
+        handle(&st, "category_update", &json!({"name": "Reading", "description": "y".repeat(DESCRIPTION_MAX)})).unwrap();
+        assert_eq!(cat("Reading").description.len(), DESCRIPTION_MAX);
+        // Nothing refused reached the settings.
+        assert!(!st.settings().categories.iter().any(|c| c.name == "Huge" || c.description.contains('\t')));
+    }
+
+    fn log_line(at: &str, op: &str) -> String {
+        json!({"at": at, "operation": op, "arguments": {"title": "Payroll for Jan"}}).to_string()
+    }
+
+    #[test]
+    fn the_log_keeps_the_retention_period_and_a_size_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent-writes.log");
+        let t = |s: &str| chrono::DateTime::parse_from_rfc3339(s).unwrap().timestamp();
+        trim_log(&path, 0, 1000).unwrap(); // no file: nothing to do
+        assert!(!path.exists());
+        let lines = [log_line("2026-03-01T10:00:00+01:00", "old"), log_line("2026-03-09T10:00:00+01:00", "kept"), "not json".to_string(), log_line("2026-03-10T10:00:00+01:00", "new")];
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+        trim_log(&path, t("2026-03-05T00:00:00+01:00"), 1 << 20).unwrap();
+        let ops: Vec<String> = std::fs::read_to_string(&path).unwrap().lines().map(|l| serde_json::from_str::<Value>(l).unwrap()["operation"].as_str().unwrap().to_string()).collect();
+        assert_eq!(ops, ["kept", "new"]);
+        // Within the period and small: left as it is.
+        let before = std::fs::read_to_string(&path).unwrap();
+        trim_log(&path, t("2026-03-05T00:00:00+01:00"), 1 << 20).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        // Past the cap: the newest lines that fit in half of it stay.
+        let many: Vec<String> = (0..200).map(|i| log_line(&format!("2026-03-10T10:{:02}:{:02}+01:00", i / 60, i % 60), &format!("op{i}"))).collect();
+        std::fs::write(&path, many.join("\n") + "\n").unwrap();
+        let cap = 4000;
+        trim_log(&path, 0, cap).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.len() as u64 <= cap / 2 && !text.is_empty(), "{}", text.len());
+        assert!(text.ends_with(&format!("{}\n", many[199])));
+        assert!(text.lines().all(|l| line_time(l).is_some()), "whole lines only");
+        // A file far past the cap is read from its end only.
+        std::fs::write(&path, many.join("\n").repeat(3)).unwrap();
+        trim_log(&path, 0, cap).unwrap();
+        assert!(std::fs::metadata(&path).unwrap().len() <= cap / 2);
+    }
+
+    #[test]
+    fn writes_trim_the_log() {
+        let (_d, st) = state(true);
+        std::fs::write(log_path(&st), log_line("2020-01-01T10:00:00+01:00", "category_add") + "\n").unwrap();
+        handle(&st, "category_add", &json!({"name": "Reading"})).unwrap();
+        let log = std::fs::read_to_string(log_path(&st)).unwrap();
+        assert_eq!(log.lines().count(), 1, "the line from 2020 is past the retention period");
+        assert!(log.contains("\"Reading\""));
     }
 
     #[test]

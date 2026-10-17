@@ -90,11 +90,7 @@ pub fn kv_set(state: &AppState, key: &str, value: &str) {
 /// the order they were made and the file always matches memory.
 pub fn update_settings(state: &AppState, f: impl FnOnce(&mut Settings)) -> Result<Settings> {
     let _saving = crate::config::save_lock();
-    let s = {
-        let mut g = state.settings.write().unwrap();
-        f(&mut g);
-        g.clone()
-    };
+    let s = state.change_settings_in_memory(f);
     s.save(&state.paths.settings)?;
     Ok(s)
 }
@@ -198,6 +194,21 @@ pub fn pause_recording(app: &AppHandle, choice: PauseChoice) -> Result<()> {
     let s = update_settings(&state, |s| pause::apply_pause(s, choice, &chrono::Local::now()))?;
     log::info!("recording paused ({}), until {:?}", choice.id(), s.pause_until);
     after_change(app);
+    Ok(())
+}
+
+/// A pause asked for by a `daytrace://pause` link: it never shortens the pause that is on
+/// (`pause::extend_pause`).
+pub fn pause_from_link(app: &AppHandle, choice: PauseChoice) -> Result<()> {
+    let state = app.state::<Arc<AppState>>();
+    let mut changed = false;
+    let s = update_settings(&state, |s| changed = pause::extend_pause(s, choice, &chrono::Local::now()))?;
+    if changed {
+        log::info!("recording paused by a link ({}), until {:?}", choice.id(), s.pause_until);
+        after_change(app);
+    } else {
+        log::info!("link pause ({}) left the longer pause that is on (until {:?})", choice.id(), s.pause_until);
+    }
     Ok(())
 }
 
@@ -521,9 +532,9 @@ fn updater(app: &AppHandle, minimized: bool) -> Result<tauri_plugin_updater::Upd
         .on_before_exit(|| {
             log::info!("starting the update installer; Daytrace quits now");
             if let Some(dir) = exe_dir() {
-                match autoupdate::move_mcp_aside(&dir) {
-                    Ok(true) => log::info!("moved {} aside for the installer", autoupdate::MCP_EXE),
-                    Ok(false) => {}
+                match autoupdate::move_mcp_aside(&dir, now_ts()) {
+                    Ok(Some(aside)) => log::info!("moved {} aside for the installer, to {}", autoupdate::MCP_EXE, aside.display()),
+                    Ok(None) => {}
                     Err(e) => log::warn!("could not move {} aside: {e}", autoupdate::MCP_EXE),
                 }
             }
@@ -612,6 +623,11 @@ fn run_installer(app: &AppHandle, update: &tauri_plugin_updater::Update, bytes: 
     let result: Result<()> = if cfg!(windows) { update.install(bytes).map_err(anyhow::Error::from) } else { Err(anyhow::anyhow!("Updates install on Windows only.")) };
     if let Err(e) = &result {
         log::error!("update install failed: {e:#}");
+        // The installer did not start, so daytrace-mcp.exe, moved aside for it, comes back now
+        // (not at the next start) for the MCP clients that launch it.
+        if let Some(dir) = exe_dir() {
+            autoupdate::tidy_mcp_after_update(&dir);
+        }
         set_install(app, |s| {
             s.stage = autoupdate::Stage::Failed;
             s.error = Some(format!("Couldn’t start the installer: {e:#}"));
@@ -686,6 +702,9 @@ pub fn spawn(app: AppHandle) {
             let mut last_notify_check = 0i64;
             let mut last_update_check = 0i64;
             let mut last_install_check = 0i64;
+            // agent-writes.log is trimmed at startup (lib.rs) and after each write; hourly here
+            // too, so its lines go once they pass the retention period.
+            let mut last_log_trim = started;
             if let Some(dir) = exe_dir() {
                 autoupdate::tidy_mcp_after_update(&dir);
             }
@@ -728,6 +747,10 @@ pub fn spawn(app: AppHandle) {
                         start_download(&app, v);
                     }
                     maybe_install(&app, &state);
+                }
+                if now - last_log_trim >= 3600 {
+                    last_log_trim = now;
+                    crate::features::agent_bridge::writes::maintain_log(&state);
                 }
                 std::thread::sleep(Duration::from_secs(1));
             }

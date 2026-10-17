@@ -300,7 +300,17 @@ mod imp {
             let h = handler.clone();
             tokio::spawn(async move {
                 let stream = answer_connection!(connected, h);
-                let _ = stream.disconnect();
+                // DisconnectNamedPipe throws away what the client has not read yet, so a client
+                // that was slow to read got "Lost the connection" for a request that was done.
+                // FlushFileBuffers waits until the client has read the answer or closed its end;
+                // it blocks, so it runs on a blocking thread, which owns the pipe until then.
+                let _ = tokio::task::spawn_blocking(move || {
+                    use std::os::windows::io::AsRawHandle;
+                    // SAFETY: the handle belongs to `stream`, which stays open until after the call.
+                    let _ = unsafe { windows::Win32::Storage::FileSystem::FlushFileBuffers(HANDLE(stream.as_raw_handle() as *mut core::ffi::c_void)) };
+                    let _ = stream.disconnect();
+                })
+                .await;
             });
         }
     }

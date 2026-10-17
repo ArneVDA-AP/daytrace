@@ -10,7 +10,11 @@
 //!   Windows starts `daytrace.exe "<link>"`, so a link arrives as a launch argument like the
 //!   switches (the tauri-plugin-deep-link crate is not needed for that on Windows). Any web page
 //!   can open such a link after a browser prompt, so the link only pauses, for 1 to 1440
-//!   minutes; resuming stays on the command line.
+//!   minutes; resuming stays on the command line. A link never shortens the pause that is on
+//!   (`pause::extend_pause`): a page can't end a pause until resumed or until tomorrow by
+//!   asking for one minute. When Daytrace is not running, a launch that carries only a link
+//!   (taken or refused) quits at once: it would otherwise start the recorder, and Daytrace that
+//!   is not running is not recording anyway.
 //! - `daytrace-mcp cli pause|resume` launches `daytrace.exe` with the switch (no other IPC).
 //!
 //! A launch with a switch or a link never shows the window, also when it was refused.
@@ -39,12 +43,23 @@ pub struct Launch {
     pub minimized: bool,
     /// Switches that were not understood, for the log.
     pub rejected: Vec<String>,
+    /// A `daytrace://` link was among the arguments (taken or refused).
+    pub link: bool,
+    /// `action` came from a link, so it may only lengthen a pause.
+    pub via_link: bool,
+    /// A `--pause` or `--resume` switch was among the arguments (taken or refused).
+    pub switched: bool,
 }
 
 impl Launch {
     /// The window stays hidden: started by Windows at sign-in, by a script or by a link.
     pub fn hidden(&self) -> bool {
         self.minimized || self.action.is_some() || !self.rejected.is_empty()
+    }
+
+    /// Started by a link and nothing else of ours: a first launch like that quits right away.
+    pub fn link_only(&self) -> bool {
+        self.link && !self.minimized && !self.switched
     }
 }
 
@@ -61,8 +76,13 @@ pub fn parse_args<S: AsRef<str>>(args: &[S]) -> Launch {
         };
         match name.to_ascii_lowercase().as_str() {
             "--minimized" => out.minimized = true,
-            "--resume" => out.action = Some(Action::Resume),
+            "--resume" => {
+                out.switched = true;
+                out.action = Some(Action::Resume);
+                out.via_link = false;
+            }
             "--pause" => {
+                out.switched = true;
                 let value = inline.or_else(|| {
                     // The value is the next argument, unless that is another switch.
                     let next = args.get(i + 1).map(|v| v.as_ref().trim().to_string()).filter(|v| !v.starts_with("--"));
@@ -72,14 +92,23 @@ pub fn parse_args<S: AsRef<str>>(args: &[S]) -> Launch {
                     next
                 });
                 match value.as_deref().and_then(|v| PauseChoice::parse(&v.to_ascii_lowercase())) {
-                    Some(c) => out.action = Some(Action::Pause(c)),
+                    Some(c) => {
+                        out.action = Some(Action::Pause(c));
+                        out.via_link = false;
+                    }
                     None => out.rejected.push(format!("--pause {}", value.unwrap_or_default()).trim_end().to_string()),
                 }
             }
-            _ if is_link(a) => match parse_link(a) {
-                Ok(action) => out.action = Some(action),
-                Err(why) => out.rejected.push(format!("{a} ({why})")),
-            },
+            _ if is_link(a) => {
+                out.link = true;
+                match parse_link(a) {
+                    Ok(action) => {
+                        out.action = Some(action);
+                        out.via_link = true;
+                    }
+                    Err(why) => out.rejected.push(format!("{a} ({why})")),
+                }
+            }
             _ => {}
         }
         i += 1;
@@ -121,9 +150,11 @@ pub fn switch_args(action: Action) -> Vec<String> {
     }
 }
 
-/// Applies a pause or resume asked for from outside the window.
-pub fn apply(app: &tauri::AppHandle, action: Action, from: &str) {
+/// Applies a pause or resume asked for from outside the window. `via_link`: it came from a
+/// `daytrace://` link, so a pause that is on only gets longer.
+pub fn apply(app: &tauri::AppHandle, action: Action, via_link: bool, from: &str) {
     let result = match action {
+        Action::Pause(c) if via_link => super::pause_from_link(app, c),
         Action::Pause(c) => super::pause_recording(app, c),
         Action::Resume => super::resume_recording(app),
     };
@@ -142,7 +173,7 @@ pub fn on_second_launch(app: &tauri::AppHandle, args: &[String]) {
         log::warn!("second launch: ignored {r}");
     }
     match launch.action {
-        Some(action) => apply(app, action, "second launch"),
+        Some(action) => apply(app, action, launch.via_link, "second launch"),
         // A refused link or switch does nothing (and opens nothing a web page could use), and
         // `--minimized` keeps the window closed.
         None if launch.hidden() => {}
@@ -301,12 +332,36 @@ mod tests {
         let l = p(&["daytrace://pause?minutes=45"]);
         assert_eq!(l.action, Some(Action::Pause(PauseChoice::Minutes(45))));
         assert!(l.hidden());
+        assert!(l.via_link && l.link_only(), "a first launch by a link alone quits");
         let l = p(&["daytrace://resume"]);
         assert_eq!(l.action, None);
         assert_eq!(l.rejected.len(), 1);
         assert!(l.hidden(), "a refused link opens nothing either");
+        assert!(l.link_only(), "a refused link alone quits too");
         // Other schemes are not links of ours.
         assert_eq!(p(&["https://pause?minutes=5"]), Launch::default());
+        assert!(!p(&["https://pause?minutes=5"]).link_only());
+    }
+
+    #[test]
+    fn link_only_launches_and_link_actions() {
+        // Started at sign-in, by a script or plainly: not a link launch.
+        assert!(!p(&[]).link_only());
+        assert!(!p(&["--minimized"]).link_only());
+        assert!(!p(&["--pause", "30"]).link_only());
+        assert!(!p(&["--pause", "0"]).link_only(), "a refused switch is still a script's launch");
+        // A link with a switch of ours: the switch decides the start; the link's action is marked.
+        let l = p(&["--minimized", "daytrace://pause?minutes=5"]);
+        assert!(!l.link_only() && l.via_link);
+        let l = p(&["--pause", "indefinite", "daytrace://pause?minutes=5"]);
+        assert_eq!((l.action, l.via_link, l.link_only()), (Some(Action::Pause(PauseChoice::Minutes(5))), true, false));
+        // A later switch wins over the link and is not limited like one.
+        let l = p(&["daytrace://pause?minutes=5", "--pause", "indefinite"]);
+        assert_eq!((l.action, l.via_link), (Some(Action::Pause(PauseChoice::Indefinite)), false));
+        let l = p(&["daytrace://pause?minutes=5", "--resume"]);
+        assert_eq!((l.action, l.via_link), (Some(Action::Resume), false));
+        // Unknown arguments next to a link do not make it a script's launch.
+        assert!(p(&["daytrace://pause?minutes=5", "--something-windows-added"]).link_only());
     }
 
     #[test]

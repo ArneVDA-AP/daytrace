@@ -289,7 +289,10 @@ function Intro({
               </span>
               .
             </li>
-            <li>The dashboard is served on this PC only (127.0.0.1). Daytrace starts it when you select Start and stops it when you quit.</li>
+            <li>
+              The dashboard is served on this PC only (127.0.0.1). Daytrace starts it when you select Start and stops it when you quit. While it
+              runs, other accounts on this PC can open it too.
+            </li>
           </ul>
         </section>
 

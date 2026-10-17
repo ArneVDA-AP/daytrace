@@ -153,6 +153,24 @@ pub fn apply_pause(settings: &mut Settings, choice: PauseChoice, now: &DateTime<
     settings.pause_until = pause_end(choice, now);
 }
 
+/// Applies a pause asked for by a `daytrace://pause` link, which any web page can open: it never
+/// shortens the pause that is on. A pause until resumed stays as it is, and of two pause ends the
+/// later one is kept. Returns whether the settings changed.
+pub fn extend_pause(settings: &mut Settings, choice: PauseChoice, now: &DateTime<impl TimeZone>) -> bool {
+    let end = pause_end(choice, now);
+    if !settings.recording_enabled {
+        match (settings.pause_until, end) {
+            // Paused until resumed: nothing lasts longer.
+            (None, _) => return false,
+            (Some(current), Some(new)) if current >= new => return false,
+            _ => {}
+        }
+    }
+    settings.recording_enabled = false;
+    settings.pause_until = end;
+    true
+}
+
 /// Applies a resume (by the user or because the timer ran out).
 pub fn apply_resume(settings: &mut Settings) {
     settings.recording_enabled = true;
@@ -373,6 +391,41 @@ mod tests {
         s.recording_enabled = true;
         s.pause_until = Some(now.timestamp() + 60);
         assert_eq!(due(&s, now.timestamp()), Due::ClearStale);
+    }
+
+    #[test]
+    fn a_link_never_shortens_a_pause() {
+        let z = Zone::brussels_2026();
+        let now = at(&z, 2026, 6, 10, 15, 0);
+        let mut s = Settings { onboarding_completed: true, ..Settings::default() };
+        // Recording: the link pauses.
+        assert!(extend_pause(&mut s, PauseChoice::Minutes(30), &now));
+        assert_eq!(mode(&s), Mode::PausedUntil(now.timestamp() + 1800));
+        // A shorter pause from a link leaves the longer one.
+        assert!(!extend_pause(&mut s, PauseChoice::Minutes(1), &now));
+        assert_eq!(mode(&s), Mode::PausedUntil(now.timestamp() + 1800));
+        assert!(!extend_pause(&mut s, PauseChoice::Minutes(30), &now), "the same end changes nothing");
+        // A longer one extends it.
+        assert!(extend_pause(&mut s, PauseChoice::Minutes(90), &now));
+        assert_eq!(mode(&s), Mode::PausedUntil(now.timestamp() + 5400));
+        // Until tomorrow (4 AM) is later than a minute from now.
+        apply_pause(&mut s, PauseChoice::Tomorrow, &now);
+        let tomorrow = s.pause_until;
+        assert!(!extend_pause(&mut s, PauseChoice::Minutes(1), &now));
+        assert_eq!(s.pause_until, tomorrow);
+        // Until resumed beats any end.
+        apply_pause(&mut s, PauseChoice::Indefinite, &now);
+        assert!(!extend_pause(&mut s, PauseChoice::Minutes(1440), &now));
+        assert_eq!(mode(&s), Mode::PausedIndefinite);
+        // An end that already passed (the loop has not resumed yet) is replaced.
+        s.pause_until = Some(now.timestamp() - 5);
+        assert!(extend_pause(&mut s, PauseChoice::Minutes(1), &now));
+        assert_eq!(s.pause_until, Some(now.timestamp() + 60));
+        // Recording on with a stale end left over: the link pauses.
+        s.recording_enabled = true;
+        s.pause_until = Some(now.timestamp() + 999_999);
+        assert!(extend_pause(&mut s, PauseChoice::Minutes(5), &now));
+        assert_eq!(mode(&s), Mode::PausedUntil(now.timestamp() + 300));
     }
 
     #[test]

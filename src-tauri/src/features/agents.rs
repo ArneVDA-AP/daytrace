@@ -17,6 +17,10 @@
 //! - Dayflow's wrapper script (lease file, host PID polling, fallback to the last working
 //!   version) is not needed: the job object ties the tree to Daytrace and the version is fixed.
 //!
+//! - The dashboard runs on a random port and is shown through a small proxy (`proxy.rs`) that
+//!   answers only requests for 127.0.0.1 or localhost at its own port and refuses requests from
+//!   other sites, so a web page can neither read it through DNS rebinding nor start scans.
+//!
 //! As in Dayflow, AGENTPLAYBACK_HOME points into Daytrace's data folder (`<data dir>\agents`), so
 //! the scan results and the cached price list live next to Daytrace's own data.
 
@@ -31,6 +35,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
+
+pub mod proxy;
 
 /// The npm package and the exact version Daytrace runs (read before pinning: no runtime
 /// dependencies, Node >= 20, listens on 127.0.0.1 only, one outgoing request for a price list).
@@ -261,11 +267,21 @@ pub struct LaunchSpec {
     pub cwd: Option<PathBuf>,
 }
 
-/// `npx --yes --prefer-offline agentplayback@<pin> --no-open --port <port>`, run in the data
-/// folder. npx passes everything after the package to it. `--prefer-offline` lets later starts use
-/// npm's cache without asking the registry (the version cannot change); node's folder goes first
-/// on PATH so npx and the scripts it starts find the same node even when Daytrace was started
-/// before Node.js was installed.
+/// `npx --yes --prefer-offline --workspaces=false agentplayback@<pin> --no-open --port <port>`,
+/// run in the data folder. npx passes everything after the package to it. `--prefer-offline` lets
+/// later starts use npm's cache without asking the registry (the version cannot change); node's
+/// folder goes first on PATH so npx and the scripts it starts find the same node even when
+/// Daytrace was started before Node.js was installed.
+///
+/// The folder is npm's project folder ("local prefix"), so nothing above it counts: npm walks up
+/// from the working folder to the first one with a `package.json` or a `node_modules` folder and
+/// uses its `node_modules` and `.npmrc`. Without a `package.json` of our own that walk reached
+/// `C:\`, where any local account may create `C:\node_modules\agentplayback` (code npx would
+/// run as this user). `prepare_dir` writes `{"private":true}` there. With a `package.json` npm
+/// still walks on to look for a workspace root (a `package.json` higher up whose `workspaces`
+/// list names this folder, which would bring back that folder's `.npmrc`); `--workspaces=false`
+/// on the command line stops the walk at the first match (@npmcli/config `loadLocalPrefix`, npm
+/// 10.8 with Node 20 and 10.9 with Node 22, checked with `npm prefix` and `npx -c`).
 ///
 /// The GitHub CLI sees an empty config folder and no token: the dashboard's server answers
 /// `/api/github/status` and `/api/github/star` by running `gh` with the user's GitHub sign-in
@@ -285,6 +301,7 @@ pub fn npx_spec(node: &NodeInfo, port: u16, data_dir: &Path, path_var: Option<&s
         args: vec![
             "--yes".into(),
             "--prefer-offline".into(),
+            "--workspaces=false".into(),
             format!("{PACKAGE}@{PINNED_VERSION}"),
             "--no-open".into(),
             "--port".into(),
@@ -307,33 +324,45 @@ pub fn npx_spec(node: &NodeInfo, port: u16, data_dir: &Path, path_var: Option<&s
 
 /// An empty folder in the data folder that stands in for the GitHub CLI's config (see `npx_spec`).
 const GH_CONFIG_DIR: &str = "gh-config";
+/// The `package.json` that makes the data folder npm's project folder (see `npx_spec`).
+pub const PACKAGE_JSON: &str = r#"{"private":true}"#;
+
+/// Creates the data folder with its stand-in GitHub CLI folder and its `package.json` (written
+/// again when it holds anything else), before every start.
+pub fn prepare_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir.join(GH_CONFIG_DIR))?;
+    let file = dir.join("package.json");
+    if std::fs::read(&file).ok().as_deref() != Some(PACKAGE_JSON.as_bytes()) {
+        std::fs::write(&file, PACKAGE_JSON)?;
+    }
+    Ok(())
+}
 /// The port of the last start, in the data folder.
 const PORT_FILE: &str = "port.txt";
 
-/// A port nobody listens on right now, on the loopback address the dashboard binds to.
+/// A port nobody listens on right now, on the loopback address the dashboard binds to: the
+/// dashboard's own port, new for every start and never shown.
 pub fn free_port() -> std::io::Result<u16> {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
     Ok(listener.local_addr()?.port())
 }
 
-fn port_is_free(port: u16) -> bool {
-    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
-}
-
-/// The port of the last start when it is still free, else a new free one (saved for next time).
-/// The dashboard keeps its own settings (skin, project colors, dismissed hints) in the browser
-/// storage of its origin, which includes the port; the same port keeps them across starts.
-pub fn pick_port(data_dir: &Path) -> std::io::Result<u16> {
+/// The listener of the port the dashboard is shown on (the proxy's): the port of the last start
+/// when it is still free, else a new free one (saved for next time). The dashboard keeps its own
+/// settings (skin, project colors, dismissed hints) in the browser storage of its origin, which
+/// includes the port; the same port keeps them across starts.
+pub fn bind_port(data_dir: &Path) -> std::io::Result<std::net::TcpListener> {
     let file = data_dir.join(PORT_FILE);
     let last = std::fs::read_to_string(&file).ok().and_then(|s| s.trim().parse::<u16>().ok()).filter(|p| *p >= 1024);
-    if let Some(port) = last.filter(|p| port_is_free(*p)) {
-        return Ok(port);
+    if let Some(listener) = last.and_then(|p| std::net::TcpListener::bind(("127.0.0.1", p)).ok()) {
+        return Ok(listener);
     }
-    let port = free_port()?;
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+    let port = listener.local_addr()?.port();
     if let Err(e) = std::fs::write(&file, port.to_string()) {
         log::warn!("agentplayback: could not save the port: {e}");
     }
-    Ok(port)
+    Ok(listener)
 }
 
 /// The port from the line the CLI prints once it listens:
@@ -387,6 +416,8 @@ struct Run {
     child: Arc<Mutex<Child>>,
     stdout: Lines,
     stderr: Lines,
+    /// The proxy the dashboard is shown through; it stops when the run ends.
+    gate: Option<proxy::Gate>,
 }
 
 struct Inner {
@@ -470,6 +501,11 @@ impl Host {
 
     /// Starts `spec` unless a run is starting or running. Returns the state afterwards.
     pub fn start_with(self: &Arc<Self>, spec: LaunchSpec, timeout: Duration) -> RunState {
+        self.start_behind(spec, timeout, None)
+    }
+
+    /// `start_with`, with the dashboard shown through `gate` (its port goes in the URL).
+    pub fn start_behind(self: &Arc<Self>, spec: LaunchSpec, timeout: Duration, gate: Option<proxy::Gate>) -> RunState {
         let mut inner = lock(&self.inner);
         if matches!(inner.state, RunState::Starting { .. } | RunState::Running { .. }) {
             return inner.state.clone();
@@ -516,7 +552,7 @@ impl Host {
             child.stderr.take().map(|p| self.spawn_reader(p, stderr.clone(), generation, false)),
         ];
         let child = Arc::new(Mutex::new(child));
-        inner.run = Some(Run { child: child.clone(), stdout, stderr });
+        inner.run = Some(Run { child: child.clone(), stdout, stderr, gate });
         inner.state = RunState::Starting { since: now_ts() };
         drop(inner);
 
@@ -579,8 +615,15 @@ impl Host {
         let mut inner = lock(&self.inner);
         if inner.generation == generation {
             if let RunState::Starting { since } = inner.state {
-                log::info!("agentplayback: dashboard ready on port {port}");
-                inner.state = RunState::Running { url: dashboard_url(port), since };
+                let shown = match inner.run.as_ref().and_then(|r| r.gate.as_ref()) {
+                    Some(gate) => {
+                        gate.set_upstream(port);
+                        gate.port()
+                    }
+                    None => port,
+                };
+                log::info!("agentplayback: dashboard ready on port {port}, shown on port {shown}");
+                inner.state = RunState::Running { url: dashboard_url(shown), since };
             }
         }
     }
@@ -700,11 +743,13 @@ pub async fn agents_start(state: S<'_>) -> CmdResult<AgentsStatus> {
     }
     let Ok(node) = refresh_node().await else { return Ok(status_of(&state)) };
     let dir = data_dir(&state);
-    std::fs::create_dir_all(dir.join(GH_CONFIG_DIR)).map_err(|e| format!("Couldn’t create {}: {e}", dir.display()))?;
-    let port = pick_port(&dir).map_err(|e| format!("Couldn’t find a free local port: {e}"))?;
-    let spec = npx_spec(&node, port, &dir, std::env::var("PATH").ok().as_deref(), cfg!(windows));
+    prepare_dir(&dir).map_err(|e| format!("Couldn’t prepare {}: {e}", dir.display()))?;
+    let shown = bind_port(&dir).map_err(|e| format!("Couldn’t find a free local port: {e}"))?;
+    let upstream = free_port().map_err(|e| format!("Couldn’t find a free local port: {e}"))?;
+    let gate = proxy::Gate::start(shown, upstream).map_err(|e| format!("Couldn’t serve the dashboard on this PC: {e}"))?;
+    let spec = npx_spec(&node, upstream, &dir, std::env::var("PATH").ok().as_deref(), cfg!(windows));
     let h = host().clone();
-    tauri::async_runtime::spawn_blocking(move || h.start_with(spec, START_TIMEOUT)).await.map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || h.start_behind(spec, START_TIMEOUT, Some(gate))).await.map_err(|e| e.to_string())?;
     Ok(status_of(&state))
 }
 
@@ -973,7 +1018,7 @@ mod tests {
         let dir = PathBuf::from(r"C:\Users\arne\AppData\Roaming\dev.daytrace.app\agents");
         let spec = npx_spec(&node, 53124, &dir, Some(r"C:\Windows\system32"), true);
         assert_eq!(spec.program, PathBuf::from(r"C:\Program Files\nodejs\npx.cmd"));
-        assert_eq!(spec.args, ["--yes", "--prefer-offline", "agentplayback@1.2.1", "--no-open", "--port", "53124"]);
+        assert_eq!(spec.args, ["--yes", "--prefer-offline", "--workspaces=false", "agentplayback@1.2.1", "--no-open", "--port", "53124"]);
         assert_eq!(spec.cwd.as_deref(), Some(dir.as_path()));
         let env: std::collections::HashMap<_, _> = spec.env.iter().cloned().collect();
         assert_eq!(env["AGENTPLAYBACK_HOME"], dir.display().to_string());
@@ -988,19 +1033,36 @@ mod tests {
     }
 
     #[test]
+    fn the_data_folder_is_npms_project_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("agents");
+        prepare_dir(&dir).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("package.json")).unwrap(), r#"{"private":true}"#);
+        assert!(dir.join(GH_CONFIG_DIR).is_dir());
+        // Anything else in it is replaced; a second run leaves it alone.
+        std::fs::write(dir.join("package.json"), r#"{"private":true,"workspaces":["x"],"dependencies":{"agentplayback":"*"}}"#).unwrap();
+        prepare_dir(&dir).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("package.json")).unwrap(), PACKAGE_JSON);
+        prepare_dir(&dir).unwrap();
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "package.json and gh-config only");
+    }
+
+    #[test]
     fn keeps_the_port_while_it_is_free() {
         let tmp = tempfile::tempdir().unwrap();
-        let first = pick_port(tmp.path()).unwrap();
+        let port = |l: std::net::TcpListener| l.local_addr().unwrap().port();
+        let first = port(bind_port(tmp.path()).unwrap());
         assert_eq!(std::fs::read_to_string(tmp.path().join(PORT_FILE)).unwrap(), first.to_string());
-        assert_eq!(pick_port(tmp.path()).unwrap(), first);
-        // Taken by someone else: a new port, saved for next time.
-        let _taken = std::net::TcpListener::bind(("127.0.0.1", first)).unwrap();
-        let second = pick_port(tmp.path()).unwrap();
+        let again = bind_port(tmp.path()).unwrap();
+        assert_eq!(again.local_addr().unwrap().port(), first);
+        // Taken by someone else (here: still held): a new port, saved for next time.
+        let second = port(bind_port(tmp.path()).unwrap());
         assert_ne!(second, first);
         assert_eq!(std::fs::read_to_string(tmp.path().join(PORT_FILE)).unwrap(), second.to_string());
+        drop(again);
         // A damaged file is ignored.
         std::fs::write(tmp.path().join(PORT_FILE), "eighty").unwrap();
-        assert!(pick_port(tmp.path()).unwrap() >= 1024);
+        assert!(port(bind_port(tmp.path()).unwrap()) >= 1024);
     }
 
     #[test]
@@ -1117,6 +1179,24 @@ mod tests {
         std::thread::sleep(Duration::from_millis(200));
         assert!(!alive(&grandchild), "the server process outlived Stop");
         assert_eq!(h.state(), RunState::Stopped);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_url_is_the_proxys_and_the_proxy_ends_with_the_run() {
+        let h = Arc::new(Host::default());
+        let gate = proxy::Gate::start(std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap(), 1).unwrap();
+        let shown = gate.port();
+        h.start_behind(sh("echo '  agentplayback is running at http://localhost:40406/'; sleep 60"), Duration::from_secs(10), Some(gate));
+        let s = wait_for(&h, |s| matches!(s, RunState::Running { .. }));
+        assert_eq!(s, RunState::Running { url: dashboard_url(shown), since: match s { RunState::Running { since, .. } => since, _ => 0 } });
+        assert!(std::net::TcpStream::connect(("127.0.0.1", shown)).is_ok());
+        h.stop();
+        let until = Instant::now() + Duration::from_secs(5);
+        while std::net::TcpStream::connect(("127.0.0.1", shown)).is_ok() {
+            assert!(Instant::now() < until, "the proxy outlived Stop");
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     #[cfg(unix)]

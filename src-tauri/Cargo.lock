@@ -891,6 +891,7 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "env_logger",
+ "httparse",
  "iana-time-zone",
  "image",
  "jpeg-encoder",

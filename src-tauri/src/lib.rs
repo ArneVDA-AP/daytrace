@@ -54,10 +54,20 @@ pub fn run() {
                 .unwrap_or(app.path().app_data_dir()?);
             std::fs::create_dir_all(&root)?;
             init_logging(&root);
+            // The single-instance plugin hands a second launch to the running Daytrace and ends
+            // it before this runs, so here no Daytrace was running. A launch caused only by a
+            // daytrace:// link (which any web page can open) quits without starting the
+            // recorder: Daytrace was not recording, and a pause link has nothing to pause.
+            if launch.link_only() {
+                log::info!("started by a daytrace:// link while Daytrace was not running; quitting without recording");
+                app.handle().cleanup_before_exit();
+                std::process::exit(0);
+            }
             log::info!("Daytrace {} starting; data dir {}", env!("CARGO_PKG_VERSION"), root.display());
             let paths = config::Paths::new(root)?;
             let state = Arc::new(state::AppState::new(paths)?);
             features::platform_extras::init(&state);
+            features::agent_bridge::writes::maintain_log(&state);
             app.manage(state.clone());
             tray::create(app.handle())?;
             // A pause or resume asked for at launch is applied before the recorder starts.
@@ -65,7 +75,7 @@ pub fn run() {
                 log::warn!("launch: ignored {r}");
             }
             if let Some(action) = launch.action {
-                features::platform_extras::switches::apply(app.handle(), action, "launch");
+                features::platform_extras::switches::apply(app.handle(), action, launch.via_link, "launch");
             }
             features::platform_extras::spawn(app.handle().clone());
             capture::spawn(state.clone());

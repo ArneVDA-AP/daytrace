@@ -278,7 +278,7 @@ function CategoryRow({
           <label htmlFor={`${id}-name`} className="sr-only">
             Category name
           </label>
-          <Input id={`${id}-name`} data-name={c.name} {...name.bind} autoComplete="off" aria-describedby={`${id}-err`} />
+          <Input id={`${id}-name`} data-name={c.name} {...name.bind} maxLength={60} autoComplete="off" aria-describedby={`${id}-err`} />
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <label htmlFor={`${id}-counts`} className="text-meta whitespace-nowrap text-muted-foreground">
@@ -321,6 +321,7 @@ function CategoryRow({
           id={`${id}-desc`}
           {...description.bind}
           rows={2}
+          maxLength={500}
           placeholder="What belongs in it, for the model"
           autoComplete="off"
           aria-describedby={`${id}-err`}

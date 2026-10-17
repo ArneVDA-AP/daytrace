@@ -52,6 +52,8 @@ jpeg-encoder = { version = "0.7.1", features = ["simd"] }
 regex = { version = "1.13.1", default-features = false, features = ["std", "unicode-perl"] }
 iana-time-zone = "0.1.65"
 tauri-plugin-updater = "2.14.0"
+# The Agents section's proxy reads HTTP heads with it (already in the tree through reqwest/hyper).
+httparse = "1.10.1"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

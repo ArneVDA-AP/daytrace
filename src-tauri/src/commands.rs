@@ -21,44 +21,86 @@ pub struct SettingsDto {
     settings: Settings,
     has_api_key: bool,
     data_dir: String,
+    /// The revision of `settings` (AppState::settings_revision); a save based on them passes it
+    /// back as `baseRevision`.
+    revision: u64,
 }
 
 #[tauri::command]
 pub fn get_settings(state: S) -> SettingsDto {
+    let (settings, revision) = state.settings_with_revision();
     SettingsDto {
-        settings: state.settings(),
-        has_api_key: {
-            let s = state.settings();
-            crate::config::stored_key(s.provider, &s.base_url).is_some()
-        },
+        has_api_key: crate::config::stored_key(settings.provider, &settings.base_url).is_some(),
+        settings,
         data_dir: state.paths.root.to_string_lossy().to_string(),
+        revision,
     }
 }
 
+/// The code of the error `save_settings` gives for a save based on settings that changed since.
+pub const SETTINGS_CHANGED: &str = "settings_changed";
+
+/// Why `save_settings` refused. A stale save is an object, `{code: "settings_changed", message,
+/// revision}`, so the window can re-read and apply its change again; anything else stays the
+/// plain message every command gives.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum SaveError {
+    Stale { code: &'static str, message: String, revision: u64 },
+    Failed(String),
+}
+
+impl From<String> for SaveError {
+    fn from(m: String) -> SaveError {
+        SaveError::Failed(m)
+    }
+}
+
+impl From<&str> for SaveError {
+    fn from(m: &str) -> SaveError {
+        SaveError::Failed(m.to_string())
+    }
+}
+
+/// Writes settings from the window: refused when `base_revision` is given and the settings
+/// changed after it (by the tray, an AI tool, the platform loop or another save); otherwise the
+/// file, then memory, under the save lock like every other settings change.
+pub fn store_settings(state: &AppState, mut settings: Settings, base_revision: Option<u64>) -> Result<u64, SaveError> {
+    let _saving = crate::config::save_lock();
+    let current = state.settings_revision();
+    if base_revision.is_some_and(|base| base != current) {
+        return Err(SaveError::Stale {
+            code: SETTINGS_CHANGED,
+            message: "The settings changed while this change was being saved. Try again.".into(),
+            revision: current,
+        });
+    }
+    crate::features::chat::clear_model_on_provider_change(&state.settings(), &mut settings);
+    settings.save(&state.paths.settings).map_err(err)?;
+    Ok(state.replace_settings(settings))
+}
+
+/// `base_revision`: the revision of the settings the change was made on (from `get_settings`).
+/// Callers that leave it out are not checked, as before revisions existed.
 #[tauri::command]
-pub fn save_settings(app: tauri::AppHandle, state: S, settings: Settings, api_key: Option<String>) -> CmdResult<SettingsDto> {
+pub fn save_settings(app: tauri::AppHandle, state: S, settings: Settings, api_key: Option<String>, base_revision: Option<u64>) -> Result<SettingsDto, SaveError> {
     crate::features::insights::check_settings(&settings)?;
-    let mut settings = settings.sanitized();
+    let settings = settings.sanitized();
     // Everything that can refuse the request is checked before anything is written.
     let key = api_key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
     let slot = match &key {
         Some(_) => Some(crate::config::key_slot(settings.provider, &settings.base_url).ok_or("This provider does not use an API key")?),
         None => None,
     };
-    {
-        // File and memory change together, in the same order as every other settings change.
-        let _saving = crate::config::save_lock();
-        crate::features::chat::clear_model_on_provider_change(&state.settings(), &mut settings);
-        settings.save(&state.paths.settings).map_err(err)?;
-        *state.settings.write().unwrap() = settings.clone();
-    }
+    let launch_at_login = settings.launch_at_login;
+    store_settings(&state, settings, base_revision)?;
     if let (Some(slot), Some(k)) = (slot, key) {
         crate::platform::secret_set(&slot, &k).map_err(err)?;
     }
     {
         use tauri_plugin_autostart::ManagerExt;
         let al = app.autolaunch();
-        let _ = if settings.launch_at_login { al.enable() } else { al.disable() };
+        let _ = if launch_at_login { al.enable() } else { al.disable() };
     }
     crate::tray::refresh(&app);
     Ok(get_settings(state))
@@ -236,4 +278,60 @@ pub fn export_markdown(state: S, from_day: String, to_day: String, path: String)
 pub fn open_data_dir(app: tauri::AppHandle, state: S) -> CmdResult<()> {
     use tauri_plugin_opener::OpenerExt;
     app.opener().open_path(state.paths.root.to_string_lossy(), None::<&str>).map_err(err)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Paths;
+
+    fn state() -> (tempfile::TempDir, AppState) {
+        let dir = tempfile::tempdir().unwrap();
+        let st = AppState::new(Paths::new(dir.path().to_path_buf()).unwrap()).unwrap();
+        (dir, st)
+    }
+
+    #[test]
+    fn a_save_from_old_settings_is_refused() {
+        let (_d, st) = state();
+        let (mut mine, base) = st.settings_with_revision();
+        // An AI tool adds a category (the bridge) after the window read the settings.
+        st.settings.write().unwrap().allow_agent_edits = true;
+        crate::features::agent_bridge::writes::handle(&st, "category_add", &serde_json::json!({"name": "Reading"})).unwrap();
+        assert!(st.settings_revision() > base);
+        // The window's save made on the old copy would remove it: refused, with the revision now.
+        mine.retention_days = 3;
+        let e = store_settings(&st, mine.clone(), Some(base)).unwrap_err();
+        assert_eq!(e, SaveError::Stale { code: SETTINGS_CHANGED, message: "The settings changed while this change was being saved. Try again.".into(), revision: st.settings_revision() });
+        assert!(st.settings().categories.iter().any(|c| c.name == "Reading"));
+        assert_eq!(st.settings().retention_days, Settings::default().retention_days);
+        // Re-read and applied again, it goes through and counts as a change.
+        let (mut fresh, rev) = st.settings_with_revision();
+        fresh.retention_days = 3;
+        assert_eq!(store_settings(&st, fresh, Some(rev)).unwrap(), rev + 1);
+        assert_eq!(st.settings().retention_days, 3);
+        assert!(Settings::load(&st.paths.settings).categories.iter().any(|c| c.name == "Reading"));
+        // Without a base revision nothing is checked (callers from before revisions).
+        assert!(store_settings(&st, mine, None).is_ok());
+    }
+
+    #[test]
+    fn every_saved_change_counts() {
+        let (_d, st) = state();
+        let r0 = st.settings_revision();
+        crate::features::platform_extras::update_settings(&st, |s| s.recording_enabled = false).unwrap();
+        assert_eq!(st.settings_revision(), r0 + 1, "tray, pause, platform loop");
+        let (s, r1) = st.settings_with_revision();
+        assert_eq!(r1, r0 + 1);
+        assert!(!s.recording_enabled);
+        store_settings(&st, s, Some(r1)).unwrap();
+        assert_eq!(st.settings_revision(), r1 + 1, "the window's save");
+    }
+
+    #[test]
+    fn errors_serialize_for_the_window() {
+        let stale = SaveError::Stale { code: SETTINGS_CHANGED, message: "m".into(), revision: 7 };
+        assert_eq!(serde_json::to_value(&stale).unwrap(), serde_json::json!({"code": "settings_changed", "message": "m", "revision": 7}));
+        assert_eq!(serde_json::to_value(SaveError::from("plain")).unwrap(), serde_json::json!("plain"));
+    }
 }

@@ -112,38 +112,76 @@ pub fn installer_args(minimized: bool) -> Vec<String> {
 /// running all day, and Windows does not let the installer replace a running program, but it
 /// does let it be renamed.
 pub const MCP_EXE: &str = "daytrace-mcp.exe";
-const MCP_ASIDE: &str = "daytrace-mcp.exe.old";
 
-/// Before the installer runs: moves `daytrace-mcp.exe` aside so the installer can write the new
-/// one. Running copies keep working from the renamed file. Returns whether it was moved.
-pub fn move_mcp_aside(dir: &Path) -> std::io::Result<bool> {
-    let exe = dir.join(MCP_EXE);
-    if !exe.is_file() {
-        return Ok(false);
-    }
-    let aside = dir.join(MCP_ASIDE);
-    // A copy left from an earlier update that is no longer running.
-    let _ = std::fs::remove_file(&aside);
-    std::fs::rename(&exe, &aside)?;
-    Ok(true)
+/// The name a copy moved aside at `stamp` (Unix seconds) gets, `n` counting names already taken:
+/// `daytrace-mcp.exe.1800000000.old`, `daytrace-mcp.exe.1800000000-1.old`. Each update has a
+/// name of its own, because a copy moved aside by an earlier update may still be running (and so
+/// can be neither replaced nor removed). The uninstaller removes `daytrace-mcp*.old`.
+fn aside_name(stamp: i64, n: u32) -> String {
+    if n == 0 { format!("{MCP_EXE}.{stamp}.old") } else { format!("{MCP_EXE}.{stamp}-{n}.old") }
 }
 
-/// At startup: removes the copy moved aside by an update, or puts it back when the update did
-/// not install a new one. A copy still running stays until a later start.
-pub fn tidy_mcp_after_update(dir: &Path) {
-    let aside = dir.join(MCP_ASIDE);
-    if !aside.is_file() {
-        return;
+/// When a copy was moved aside, read from its name; 0 for 0.3.0's `daytrace-mcp.exe.old`. None
+/// for files that are not such copies.
+fn aside_stamp(name: &str) -> Option<(i64, u32)> {
+    let lower = name.to_ascii_lowercase();
+    let middle = lower.strip_prefix(&format!("{MCP_EXE}."))?.strip_suffix("old")?;
+    if middle.is_empty() {
+        return Some((0, 0));
     }
+    let middle = middle.strip_suffix('.')?;
+    let (stamp, n) = middle.split_once('-').unwrap_or((middle, "0"));
+    Some((stamp.parse().ok()?, n.parse().ok()?))
+}
+
+/// The copies moved aside in `dir`, oldest first.
+fn asides(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut found: Vec<((i64, u32), std::path::PathBuf)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| Some((aside_stamp(&e.file_name().to_string_lossy())?, e.path())))
+        .filter(|(_, p)| p.is_file())
+        .collect();
+    found.sort();
+    found.into_iter().map(|(_, p)| p).collect()
+}
+
+/// Before the installer runs: moves `daytrace-mcp.exe` aside so the installer can write the new
+/// one. Running copies keep working from the renamed file. Returns the copy's new path, or None
+/// when there was nothing to move.
+pub fn move_mcp_aside(dir: &Path, now: i64) -> std::io::Result<Option<std::path::PathBuf>> {
     let exe = dir.join(MCP_EXE);
-    if exe.is_file() {
-        if std::fs::remove_file(&aside).is_ok() {
-            log::info!("removed {MCP_ASIDE} left by the update");
+    if !exe.is_file() {
+        return Ok(None);
+    }
+    let aside = (0..100).map(|n| dir.join(aside_name(now, n))).find(|p| !p.exists()).ok_or_else(|| std::io::Error::other("no free name to move it aside"))?;
+    std::fs::rename(&exe, &aside)?;
+    Ok(Some(aside))
+}
+
+/// At startup, and when the installer could not be started: puts the newest copy back when no
+/// `daytrace-mcp.exe` is in place (the update did not install one), and removes the other copies.
+/// A copy that is still running can't be removed and stays until a later start.
+pub fn tidy_mcp_after_update(dir: &Path) {
+    let mut left = asides(dir);
+    let exe = dir.join(MCP_EXE);
+    if !exe.is_file()
+        && let Some(newest) = left.pop()
+    {
+        match std::fs::rename(&newest, &exe) {
+            Ok(()) => log::info!("{MCP_EXE} was not installed by the update; put the previous one back"),
+            Err(e) => {
+                log::warn!("could not put {MCP_EXE} back: {e}");
+                left.push(newest);
+            }
         }
-    } else if let Err(e) = std::fs::rename(&aside, &exe) {
-        log::warn!("could not put {MCP_EXE} back: {e}");
-    } else {
-        log::info!("the update did not install {MCP_EXE}; put the previous one back");
+    }
+    for old in left {
+        match std::fs::remove_file(&old) {
+            Ok(()) => log::info!("removed {} left by an update", old.display()),
+            Err(e) => log::info!("kept {} (still in use?): {e}", old.display()),
+        }
     }
 }
 
@@ -190,27 +228,69 @@ mod tests {
         assert_eq!(installer_args(false), ["/R", "/ARGS"]);
     }
 
+    fn names(d: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(d).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn aside_names() {
+        assert_eq!(aside_name(1_800_000_000, 0), "daytrace-mcp.exe.1800000000.old");
+        assert_eq!(aside_name(1_800_000_000, 2), "daytrace-mcp.exe.1800000000-2.old");
+        assert_eq!(aside_stamp("daytrace-mcp.exe.1800000000.old"), Some((1_800_000_000, 0)));
+        assert_eq!(aside_stamp("Daytrace-MCP.exe.1800000000-2.OLD"), Some((1_800_000_000, 2)));
+        assert_eq!(aside_stamp("daytrace-mcp.exe.old"), Some((0, 0)), "the name 0.3.0 used");
+        for other in ["daytrace-mcp.exe", "daytrace.exe.old", "daytrace-mcp.exe.x.old", "daytrace-mcp.exe.1.2.old", "daytrace-mcp.exe..old", "notes.old"] {
+            assert_eq!(aside_stamp(other), None, "{other}");
+        }
+    }
+
     #[test]
     fn moves_the_mcp_server_aside_and_back() {
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path();
-        assert!(!move_mcp_aside(d).unwrap(), "nothing to move");
+        let t = 1_800_000_000;
+        assert_eq!(move_mcp_aside(d, t).unwrap(), None, "nothing to move");
         std::fs::write(d.join(MCP_EXE), "old").unwrap();
-        assert!(move_mcp_aside(d).unwrap());
-        assert!(!d.join(MCP_EXE).exists() && d.join(MCP_ASIDE).exists());
-        // The installer did not write a new one: the old one comes back.
+        let aside = move_mcp_aside(d, t).unwrap().unwrap();
+        assert_eq!(aside, d.join("daytrace-mcp.exe.1800000000.old"));
+        assert!(!d.join(MCP_EXE).exists());
+        // The installer did not write a new one (or could not be started): the old one comes back.
         tidy_mcp_after_update(d);
         assert_eq!(std::fs::read_to_string(d.join(MCP_EXE)).unwrap(), "old");
-        assert!(!d.join(MCP_ASIDE).exists());
+        assert_eq!(names(d), [MCP_EXE]);
         // The installer wrote a new one: the old copy goes.
-        assert!(move_mcp_aside(d).unwrap());
+        move_mcp_aside(d, t).unwrap();
         std::fs::write(d.join(MCP_EXE), "new").unwrap();
         tidy_mcp_after_update(d);
         assert_eq!(std::fs::read_to_string(d.join(MCP_EXE)).unwrap(), "new");
-        assert!(!d.join(MCP_ASIDE).exists());
-        // A stale copy from an earlier update is replaced on the next move.
-        std::fs::write(d.join(MCP_ASIDE), "stale").unwrap();
-        assert!(move_mcp_aside(d).unwrap());
-        assert_eq!(std::fs::read_to_string(d.join(MCP_ASIDE)).unwrap(), "new");
+        assert_eq!(names(d), [MCP_EXE]);
+    }
+
+    #[test]
+    fn every_update_moves_to_a_name_of_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        // A copy from 0.3.0 and one from an earlier update are still there (maybe running).
+        std::fs::write(d.join("daytrace-mcp.exe.old"), "0.3.0").unwrap();
+        std::fs::write(d.join("daytrace-mcp.exe.1700000000.old"), "older").unwrap();
+        std::fs::write(d.join(MCP_EXE), "current").unwrap();
+        let first = move_mcp_aside(d, 1_800_000_000).unwrap().unwrap();
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "current");
+        assert_eq!(std::fs::read_to_string(d.join("daytrace-mcp.exe.old")).unwrap(), "0.3.0", "an older copy is left alone");
+        // A second update in the same second gets the next name.
+        std::fs::write(d.join(MCP_EXE), "next").unwrap();
+        let second = move_mcp_aside(d, 1_800_000_000).unwrap().unwrap();
+        assert_eq!(second, d.join("daytrace-mcp.exe.1800000000-1.old"));
+        // Nothing was installed: the newest copy comes back, the rest goes.
+        tidy_mcp_after_update(d);
+        assert_eq!(std::fs::read_to_string(d.join(MCP_EXE)).unwrap(), "next");
+        assert_eq!(names(d), [MCP_EXE]);
+        // Other files in the folder stay.
+        std::fs::write(d.join("daytrace.exe"), "app").unwrap();
+        std::fs::write(d.join("notes.old"), "keep").unwrap();
+        tidy_mcp_after_update(d);
+        assert_eq!(names(d), ["daytrace-mcp.exe", "daytrace.exe", "notes.old"]);
     }
 }

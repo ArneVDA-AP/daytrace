@@ -92,6 +92,8 @@ export interface SettingsDto {
   settings: Settings;
   hasApiKey: boolean;
   dataDir: string;
+  /** Goes up with every saved settings change; pass it to saveSettings to refuse a stale save. */
+  revision?: number;
 }
 
 export type RecorderStatus =
@@ -203,7 +205,10 @@ export interface Shot {
 
 export const api = {
   getSettings: () => invoke<SettingsDto>("get_settings"),
-  saveSettings: (settings: Settings, apiKey?: string) => invoke<SettingsDto>("save_settings", { settings, apiKey: apiKey ?? null }),
+  /** With `baseRevision` (from getSettings), a save made after the settings changed elsewhere is
+   *  refused with a `settings_changed` error (settings-retry.ts). */
+  saveSettings: (settings: Settings, apiKey?: string, baseRevision?: number) =>
+    invoke<SettingsDto>("save_settings", { settings, apiKey: apiKey ?? null, baseRevision: baseRevision ?? null }),
   providerDefaults: (provider: ProviderKind) => invoke<[string, string]>("provider_defaults", { provider }),
   getStatus: () => invoke<Status>("get_status"),
   setRecording: (enabled: boolean) => invoke<void>("set_recording", { enabled }),
