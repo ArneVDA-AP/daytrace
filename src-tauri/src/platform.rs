@@ -6,6 +6,9 @@
 pub struct ForegroundApp {
     /// Executable stem, e.g. `chrome`, `Code`, `1Password`.
     pub app: String,
+    /// Full path of the executable (`QueryFullProcessImageNameW`), empty when unknown. Read for
+    /// the app icon (features/icons.rs); never stored for a private app.
+    pub path: String,
     pub title: String,
     /// Center of the monitor the window is on, in virtual-screen pixels.
     pub monitor_center: Option<(i32, i32)>,
@@ -112,10 +115,19 @@ mod imp {
     }
 
     fn process_name(hwnd: windows::Win32::Foundation::HWND) -> String {
-        unsafe { process_name_inner(hwnd) }
+        stem(&process_path(hwnd))
     }
 
-    unsafe fn process_name_inner(hwnd: windows::Win32::Foundation::HWND) -> String {
+    fn stem(full: &str) -> String {
+        std::path::Path::new(full).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()
+    }
+
+    /// Full path of the executable that owns the window; empty when it cannot be read.
+    fn process_path(hwnd: windows::Win32::Foundation::HWND) -> String {
+        unsafe { process_path_inner(hwnd) }
+    }
+
+    unsafe fn process_path_inner(hwnd: windows::Win32::Foundation::HWND) -> String {
         unsafe {
             let mut pid: u32 = 0;
             GetWindowThreadProcessId(hwnd, Some(&mut pid));
@@ -127,16 +139,12 @@ mod imp {
             };
             let mut path = [0u16; 1024];
             let mut size = path.len() as u32;
-            let mut name = String::new();
+            let mut full = String::new();
             if QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, PWSTR(path.as_mut_ptr()), &mut size).is_ok() {
-                let full = String::from_utf16_lossy(&path[..size as usize]);
-                name = std::path::Path::new(&full)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_default();
+                full = String::from_utf16_lossy(&path[..size as usize]);
             }
             let _ = CloseHandle(h);
-            name
+            full
         }
     }
 
@@ -190,7 +198,8 @@ mod imp {
             let n = GetWindowTextW(hwnd, &mut buf);
             let title = String::from_utf16_lossy(&buf[..n.max(0) as usize]);
 
-            let app = process_name(hwnd);
+            let path = process_path(hwnd);
+            let app = stem(&path);
             if super::is_shell_host(&app) {
                 return None;
             }
@@ -200,7 +209,7 @@ mod imp {
             let monitor_center = GetMonitorInfoW(hmon, &mut mi)
                 .as_bool()
                 .then(|| ((mi.rcMonitor.left + mi.rcMonitor.right) / 2, (mi.rcMonitor.top + mi.rcMonitor.bottom) / 2));
-            Some(ForegroundApp { app, title, monitor_center })
+            Some(ForegroundApp { app, path, title, monitor_center })
         }
     }
 

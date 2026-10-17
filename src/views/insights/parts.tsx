@@ -1,5 +1,6 @@
 import * as React from "react";
 import type { Category } from "@/api";
+import { AppMark } from "@/components/app-mark";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDuration } from "@/lib/time";
@@ -206,8 +207,9 @@ export interface BarItem {
   srNote?: string;
 }
 
-/** Ranked bars with the name, the bar and the duration; names are app or program names (translate="no"). */
-export function BarList({ items, empty, label }: { items: BarItem[]; empty: string; label: string }) {
+/** Ranked bars with the name, the bar and the duration; names are app or program names (translate="no").
+ *  `marks`: the app or site icon before each name (AppMark). */
+export function BarList({ items, empty, label, marks }: { items: BarItem[]; empty: string; label: string; marks?: boolean }) {
   if (!items.length) return <p className="text-meta text-muted-foreground">{empty}</p>;
   const max = Math.max(...items.map((i) => i.secs), 1);
   return (
@@ -216,6 +218,7 @@ export function BarList({ items, empty, label }: { items: BarItem[]; empty: stri
         <li key={i.key} className="grid grid-cols-[minmax(0,9rem)_minmax(0,1fr)_auto] items-center gap-x-3 text-meta">
           <span className="min-w-0">
             <span className="block truncate" translate="no" title={i.name}>
+              {marks && <AppMark name={i.name} className="mr-1.5 -mt-0.5" />}
               {i.name}
             </span>
             {i.note && (

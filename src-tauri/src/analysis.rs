@@ -558,6 +558,7 @@ fn enforce_retention(state: &AppState) -> Result<()> {
     // whole day folders past the retention period, and stray files older than the newest backup.
     crate::features::storage::sweep_screenshot_files(state, before);
     crate::features::storage::remove_old_damaged_databases(&state.paths.root, now);
+    crate::features::icons::cleanup(&state.paths.root, &state.settings(), now);
     Ok(())
 }
 

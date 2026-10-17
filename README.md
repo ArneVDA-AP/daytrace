@@ -44,6 +44,8 @@ A fallback provider (Settings → Model provider) takes over a step when the mai
 
 Screenshots, the timeline database and logs stay in `%APPDATA%\dev.daytrace.app`. Screenshots are deleted after the retention period (7 days by default), and the logged model requests and responses lose their text then; timeline cards, the text descriptions of the screen (observations) and token counts are kept, and app and window names for a year. With a cloud provider, the sampled screenshots of each batch are sent to that provider. With Ollama or LM Studio nothing leaves the machine.
 
+App icons next to app names are read from the programs on your PC. Sites get a letter; with Settings → Appearance → "Look up site icons" on (off by default), Daytrace asks each website named on the timeline for its `https://<site>/favicon.ico` directly, without a third-party favicon service.
+
 Every request is checked against a ceiling of 90k input tokens (Haiku bills 5× above 100k) and is not sent if it would exceed it. This includes the Claude Code and Codex one-step path, which sends fewer screenshots when they would not fit and stops correcting a card once the session would pass the ceiling.
 
 Known limit: Microsoft Store apps are reported under a shared host process, so they cannot be matched by the private-app list.

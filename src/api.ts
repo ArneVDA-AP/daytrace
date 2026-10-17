@@ -72,6 +72,11 @@ export interface Settings {
   // agent_bridge
   /** AI tools (daytrace-mcp) may change categories, activities and day goals through the app. */
   allowAgentEdits: boolean;
+  // icons
+  /** Icons next to app and site names (components/app-mark.tsx). */
+  showIcons: boolean;
+  /** Ask each site on the timeline for https://<site>/favicon.ico; off: sites get a letter. */
+  lookupSiteIcons: boolean;
 }
 
 export interface NotificationPrefs {

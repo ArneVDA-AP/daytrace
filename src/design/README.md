@@ -32,7 +32,8 @@ Need a token, a component variant or a shell change? Write it in your notes file
   `?chat=empty`, `?chat=charts` (chats with inline charts: `#/chat?c=91`, and blocks that can't be
   drawn: `#/chat?c=92`), `?fail=apikey|credits|limit|busy|flaky|login|cli|slow|model|unknown` (the last
   batch failed for that cause), `?badge=recap` (a new recap: dot on Daily), `?gen=off` (cards
-  without `generatedBy`). Example: `/?status=offline,away#/daily?day=2026-10-16`.
+  without `generatedBy`), `?icons=off|sites|letters|slow` (app and site icons, `src/dev/w5-r3.ts`).
+  Example: `/?status=offline,away#/daily?day=2026-10-16`.
 - Fixture days are relative to today: today a workday (with a failed card, an idle card, a
   40-minute gap, interruptions), yesterday a night-owl day (9 PM to 2:40 AM), two days ago empty,
   then generated days. If a view needs more (a recap with blockers, a goal day), add it there.
@@ -115,7 +116,8 @@ Popover (pickers), Tooltip (names of icon-only buttons; never essential text), D
 AlertDialog (destructive confirmations whose buttons say what happens: "Delete 3.4 GB of
 screenshots"), Command (cmdk), Kbd, Skeleton, Spinner, Empty, Toast. Shared: `PageHeader`,
 `TitleBadge`, `DayNav`, `DayPicker`, `Banner` (`details` puts the raw error in a collapsed
-"Error details"). Unused shadcn parts (Tabs, Slider, Separator) were removed; ask to bring one back.
+"Error details"), `AppMark` (16 px app or site icon, or a letter badge, before an app or site
+name; decorative, nothing when "Show app and site icons" is off). Unused shadcn parts (Tabs, Slider, Separator) were removed; ask to bring one back.
 No other UI libraries; ask before adding one (bundle and CSP). Charts are hand-written SVG.
 
 ## Page pattern

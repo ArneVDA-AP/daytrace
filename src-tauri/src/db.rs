@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS screenshots (
     hidden_app TEXT,
     skip_reason TEXT,
     is_deleted INTEGER NOT NULL DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    app_path TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_screenshots_captured ON screenshots(captured_at);
 
@@ -95,7 +96,12 @@ CREATE INDEX IF NOT EXISTS idx_llm_calls_created ON llm_calls(created_at, input_
 "#;
 
 /// Columns added after the first release; applied to existing databases, errors ignored.
-const MIGRATIONS: &[&str] = &["ALTER TABLE screenshots ADD COLUMN skip_reason TEXT"];
+const MIGRATIONS: &[&str] = &[
+    "ALTER TABLE screenshots ADD COLUMN skip_reason TEXT",
+    // Full path of the foreground executable, for its icon (features/icons.rs). Null for private
+    // apps, idle rows and rows from before this column.
+    "ALTER TABLE screenshots ADD COLUMN app_path TEXT",
+];
 
 /// `skip_reason` value for rows written while the user was away (no image).
 pub const SKIP_IDLE: &str = "idle";
@@ -388,10 +394,27 @@ impl Db {
         hidden_app: Option<&str>,
         skip_reason: Option<&str>,
     ) -> Result<i64> {
+        self.insert_screenshot_with_path(captured_at, file_path, file_size, idle, app, title, hidden_app, skip_reason, None)
+    }
+
+    /// `insert_screenshot` with the foreground executable's full path (`app_path`). The recorder
+    /// passes None for private apps.
+    pub fn insert_screenshot_with_path(
+        &self,
+        captured_at: i64,
+        file_path: &str,
+        file_size: i64,
+        idle: i64,
+        app: Option<&str>,
+        title: Option<&str>,
+        hidden_app: Option<&str>,
+        skip_reason: Option<&str>,
+        app_path: Option<&str>,
+    ) -> Result<i64> {
         let c = self.c();
         c.execute(
-            "INSERT INTO screenshots (captured_at, file_path, file_size, idle_seconds_at_capture, app_name, window_title, hidden_app, skip_reason) VALUES (?,?,?,?,?,?,?,?)",
-            params![captured_at, file_path, file_size, idle, app, title, hidden_app, skip_reason],
+            "INSERT INTO screenshots (captured_at, file_path, file_size, idle_seconds_at_capture, app_name, window_title, hidden_app, skip_reason, app_path) VALUES (?,?,?,?,?,?,?,?,?)",
+            params![captured_at, file_path, file_size, idle, app, title, hidden_app, skip_reason, app_path],
         )?;
         Ok(c.last_insert_rowid())
     }

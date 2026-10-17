@@ -7,7 +7,8 @@ import { href, navigate, useRoute } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import { AiToolsSection } from "./ai-tools-section";
 import { CategoriesSection } from "./categories-section";
-import { AboutSection, AppearanceSection, NotificationsSection } from "./general-sections";
+import { AboutSection, NotificationsSection } from "./general-sections";
+import { AppearanceWithIcons } from "./icons-group";
 import { PrivateAppsSection } from "./private-apps";
 import { PromptsSection } from "./prompts-section";
 import { ProviderSection } from "./provider-section";
@@ -37,7 +38,7 @@ const COMPONENTS: Record<string, React.ComponentType> = {
   storage: StorageSection,
   "ai-tools": AiToolsSection,
   notifications: NotificationsSection,
-  appearance: AppearanceSection,
+  appearance: AppearanceWithIcons,
   about: AboutSection,
 };
 

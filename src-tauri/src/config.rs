@@ -171,6 +171,13 @@ pub struct Settings {
     /// Let AI tools (daytrace-mcp's write tools and CLI commands) change categories, activities
     /// and day goals through the running app. Off by default; reads never need it.
     pub allow_agent_edits: bool,
+    // ---- icons (features/icons.rs) ----
+    /// Icons next to app and site names (Dayflow's "Show app/website icons in timeline"). App
+    /// icons come from the executables on this PC; sites get a letter unless `lookup_site_icons`.
+    pub show_icons: bool,
+    /// Ask each site named on a card for https://<site>/favicon.ico (no third-party service).
+    /// Off by default: it is a network request to every site on the timeline.
+    pub lookup_site_icons: bool,
 }
 
 impl Default for Settings {
@@ -211,6 +218,8 @@ impl Default for Settings {
             recap_model: String::new(),
             show_goal_prompt: true,
             allow_agent_edits: false,
+            show_icons: true,
+            lookup_site_icons: false,
         }
     }
 }

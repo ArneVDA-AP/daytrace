@@ -4,6 +4,7 @@
 pub mod agent_bridge;
 pub mod agents;
 pub mod chat;
+pub mod icons;
 pub mod insights;
 pub mod journal;
 pub mod platform_extras;

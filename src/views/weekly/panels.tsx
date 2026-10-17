@@ -129,7 +129,7 @@ export function TopAppsCard({ week, categories, colorFor }: { week: WeekStats; c
   return (
     <SectionCard title="Top apps and sites" description="The main app or site of each card, colored by the category it was mostly used in.">
       <div className="flex flex-col gap-3">
-        <BarList label="Top apps and sites" items={items} empty="No cards with an app or site this week." />
+        <BarList label="Top apps and sites" items={items} empty="No cards with an app or site this week." marks />
         {used.size > 0 && (
           <Legend
             items={[...used.values()].map((g) => ({
@@ -185,7 +185,7 @@ export function AppsByCategoryCard({ week, categories, colorFor }: { week: WeekS
 export function ProgramsCard({ week }: { week: WeekStats }) {
   return (
     <SectionCard title="Programs in front" description="From the window in front at each screenshot.">
-      <BarList label="Programs in front" items={week.programs.map((p) => ({ key: p.name, name: p.name, secs: p.secs }))} empty="No program data for this week." />
+      <BarList label="Programs in front" items={week.programs.map((p) => ({ key: p.name, name: p.name, secs: p.secs }))} empty="No program data for this week." marks />
     </SectionCard>
   );
 }

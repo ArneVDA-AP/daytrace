@@ -1,6 +1,7 @@
 import * as React from "react";
 import { ChevronDown, ChevronUp, Copy, MoreHorizontal, Pencil, RotateCcw, ThumbsDown, ThumbsUp, Trash2, TriangleAlert, X } from "lucide-react";
 import type { Category } from "@/api";
+import { AppMark } from "@/components/app-mark";
 import { Banner } from "@/components/banner";
 import {
   AlertDialog,
@@ -449,7 +450,8 @@ export function CardDetail({
                 </span>
               )}
               {[card.appSites?.primary, card.appSites?.secondary].filter(Boolean).map((a) => (
-                <span key={a} className="rounded-sm border bg-surface-2 px-1.5 py-px text-caption text-muted-foreground" translate="no">
+                <span key={a} className="inline-flex items-center gap-1 rounded-sm border bg-surface-2 py-px pr-1.5 pl-1 text-caption text-muted-foreground" translate="no">
+                  <AppMark name={a} />
                   {a}
                 </span>
               ))}

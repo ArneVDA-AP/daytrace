@@ -1,6 +1,7 @@
 import * as React from "react";
 import { AlertTriangle, RotateCcw } from "lucide-react";
 import { useAppStatus } from "@/app/state";
+import { AppMark } from "@/components/app-mark";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { href } from "@/lib/router";
@@ -293,6 +294,7 @@ function CardRow({
                       <span aria-hidden="true" className="text-subtle-foreground">
                         ·
                       </span>
+                      <AppMark name={c.appSites?.primary} />
                       <span className="min-w-0 truncate" translate="no">
                         {apps}
                       </span>

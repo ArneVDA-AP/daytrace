@@ -136,6 +136,7 @@ export function ProgramsCard({ stats }: { stats: DayStats }) {
     <SectionCard title="Programs in front" description="From the window in front at each screenshot.">
       <BarList
         label="Programs in front"
+        marks
         items={stats.programs.map((p) => ({ key: p.name, name: p.name, secs: p.secs }))}
         empty="No program data for this day."
       />
