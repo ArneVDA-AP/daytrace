@@ -29,6 +29,7 @@ import { at, dayBounds, shiftDay } from "@/lib/time";
 import { allCards, DEFAULT_CATEGORIES, fmtClock, makeDataset } from "@/dev/fixtures";
 import { computeDay, computeWeek } from "@/dev/insights";
 import { screenSvg } from "@/dev/screens";
+import { timelineMock } from "@/dev/timeline";
 
 export const DEV_MOCK_MARKER = "DAYTRACE_DEV_MOCK_IPC";
 
@@ -530,6 +531,8 @@ export function installMockIpc() {
     "plugin:dialog|save": () => "C:\\Users\\Preview\\Documents\\daytrace-export.md",
     "plugin:dialog|open": () => "C:\\Users\\Preview\\OneDrive\\Daytrace",
   };
+
+  Object.assign(handlers, timelineMock(ds, now)); // Timeline fixtures and handlers (src/dev/timeline.ts)
 
   mockWindows("main");
   mockIPC(
