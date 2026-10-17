@@ -15,6 +15,14 @@ const TRAY_ID: &str = "main";
 
 /// What the tray shows right now.
 static SHOWN: Mutex<Option<tray_state::TrayView>> = Mutex::new(None);
+/// Newer release to offer in the menu. Kept here so the once-a-second check on the main thread
+/// never waits for the database.
+static LATEST: Mutex<Option<String>> = Mutex::new(None);
+
+/// Sets the newer version the menu offers (None: no update known).
+pub fn set_update(latest: Option<String>) {
+    *LATEST.lock().unwrap() = latest;
+}
 
 /// Show the main window, creating it if needed. The window (and its WebView2 processes) is
 /// destroyed when closed, so nothing of the UI runs while Daytrace sits in the tray.
@@ -44,8 +52,7 @@ fn current_view(app: &AppHandle) -> tray_state::TrayView {
     let state = app.state::<Arc<AppState>>();
     let settings = state.settings();
     let recorder = state.recorder.lock().unwrap().clone();
-    let update = platform_extras::update_status(&state);
-    let latest = update.latest_version.filter(|_| update.available);
+    let latest = LATEST.lock().unwrap().clone();
     tray_state::view(&settings, &recorder, latest.as_deref(), &crate::timeutil::fmt_clock)
 }
 
@@ -122,6 +129,10 @@ fn on_menu(app: &AppHandle, id: &str) {
 }
 
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
+    {
+        let update = platform_extras::update_status(&app.state::<Arc<AppState>>());
+        set_update(update.latest_version.filter(|_| update.available));
+    }
     let v = current_view(app);
     let mut b = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip(&v.tooltip)
@@ -164,10 +175,10 @@ fn apply_now(app: &AppHandle, force: bool) {
         Err(e) => log::warn!("tray menu: {e}"),
     }
     let _ = tray.set_tooltip(Some(&v.tooltip));
-    if icon_changed || force {
-        if let Some(i) = icon(app, v.icon) {
-            let _ = tray.set_icon(Some(i));
-        }
+    if (icon_changed || force)
+        && let Some(i) = icon(app, v.icon)
+    {
+        let _ = tray.set_icon(Some(i));
     }
     *shown = Some(v);
 }

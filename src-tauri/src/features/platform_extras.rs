@@ -216,10 +216,10 @@ pub fn detect(state: &AppState, watch: &mut Watch, now: i64) -> Vec<(Kind, Strin
     }
 
     // Analysis problems, newest batches first.
-    if let Ok(outcomes) = recent_outcomes(state, now - ANALYSIS_LOOKBACK) {
-        if let Some((kind, streak)) = notify::analysis_kind(&outcomes, settings.provider) {
-            out.push((kind, streak.to_string()));
-        }
+    if let Ok(outcomes) = recent_outcomes(state, now - ANALYSIS_LOOKBACK)
+        && let Some((kind, streak)) = notify::analysis_kind(&outcomes, settings.provider)
+    {
+        out.push((kind, streak.to_string()));
     }
 
     // Screenshots wait for an API key (the analysis loop keeps such batches pending).
@@ -238,22 +238,44 @@ pub fn detect(state: &AppState, watch: &mut Watch, now: i64) -> Vec<(Kind, Strin
             .map(|cards| cards.iter().any(|c| !c.is_idle_shortcut && !c.title.eq_ignore_ascii_case("idle")))
             .unwrap_or(false);
         if real {
-            kv_set(state, K_FIRST_CARDS, "done");
             out.push((Kind::FirstCards, String::new()));
         }
     }
 
+    // A newer release (found by the daily check), once per version.
+    let up = update_status(state);
+    if let (true, Some(v)) = (up.available, up.latest_version)
+        && kv_get(state, K_UPDATE_NOTIFIED).as_deref() != Some(v.as_str())
+    {
+        out.push((Kind::Update, v));
+    }
+
     // Daily recap written (by the insights scheduler) for today's target day.
     let target = logical_day(now);
-    if kv_get(state, K_RECAP_SEEN).as_deref() != Some(target.as_str()) {
-        if let Some(created) = recap_created_at(state, &target) {
+    if kv_get(state, K_RECAP_SEEN).as_deref() != Some(target.as_str())
+        && let Some(created) = recap_created_at(state, &target)
+    {
+        if now - created <= RECAP_FRESH {
+            out.push((Kind::RecapReady, target));
+        } else {
             kv_set(state, K_RECAP_SEEN, &target);
-            if now - created <= RECAP_FRESH {
-                out.push((Kind::RecapReady, target));
-            }
         }
     }
     out
+}
+
+/// Records that a one-time notification was dealt with (shown, or skipped because it is turned
+/// off or the window was in front), so it is not offered again. A notification held back by the
+/// minimum gap stays open and is offered on the next check.
+pub fn settle(state: &AppState, kind: Kind, detail: &str, outcome: Outcome) {
+    if outcome == Outcome::Later {
+        return;
+    }
+    match kind {
+        Kind::RecapReady => kv_set(state, K_RECAP_SEEN, detail),
+        Kind::FirstCards => kv_set(state, K_FIRST_CARDS, "done"),
+        _ => {}
+    }
 }
 
 /// `(failed, reason)` of analysed batches since `since`, newest first.
@@ -275,32 +297,44 @@ fn recap_created_at(state: &AppState, target: &str) -> Option<i64> {
     c.query_row("SELECT created_at FROM daily_recaps WHERE target_day = ?", [target], |r| r.get::<_, i64>(0)).optional().ok().flatten()
 }
 
+/// What happened to a notification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    Shown,
+    /// Turned off, already shown today, or the window is in front.
+    Skipped,
+    /// Held back by the minimum gap between notifications.
+    Later,
+}
+
 /// Whether a notification of this kind may be shown now; records it when it may.
 /// `focused`: the main window is in front, so the user sees the problem in the app already.
-pub fn admit(state: &AppState, kind: Kind, detail: &str, now: i64, focused: bool) -> bool {
+pub fn admit(state: &AppState, kind: Kind, detail: &str, now: i64, focused: bool) -> Outcome {
     let settings = state.settings();
     if !kind.enabled(&settings.notifications) {
-        return false;
+        return Outcome::Skipped;
     }
     if kind == Kind::Test {
-        return true;
+        return Outcome::Shown;
     }
     if focused {
-        return false;
+        return Outcome::Skipped;
     }
     if kind == Kind::Update && kv_get(state, K_UPDATE_NOTIFIED).as_deref() == Some(detail) {
-        return false;
+        return Outcome::Skipped;
     }
     let mut rl: RateLimiter = kv_get(state, K_RATE).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
     let day = if kind == Kind::RecapReady { detail.to_string() } else { logical_day(now) };
-    if !rl.allow(&kind.key(), &day, now) {
-        return false;
+    match rl.record(&kind.key(), &day, now) {
+        notify::Decision::SameDay => return Outcome::Skipped,
+        notify::Decision::TooSoon => return Outcome::Later,
+        notify::Decision::Allow => {}
     }
     kv_set(state, K_RATE, &serde_json::to_string(&rl).unwrap_or_default());
     if kind == Kind::Update {
         kv_set(state, K_UPDATE_NOTIFIED, detail);
     }
-    true
+    Outcome::Shown
 }
 
 fn main_window_focused(app: &AppHandle) -> bool {
@@ -317,15 +351,16 @@ fn show_toast(app: &AppHandle, id: i32, title: &str, body: &str) {
 }
 
 /// Shows a notification when the settings and the rate limit allow it.
-pub fn notify(app: &AppHandle, kind: Kind, detail: &str) -> bool {
+pub fn notify(app: &AppHandle, kind: Kind, detail: &str) -> Outcome {
     let state = app.state::<Arc<AppState>>();
-    if !admit(&state, kind, detail, now_ts(), main_window_focused(app)) {
-        return false;
+    let outcome = admit(&state, kind, detail, now_ts(), main_window_focused(app));
+    if outcome == Outcome::Shown {
+        let (title, body) = notify::text(kind, state.settings().provider, detail);
+        log::info!("notification: {title}");
+        show_toast(app, kind.toast_id(), &title, &body);
     }
-    let (title, body) = notify::text(kind, state.settings().provider, detail);
-    log::info!("notification: {title}");
-    show_toast(app, kind.toast_id(), &title, &body);
-    true
+    settle(&state, kind, detail, outcome);
+    outcome
 }
 
 // ---- navigation from notifications ----
@@ -370,6 +405,7 @@ pub async fn check_updates(app: &AppHandle, announce: bool) -> UpdateStatus {
     kv_set(&state, K_UPDATE, &serde_json::to_string(&st).unwrap_or_default());
     log::info!("update check: latest {:?}, available {}, error {:?}", st.latest_version, st.available, st.error);
     let _ = app.emit("platform-update", &st);
+    crate::tray::set_update(st.latest_version.clone().filter(|_| st.available));
     crate::tray::refresh(app);
     if announce {
         let (title, body) = match (&st.error, st.available, &st.latest_version) {
@@ -379,10 +415,6 @@ pub async fn check_updates(app: &AppHandle, announce: bool) -> UpdateStatus {
             _ => ("Daytrace is up to date".to_string(), format!("You have the latest version ({current}).")),
         };
         show_toast(app, if st.available { Kind::Update.toast_id() } else { Kind::Test.toast_id() }, &title, &body);
-    } else if st.available {
-        if let Some(v) = &st.latest_version {
-            notify(app, Kind::Update, v);
-        }
     }
     st
 }
@@ -432,7 +464,9 @@ pub fn spawn(app: AppHandle) {
                 if now - last_notify_check >= 30 {
                     last_notify_check = now;
                     for (kind, detail) in detect(&state, &mut watch, now) {
-                        notify(&app, kind, &detail);
+                        if notify(&app, kind, &detail) == Outcome::Later {
+                            break; // one per gap; the rest comes on a later check
+                        }
                     }
                 }
                 // First automatic update check two minutes after start, then once a day.
@@ -674,6 +708,13 @@ mod tests {
         batch(&st, now - 900, "failed", Some("Could not reach the model server: error sending request"));
         let found = detect(&st, &mut w, now);
         assert_eq!(found, vec![(Kind::Analysis(notify::Failure::LocalOffline), "1".to_string())]);
+
+        // A newer release, until it was announced.
+        let st_up = UpdateStatus { current_version: env!("CARGO_PKG_VERSION").into(), latest_version: Some("999.0.0".into()), available: true, ..Default::default() };
+        kv_set(&st, K_UPDATE, &serde_json::to_string(&st_up).unwrap());
+        assert!(detect(&st, &mut w, now).contains(&(Kind::Update, "999.0.0".to_string())));
+        assert_eq!(admit(&st, Kind::Update, "999.0.0", now, false), Outcome::Shown);
+        assert!(!detect(&st, &mut w, now).iter().any(|(k, _)| *k == Kind::Update));
     }
 
     #[test]
@@ -688,7 +729,11 @@ mod tests {
             .unwrap();
         let mut w = Watch::default();
         assert_eq!(detect(&st, &mut w, now), vec![(Kind::RecapReady, target.clone())]);
-        assert!(detect(&st, &mut w, now + 30).is_empty(), "announced once");
+        // Held back by the gap: offered again.
+        settle(&st, Kind::RecapReady, &target, Outcome::Later);
+        assert_eq!(detect(&st, &mut w, now + 30), vec![(Kind::RecapReady, target.clone())]);
+        settle(&st, Kind::RecapReady, &target, Outcome::Shown);
+        assert!(detect(&st, &mut w, now + 60).is_empty(), "announced once");
     }
 
     #[test]
@@ -715,6 +760,7 @@ mod tests {
         let rc = crate::db::ResolvedCard { start_ts: now - 600, end_ts: now, card, idle_meta: None };
         st.db.replace_cards_in_range(now - 600, now, &[rc], b, true).unwrap();
         assert_eq!(detect(&st, &mut w, now), vec![(Kind::FirstCards, String::new())]);
+        settle(&st, Kind::FirstCards, "", Outcome::Skipped);
         assert!(detect(&st, &mut w, now).is_empty());
     }
 
@@ -722,17 +768,17 @@ mod tests {
     fn admits_within_limits() {
         let (_d, st) = state();
         let now = 1_800_000_000;
-        assert!(admit(&st, Kind::MissingKey, "", now, false));
-        assert!(!admit(&st, Kind::MissingKey, "", now + 3600, false), "once a day");
-        assert!(!admit(&st, Kind::RecordingProblem, "", now + 10, false), "minimum gap");
-        assert!(!admit(&st, Kind::RecordingProblem, "", now + 3600, true), "window in front");
-        assert!(admit(&st, Kind::RecordingProblem, "", now + 3600, false));
+        assert_eq!(admit(&st, Kind::MissingKey, "", now, false), Outcome::Shown);
+        assert_eq!(admit(&st, Kind::MissingKey, "", now + 3600, false), Outcome::Skipped, "once a day");
+        assert_eq!(admit(&st, Kind::RecordingProblem, "", now + 10, false), Outcome::Later, "minimum gap");
+        assert_eq!(admit(&st, Kind::RecordingProblem, "", now + 3600, true), Outcome::Skipped, "window in front");
+        assert_eq!(admit(&st, Kind::RecordingProblem, "", now + 3600, false), Outcome::Shown);
         update_settings(&st, |s| s.notifications.updates = false).unwrap();
-        assert!(!admit(&st, Kind::Update, "0.3.0", now + 7200, false), "turned off");
+        assert_eq!(admit(&st, Kind::Update, "0.3.0", now + 7200, false), Outcome::Skipped, "turned off");
         update_settings(&st, |s| s.notifications.updates = true).unwrap();
-        assert!(admit(&st, Kind::Update, "0.3.0", now + 7200, false));
-        assert!(!admit(&st, Kind::Update, "0.3.0", now + 3 * 86400, false), "once per version");
-        assert!(admit(&st, Kind::Test, "", now + 7201, true), "test always shows");
+        assert_eq!(admit(&st, Kind::Update, "0.3.0", now + 7200, false), Outcome::Shown);
+        assert_eq!(admit(&st, Kind::Update, "0.3.0", now + 3 * 86400, false), Outcome::Skipped, "once per version");
+        assert_eq!(admit(&st, Kind::Test, "", now + 7201, true), Outcome::Shown, "test always shows");
     }
 
     #[test]

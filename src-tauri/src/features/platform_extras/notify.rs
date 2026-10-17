@@ -245,22 +245,43 @@ pub struct RateLimiter {
     pub last_shown_at: Option<i64>,
 }
 
+/// What the limit says about a notification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decision {
+    Allow,
+    /// Already shown today: skip it.
+    SameDay,
+    /// Another notification was shown moments ago: try again later.
+    TooSoon,
+}
+
 impl RateLimiter {
-    pub fn would_allow(&self, key: &str, day: &str, now: i64) -> bool {
+    pub fn check(&self, key: &str, day: &str, now: i64) -> Decision {
         if self.last_day_by_kind.get(key).map(String::as_str) == Some(day) {
-            return false;
+            return Decision::SameDay;
         }
-        !matches!(self.last_shown_at, Some(t) if now - t < MIN_GAP_SECS && now >= t)
+        if matches!(self.last_shown_at, Some(t) if now - t < MIN_GAP_SECS && now >= t) {
+            return Decision::TooSoon;
+        }
+        Decision::Allow
     }
 
-    /// Records the notification when it may be shown; returns whether it may.
-    pub fn allow(&mut self, key: &str, day: &str, now: i64) -> bool {
-        if !self.would_allow(key, day, now) {
-            return false;
+    pub fn would_allow(&self, key: &str, day: &str, now: i64) -> bool {
+        self.check(key, day, now) == Decision::Allow
+    }
+
+    /// Records the notification when it may be shown; returns the decision.
+    pub fn record(&mut self, key: &str, day: &str, now: i64) -> Decision {
+        let d = self.check(key, day, now);
+        if d == Decision::Allow {
+            self.last_day_by_kind.insert(key.to_string(), day.to_string());
+            self.last_shown_at = Some(now);
         }
-        self.last_day_by_kind.insert(key.to_string(), day.to_string());
-        self.last_shown_at = Some(now);
-        true
+        d
+    }
+
+    pub fn allow(&mut self, key: &str, day: &str, now: i64) -> bool {
+        self.record(key, day, now) == Decision::Allow
     }
 }
 
@@ -325,6 +346,8 @@ mod tests {
         assert!(!back.would_allow("a", "2026-10-18", 1000 + 90000));
         // A clock that went backwards does not block notifications forever.
         assert!(back.would_allow("c", "2026-10-18", 10));
+        assert_eq!(back.check("a", "2026-10-18", 1000 + 90000), Decision::SameDay);
+        assert_eq!(back.check("c", "2026-10-18", 1000 + 86400 + 1), Decision::TooSoon);
     }
 
     #[test]
