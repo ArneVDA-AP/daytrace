@@ -181,23 +181,23 @@ pub fn parse(text: &str) -> AssistantMetadata {
             None => log::info!("chat: failed to parse suggestions JSON"),
         }
     }
-    if suggestions.is_empty() {
-        if let Some((stripped, raw)) = extract_loose_suggestions(&working) {
-            working = stripped;
-            if let Some(s) = parse_string_array(&raw) {
-                suggestions = s;
-            }
+    if suggestions.is_empty()
+        && let Some((stripped, raw)) = extract_loose_suggestions(&working)
+    {
+        working = stripped;
+        if let Some(s) = parse_string_array(&raw) {
+            suggestions = s;
         }
     }
     if let Some((stripped, raw)) = extract_tagged_block(&working, "memory") {
         working = stripped;
         memory = normalize_auto_memory(&raw);
     }
-    if memory.is_none() {
-        if let Some((stripped, raw)) = extract_loose_memory(&working) {
-            working = stripped;
-            memory = normalize_auto_memory(&raw);
-        }
+    if memory.is_none()
+        && let Some((stripped, raw)) = extract_loose_memory(&working)
+    {
+        working = stripped;
+        memory = normalize_auto_memory(&raw);
     }
     working = strip_residual_headings(&working);
     suggestions = suggestions.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).take(4).collect();

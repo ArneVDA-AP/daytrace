@@ -413,10 +413,10 @@ pub async fn chat_send(app: tauri::AppHandle, state: S<'_>, conversation_id: Opt
     let row = match result {
         Ok(out) => {
             let meta = metadata::parse(&out.text);
-            if let Some(mem) = &meta.memory {
-                if let Err(e) = store::save_memory(&db, mem, now_ts()) {
-                    log::warn!("chat: could not save memory: {e:#}");
-                }
+            if let Some(mem) = &meta.memory
+                && let Err(e) = store::save_memory(&db, mem, now_ts())
+            {
+                log::warn!("chat: could not save memory: {e:#}");
             }
             let mut allowed: HashSet<i64> = out.seen_card_ids.clone();
             allowed.extend(prior.iter().flat_map(|m| m.citations.iter().copied()));

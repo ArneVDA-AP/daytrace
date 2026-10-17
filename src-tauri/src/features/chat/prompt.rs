@@ -6,6 +6,7 @@
 //! - The tool list names Daytrace's six tools instead of two, and "how much time" points at
 //!   timeByCategory instead of "fetchTimeline, aggregate by category".
 //! - A CITATIONS section (Daytrace): answers link the cards they rely on.
+//!
 //! Dayflow's user-memory and recent-suggestion sections are appended the same way
 //! (ChatService.buildGeminiSystemInstruction), and its language section
 //! (ChatPromptBuilder.languageOverrideSection).

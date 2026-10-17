@@ -18,6 +18,10 @@ pub const MAX_TOOL_ROUNDS: usize = 8;
 pub const MAX_OUTPUT_TOKENS: u32 = 8192;
 /// Earlier messages of the conversation sent with a new question (oldest dropped first).
 pub const MAX_HISTORY_MESSAGES: usize = 40;
+/// Target for the estimated input of one request. The estimate counts 3.5 characters per token;
+/// JSON tool results tokenize denser, so the loop aims 20% under the 90k hard ceiling that
+/// `ChatApi` enforces.
+pub const INPUT_BUDGET: usize = MAX_INPUT_TOKENS * 4 / 5;
 
 pub const ELIDED: &str = "[This earlier tool result was removed to keep the request small. Call the tool again if you still need it.]";
 pub const ROUNDS_EXCEEDED: &str = "The assistant exceeded the maximum tool-call rounds. Please try a narrower query.";
@@ -110,11 +114,11 @@ fn elide_one(messages: &mut [Msg], skip_index: Option<usize>) -> bool {
         if Some(i) == skip_index {
             continue;
         }
-        if let Msg::ToolResults(rs) = m {
-            if let Some(r) = rs.iter_mut().find(|r| r.content != ELIDED) {
-                r.content = ELIDED.to_string();
-                return true;
-            }
+        if let Msg::ToolResults(rs) = m
+            && let Some(r) = rs.iter_mut().find(|r| r.content != ELIDED)
+        {
+            r.content = ELIDED.to_string();
+            return true;
         }
     }
     false
@@ -155,7 +159,7 @@ pub async fn run<T: ChatTransport>(
         if cancel.load(Ordering::SeqCst) {
             return Err(Cancelled.into());
         }
-        fit_to_budget(system, &specs, &mut messages, &mut history_len, MAX_INPUT_TOKENS)?;
+        fit_to_budget(system, &specs, &mut messages, &mut history_len, INPUT_BUDGET)?;
         on_progress(Progress::Thinking);
         let req = ChatRequest { system, messages: &messages, tools: &specs, max_tokens: MAX_OUTPUT_TOKENS };
         let reply = tokio::select! {
@@ -233,10 +237,10 @@ fn card_link_re() -> regex::Regex {
 pub fn cited_ids(text: &str) -> Vec<i64> {
     let mut seen = Vec::new();
     for c in card_link_re().captures_iter(text) {
-        if let Ok(id) = c[2].parse::<i64>() {
-            if !seen.contains(&id) {
-                seen.push(id);
-            }
+        if let Ok(id) = c[2].parse::<i64>()
+            && !seen.contains(&id)
+        {
+            seen.push(id);
         }
     }
     seen

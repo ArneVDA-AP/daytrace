@@ -577,7 +577,7 @@ fn category_totals(cards: &[StoredCard], from: i64, to: i64) -> (i64, Vec<(Strin
     }
     let total: i64 = secs.values().sum();
     let mut list: Vec<(String, i64)> = order.into_iter().map(|k| (k.clone(), secs[&k])).collect();
-    list.sort_by(|a, b| b.1.cmp(&a.1));
+    list.sort_by_key(|e| std::cmp::Reverse(e.1));
     (total, list)
 }
 
