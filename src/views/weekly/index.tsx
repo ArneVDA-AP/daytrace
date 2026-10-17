@@ -14,11 +14,13 @@ import { clock, formatDuration, formatWeekRange, shiftDay, weekStart } from "@/l
 import { useDelayedLoading } from "@/lib/use-delayed";
 import { errorText } from "@/lib/utils";
 import { insightsApi, type CategoryTotal, type WeekStats } from "@/views/insights/api";
-import { kindOf, percent, weekdayLong } from "@/views/insights/format";
+import { countsSentence, kindOf, percent, weekdayLong } from "@/views/insights/format";
 import { CardSkeleton, CategoryBreakdown, RetryButton, SectionCard, StatStrip, StatTile } from "@/views/insights/parts";
 import {
   DistractionHeatmap,
   FocusChart,
+  FocusHeatmap,
+  FocusHourTable,
   FocusTable,
   HeatTable,
   LanesTable,
@@ -29,14 +31,16 @@ import {
   type FocusRow,
   type Lane,
 } from "./charts";
-import { AppsByCategoryCard, ContextCard, distractionFacts, FocusBlocksCard, ProgramsCard, TopAppsCard } from "./panels";
+import { AppsByCategoryCard, ContextCard, distractionFacts, FocusBlocksCard, focusFacts, ProgramsCard, TopAppsCard } from "./panels";
+import { useChartImage } from "./save-image";
 
 /*
  * Weekly review (Dayflow's Weekly view, no model) for the week that contains the shared day:
  * the week in numbers, time per day, every card by time of day, time by category, focus and
- * distraction per day, when distractions happen, longest focus blocks, context shifts, apps and
- * sites, and programs. Weeks run Monday 4 AM to Monday 4 AM. Charts or tables for every chart
- * (?view=table). Refreshes every 2 minutes while visible, without loaders.
+ * distraction per day, focus against distraction by hour, when distractions happen, longest focus
+ * blocks, context switches, apps and sites, and programs. Weeks run Monday 4 AM to Monday 4 AM.
+ * Charts or tables for every chart (?view=table); each chart can be saved as a PNG. Refreshes
+ * every 2 minutes while visible, without loaders.
  */
 
 /** Dayflow's weekly data gate: patterns need about 15 hours of a week. */
@@ -177,14 +181,20 @@ function WeekBody({
   const { week, cards } = data;
   const days = week.days.map((d) => d.day);
   const cardsOf = (d: string) => cards[days.indexOf(d)] ?? [];
-  const active = week.capturedSecs - week.idleSecs;
+  const active = week.activeSecs ?? Math.max(0, week.capturedSecs - week.idleSecs);
   const withCards = week.days.filter((d) => d.capturedSecs > 0).length;
   const longest = week.focusBlocks[0] ?? null;
 
   const rows: DayRow[] = week.days.map((d) => ({ day: d.day, totals: d.totals, secs: d.capturedSecs, future: d.day > today }));
-  const focusRows: FocusRow[] = week.days.map((d) => ({ day: d.day, focus: d.focusSecs, distracted: d.distractedSecs, future: d.day > today }));
+  const focusRows: FocusRow[] = week.days.map((d) => ({
+    day: d.day,
+    focus: d.focusSecs,
+    distracted: d.distractedSecs,
+    active: d.activeSecs ?? Math.max(0, d.capturedSecs - d.idleSecs),
+    future: d.day > today,
+  }));
   const lanes: Lane[] = week.days.map((d, i) => ({ day: d.day, cards: cards[i] ?? [], future: d.day > today }));
-  const range: [number, number] = week.workflow.endMinute > week.workflow.startMinute ? [week.workflow.startMinute, week.workflow.endMinute] : [300, 1080];
+  const activityWindow: [number, number] = week.workflow.endMinute > week.workflow.startMinute ? [week.workflow.startMinute, week.workflow.endMinute] : [300, 1080];
 
   const totals = new Map<string, CategoryTotal>();
   for (const d of week.days)
@@ -196,7 +206,16 @@ function WeekBody({
 
   const distraction = categories.find((c) => kindOf(c.name, categories) === "distraction");
   const distractionColor = distraction ? colorFor(distraction.name) : "var(--cat-distraction)";
-  const facts = distractionFacts(week);
+  const facts = distractionFacts(week, categories);
+  const focusLines = focusFacts(week);
+  const range = formatWeekRange(week.weekStart);
+  const image = (title: string, slug: string) => ({ title, subtitle: `Week of ${range}`, file: `daytrace-week-${week.weekStart}-${slug}.png` });
+  const perDay = useChartImage(image("Time per day", "time-per-day"));
+  const byHour = useChartImage(image("Your week by hour", "by-hour"));
+  const focusDay = useChartImage(image("Focus and distraction", "focus"));
+  const focusHour = useChartImage(image("Focus and distraction by hour", "focus-by-hour"));
+  const distractionHour = useChartImage(image("When distractions happen", "distractions"));
+  const save = (img: { button: React.ReactNode }) => (asTable ? undefined : img.button);
 
   return (
     <>
@@ -210,7 +229,7 @@ function WeekBody({
         <StatTile label="Distracted" value={formatDuration(week.distractedSecs)} note={`${percent(week.distractedSecs, active)} of active time`} />
         <StatTile
           label="Longest focus block"
-          value={longest ? formatDuration(longest.secs) : "None"}
+          value={formatDuration(longest?.secs ?? 0)}
           note={
             longest ? (
               <>
@@ -229,24 +248,79 @@ function WeekBody({
         <p className="text-meta text-muted-foreground">This week has less than 15 hours of activity, so the patterns below may not say much yet.</p>
       )}
 
-      <SectionCard title="Time per day" description="Recorded time by category. Days run from 4 AM to 4 AM.">
-        {asTable ? <TimePerDayTable rows={rows} categories={categories} colorFor={colorFor} /> : <TimePerDayChart rows={rows} categories={categories} colorFor={colorFor} />}
+      <SectionCard title="Time per day" description="Recorded time by category. Days run from 4 AM to 4 AM." actions={save(perDay)}>
+        {asTable ? (
+          <TimePerDayTable rows={rows} categories={categories} colorFor={colorFor} />
+        ) : (
+          <div ref={perDay.ref}>
+            <TimePerDayChart rows={rows} categories={categories} colorFor={colorFor} />
+          </div>
+        )}
+        {perDay.error}
       </SectionCard>
 
-      <SectionCard title="Your week by hour" description="Every card at its time of day, one row per day. Select a day to open its timeline.">
-        {asTable ? <LanesTable lanes={lanes} /> : <WeekLanes lanes={lanes} range={range} categories={categories} colorFor={colorFor} />}
+      <SectionCard
+        title="Your week by hour"
+        description="Every card at its time of day, one row per day. Select a card to open it in the timeline, or a day to open that day."
+        actions={save(byHour)}
+      >
+        {asTable ? (
+          <LanesTable lanes={lanes} />
+        ) : (
+          <div ref={byHour.ref}>
+            <WeekLanes lanes={lanes} range={activityWindow} categories={categories} colorFor={colorFor} />
+          </div>
+        )}
+        {byHour.error}
       </SectionCard>
 
       <div className="grid items-start gap-4 split:grid-cols-2">
         <SectionCard title="Time by category">
           <CategoryBreakdown totals={[...totals.values()]} categories={categories} colorFor={colorFor} caption={`Time per category in the week of ${formatWeekRange(week.weekStart)}`} />
         </SectionCard>
-        <SectionCard title="Focus and distraction" description="Focused is every category except Distraction and Idle. Distracted adds the distractions noted inside other cards.">
-          {asTable ? <FocusTable rows={focusRows} /> : <FocusChart rows={focusRows} distractionColor={distractionColor} />}
+        <SectionCard title="Focus and distraction" description={countsSentence(categories)} actions={save(focusDay)}>
+          {asTable ? (
+            <FocusTable rows={focusRows} />
+          ) : (
+            <div ref={focusDay.ref}>
+              <FocusChart rows={focusRows} distractionColor={distractionColor} />
+            </div>
+          )}
+          {focusDay.error}
         </SectionCard>
       </div>
 
-      <SectionCard title="When distractions happen" description="Distracted time per hour of the day, from Distraction cards and distractions noted inside other cards.">
+      <SectionCard
+        title="Focus and distraction by hour"
+        description="For every hour of each day, whether the time leaned to focus or to distraction. Long stretches of focus weigh more; context switches count toward distraction."
+        actions={focusLines.length ? save(focusHour) : undefined}
+      >
+        {focusLines.length ? (
+          <div className="flex flex-col gap-4">
+            <ul className="flex flex-col gap-1 text-body">
+              {focusLines.map((t) => (
+                <li key={t}>{t}</li>
+              ))}
+            </ul>
+            {asTable ? (
+              <FocusHourTable week={week} />
+            ) : (
+              <div ref={focusHour.ref}>
+                <FocusHeatmap week={week} summary={focusLines.join(" ")} />
+              </div>
+            )}
+          </div>
+        ) : (
+          <p className="text-meta text-muted-foreground">No focus or distraction this week.</p>
+        )}
+        {focusHour.error}
+      </SectionCard>
+
+      <SectionCard
+        title="When distractions happen"
+        description="Distracted time per hour of the day, from the categories that count as distraction and the distractions noted inside other cards."
+        actions={facts.length ? save(distractionHour) : undefined}
+      >
         {facts.length ? (
           <div className="flex flex-col gap-4">
             <ul className="flex flex-col gap-1 text-body">
@@ -254,11 +328,18 @@ function WeekBody({
                 <li key={f.text}>{f.node}</li>
               ))}
             </ul>
-            {asTable ? <HeatTable week={week} /> : <DistractionHeatmap week={week} summary={facts.map((f) => f.text).join(" ")} />}
+            {asTable ? (
+              <HeatTable week={week} />
+            ) : (
+              <div ref={distractionHour.ref}>
+                <DistractionHeatmap week={week} summary={facts.map((f) => f.text).join(" ")} />
+              </div>
+            )}
           </div>
         ) : (
           <p className="text-meta text-muted-foreground">No distractions noted this week.</p>
         )}
+        {distractionHour.error}
       </SectionCard>
 
       <div className="grid items-start gap-4 split:grid-cols-2">

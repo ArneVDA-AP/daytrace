@@ -54,7 +54,7 @@ export function Ratings({ day, summary, className }: { day: string; summary: Rev
                   <Swatch color={k.color} />
                   {k.label}
                 </dt>
-                <dd className="text-body font-medium tnum">{summary[k.key] > 0 ? formatDuration(summary[k.key]) : "None"}</dd>
+                <dd className="text-body font-medium tnum">{formatDuration(summary[k.key])}</dd>
               </div>
             ))}
           </dl>

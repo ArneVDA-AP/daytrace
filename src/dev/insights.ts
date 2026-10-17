@@ -279,7 +279,7 @@ export function computeWeek(day: string, cardsOf: (d: string) => Card[], cats: C
     });
     return { day: s.day, label: weekday(s.day), scores, focusSecs: focus.map((x) => Math.max(0, x)), distractedSecs: distracted };
   });
-  const sumOf = (k: "capturedSecs" | "focusSecs" | "distractedSecs" | "idleSecs") => stats.reduce((a, s) => a + s[k], 0);
+  const sumOf = (k: "capturedSecs" | "activeSecs" | "focusSecs" | "distractedSecs" | "idleSecs") => stats.reduce((a, s) => a + s[k], 0);
   const busiest = [...stats].sort((a, b) => b.contextSwitches + b.distractions.length - (a.contextSwitches + a.distractions.length))[0];
   return {
     weekStart: start,
@@ -288,6 +288,7 @@ export function computeWeek(day: string, cardsOf: (d: string) => Card[], cats: C
       day: s.day,
       label: weekday(s.day),
       capturedSecs: s.capturedSecs,
+      activeSecs: s.activeSecs,
       focusSecs: s.focusSecs,
       distractedSecs: s.distractedSecs,
       idleSecs: s.idleSecs,
@@ -298,6 +299,7 @@ export function computeWeek(day: string, cardsOf: (d: string) => Card[], cats: C
     })),
     distribution: add(stats.map((s) => s.totals.filter((t) => t.kind !== "idle"))),
     capturedSecs: sumOf("capturedSecs"),
+    activeSecs: sumOf("activeSecs"),
     focusSecs: sumOf("focusSecs"),
     distractedSecs: sumOf("distractedSecs"),
     idleSecs: sumOf("idleSecs"),

@@ -8,11 +8,9 @@ import { changeOnLastWeek, kindOf, weekdayLong } from "@/views/insights/format";
 import { BarList, CategoryMark, Legend, SectionCard } from "@/views/insights/parts";
 
 /*
- * Weekly lists and tables: longest focus blocks, context shifts, apps and sites (overall and per
- * category) and the programs in front.
+ * Weekly lists and tables: longest focus blocks, context switches, apps and sites (overall and per
+ * category) and the programs in front, and the sentences that go with the heat maps.
  */
-
-const isDistractionKey = (k: string) => k === "distraction" || k === "distractions";
 
 /** The category an app was mostly used in this week, from the per-category lists. */
 function mainCategory(app: string, groups: AppCategory[]): AppCategory | null {
@@ -69,16 +67,16 @@ export function ContextCard({ week, today }: { week: WeekStats; today: string })
   const shifts = week.days.reduce((a, d) => a + d.contextShifts, 0);
   const count = week.days.reduce((a, d) => a + d.distractionCount, 0);
   return (
-    <SectionCard title="Context shifts and distractions" description={week.contextInsight}>
+    <SectionCard title="Context switches and distractions" description={week.contextInsight}>
       <table className="w-full text-meta">
-        <caption className="sr-only">Context shifts and distractions per day</caption>
+        <caption className="sr-only">Context switches and distractions per day</caption>
         <thead>
           <tr className="border-b text-left text-muted-foreground">
             <th scope="col" className="py-2 font-normal">
               Day
             </th>
             <th scope="col" className="py-2 text-right font-normal">
-              Context shifts
+              Context switches
             </th>
             <th scope="col" className="py-2 text-right font-normal">
               Distractions
@@ -193,7 +191,7 @@ export function ProgramsCard({ week }: { week: WeekStats }) {
 }
 
 /** Plain sentences about when distraction happens (the heat map's text equivalent). */
-export function distractionFacts(week: WeekStats): { text: string; node: React.ReactNode }[] {
+export function distractionFacts(week: WeekStats, categories: Category[]): { text: string; node: React.ReactNode }[] {
   const facts: { text: string; node: React.ReactNode }[] = [];
   const byHour = Array.from({ length: 24 }, (_, h) => week.distractionHours.reduce((a, r) => a + (r.secs[h] ?? 0), 0));
   const total = byHour.reduce((a, b) => a + b, 0);
@@ -206,7 +204,10 @@ export function distractionFacts(week: WeekStats): { text: string; node: React.R
     const t = `${weekdayLong(worst.day)} had the most: ${formatDuration(worst.distractedSecs)}.`;
     facts.push({ text: t, node: t });
   }
-  const sources = week.appsByCategory.find((g) => isDistractionKey(g.key))?.apps.slice(0, 3) ?? [];
+  // Apps of the categories that count as distraction, merged.
+  const merged = new Map<string, number>();
+  for (const g of week.appsByCategory) if (kindOf(g.name, categories) === "distraction") for (const a of g.apps) merged.set(a.name, (merged.get(a.name) ?? 0) + a.secs);
+  const sources = [...merged].map(([name, secs]) => ({ name, secs })).sort((a, b) => b.secs - a.secs).slice(0, 3);
   if (sources.length)
     facts.push({
       text: `Top sources: ${sources.map((a) => `${a.name} ${formatDuration(a.secs)}`).join(", ")}.`,
@@ -225,5 +226,28 @@ export function distractionFacts(week: WeekStats): { text: string; node: React.R
         </>
       ),
     });
+  return facts;
+}
+
+/** Plain sentences about when focus happens (the focus heat map's text equivalent). */
+export function focusFacts(week: WeekStats): string[] {
+  const rows = week.focusHours ?? [];
+  const focus = Array.from({ length: 24 }, (_, h) => rows.reduce((a, r) => a + (r.focusSecs[h] ?? 0), 0));
+  const distracted = Array.from({ length: 24 }, (_, h) => rows.reduce((a, r) => a + (r.distractedSecs[h] ?? 0), 0));
+  const facts: string[] = [];
+  const best = focus.indexOf(Math.max(...focus));
+  if (focus[best] > 0) facts.push(`Most focus falls between ${hourLabel(4 + best)} and ${hourLabel(5 + best)}: ${formatDuration(focus[best])} this week.`);
+  // The hour where distraction takes the largest share, among hours with at least 30 minutes.
+  let worst = -1;
+  let share = 0;
+  for (let h = 0; h < 24; h++) {
+    const total = focus[h] + distracted[h];
+    if (total >= 1800 && distracted[h] / total > share) {
+      share = distracted[h] / total;
+      worst = h;
+    }
+  }
+  if (worst >= 0 && distracted[worst] > 0)
+    facts.push(`Distraction takes the largest share between ${hourLabel(4 + worst)} and ${hourLabel(5 + worst)}: ${Math.round(share * 100)}% of the focused and distracted time.`);
   return facts;
 }

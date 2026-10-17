@@ -63,6 +63,17 @@ export function categoriesCounting(what: CountsAs, categories: Category[]): stri
   return categories.filter((c) => !c.isIdle && countsAsOf(c) === what).map((c) => c.name);
 }
 
+/** What Focused and Distracted include, from Settings > Categories (Daily and Weekly say it). */
+export function countsSentence(categories: Category[]): string {
+  const focus = categoriesCounting("focus", categories);
+  const distraction = categoriesCounting("distraction", categories);
+  const f = focus.length ? `Focused is time in ${nameList(focus)}, without the distractions noted inside those cards.` : "No category counts as focus.";
+  const d = distraction.length
+    ? `Distracted is time in ${nameList(distraction)} plus the distractions noted inside other cards.`
+    : "Distracted is the distractions noted inside cards; no category counts as distraction.";
+  return `${f} ${d}`;
+}
+
 /** "Work", "Work and Personal", "Work, Personal and Study". */
 export function nameList(names: string[]): string {
   if (names.length <= 1) return names.join("");

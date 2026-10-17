@@ -139,6 +139,8 @@ export interface WeekDaySummary {
   day: string;
   label: string;
   capturedSecs: number;
+  /** Recorded minus idle: the denominator of the day's percentages. */
+  activeSecs: number;
   focusSecs: number;
   distractedSecs: number;
   idleSecs: number;
@@ -185,6 +187,8 @@ export interface WeekStats {
   /** Top four categories plus Other, without Idle and System. */
   distribution: CategoryTotal[];
   capturedSecs: number;
+  /** Recorded minus idle: the denominator of the week's percentages. */
+  activeSecs: number;
   focusSecs: number;
   distractedSecs: number;
   idleSecs: number;
