@@ -1,5 +1,4 @@
-import type { SettingsDto, Status } from "@/api";
-import { describeFailure, isUnreachable, type FailureView } from "@/app/failure";
+import type { FailureCause, SettingsDto, Status } from "@/api";
 import { clock } from "@/lib/time";
 
 /*
@@ -37,8 +36,11 @@ export interface Problems {
   noKey: boolean;
   /** The last analysis failed because the provider could not be reached. */
   unreachable: boolean;
-  /** The last analysis failed for another reason (a refused key, no credits, a busy server...). */
-  failure: FailureView | null;
+  /**
+   * The last analysis failed for another reason (a refused key, no credits, a busy server...), as
+   * the backend describes it (get_status `cause`).
+   */
+  failure: FailureCause | null;
   /** The recorder reports that Windows returned no image. */
   captureError: string | null;
 }
@@ -70,20 +72,16 @@ function host(url: string): string | null {
   }
 }
 
-/** Whether an analysis error means the provider could not be reached (vs. a refused key, a bad answer...). */
-export function isNetworkError(message: string | null | undefined, provider?: SettingsDto["settings"]["provider"]): boolean {
-  return isUnreachable(message, provider);
-}
-
 export function problems(status: Status, dto: SettingsDto): Problems {
   const s = dto.settings;
   const noKey = s.provider === "anthropic" && !dto.hasApiKey;
-  const err = status.analysis.lastError;
-  const unreachable = isUnreachable(err, s.provider);
+  // The backend sorts the error text (llm/failure.rs); the UI only shows the result.
+  const cause = status.analysis.lastError ? (status.cause ?? null) : null;
+  const unreachable = cause?.unreachable ?? false;
   return {
     noKey,
     unreachable,
-    failure: err && !noKey && !unreachable ? describeFailure(err, { provider: s.provider, host: host(s.baseUrl), recording: s.recordingEnabled }) : null,
+    failure: cause && !noKey && !unreachable ? cause : null,
     captureError: status.recorder.state === "error" ? status.recorder.detail || "Windows returned no image." : null,
   };
 }
