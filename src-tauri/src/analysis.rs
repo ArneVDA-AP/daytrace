@@ -955,7 +955,13 @@ mod rewrite_tests {
     #[test]
     fn idle_does_not_stretch_over_an_edited_card() {
         let (d, st) = state();
-        let t0 = base();
+        // Idle cards only merge within one logical day: keep the whole scenario (50 min) clear of
+        // the 4 AM boundary whatever the time of the test run.
+        let mut t0 = base();
+        let day = crate::timeutil::logical_day(t0);
+        if crate::timeutil::logical_day(t0 + 3600) != day {
+            t0 = crate::timeutil::logical_day_bounds(&day).unwrap().1 - 2 * 3600;
+        }
         let b1 = batch(&st, d.path(), t0, 0);
         let mut idle = act("Idle", t0, t0 + 900);
         idle.category = "Idle".into();
