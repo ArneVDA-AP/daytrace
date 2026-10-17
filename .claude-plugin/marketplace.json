@@ -1,0 +1,16 @@
+{
+  "name": "daytrace",
+  "owner": {
+    "name": "ArneVDA-AP",
+    "url": "https://github.com/ArneVDA-AP"
+  },
+  "description": "Daytrace for Claude Code: ask about your day from the timeline Daytrace records on your Windows PC.",
+  "plugins": [
+    {
+      "name": "daytrace",
+      "source": "./claude-plugin",
+      "description": "Ask where your time went and draft standups and weekly reviews from Daytrace's timeline, read locally through daytrace-mcp.",
+      "category": "productivity"
+    }
+  ]
+}
