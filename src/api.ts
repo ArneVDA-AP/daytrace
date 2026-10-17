@@ -27,6 +27,9 @@ export interface Settings {
   idlePauseSecs: number;
   useBatchApi: boolean;
   reasoning: "off" | "low" | "default";
+  recapExportDir: string;
+  recapAuto: boolean;
+  recapTime: string;
 }
 
 export interface SettingsDto {
