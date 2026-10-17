@@ -30,6 +30,7 @@ export interface Settings {
   recapExportDir: string;
   recapAuto: boolean;
   recapTime: string;
+  chatModel: string;
 }
 
 export interface SettingsDto {

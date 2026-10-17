@@ -71,6 +71,8 @@ pub struct Settings {
     pub recap_auto: bool,
     /// Local time ("HH:MM", 24-hour) after which the automatic recap runs.
     pub recap_time: String,
+    /// Model for chat, on the same provider; empty uses `model`.
+    pub chat_model: String,
 }
 
 impl Default for Settings {
@@ -95,6 +97,7 @@ impl Default for Settings {
             recap_export_dir: String::new(),
             recap_auto: true,
             recap_time: "08:00".into(),
+            chat_model: String::new(),
         }
     }
 }
