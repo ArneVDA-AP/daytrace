@@ -486,7 +486,7 @@ pub fn observations_json(a: &Activity, rows: &[ObservationRow]) -> Value {
         "observations": rows.iter().map(|o| json!({"start": iso(o.start), "end": iso(o.end), "text": o.text})).collect::<Vec<_>>(),
     });
     if rows.is_empty() {
-        v["hint"] = json!("No observations for this activity. Daytrace deletes observations together with screenshots after the retention period; the activity itself is kept.");
+        v["hint"] = json!("No observations for this activity. Daytrace keeps observations after it deletes the screenshots, so there were none: the user was away, the activity is being analyzed again, or an older Daytrace version deleted them.");
     }
     v
 }

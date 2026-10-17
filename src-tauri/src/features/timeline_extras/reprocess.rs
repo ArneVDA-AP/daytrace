@@ -308,15 +308,28 @@ pub fn retry_items() -> Vec<RetryItem> {
     queue().lock().unwrap_or_else(|e| e.into_inner()).items()
 }
 
-/// Queues failed batches for one-by-one retry. Batches that are no longer failed are skipped.
+/// Queues failed batches for one-by-one retry. Batches that are no longer failed, or whose
+/// screenshots were deleted, are skipped.
 pub fn retry_batches(state: Arc<AppState>, batch_ids: &[i64]) -> Result<usize> {
     let mut ids = Vec::new();
+    let mut gone = 0;
     for id in batch_ids {
-        if state.db.batch(*id)?.is_some_and(|b| b.status == "failed") && !ids.contains(id) {
+        if !state.db.batch(*id)?.is_some_and(|b| b.status == "failed") || ids.contains(id) {
+            continue;
+        }
+        if cards::batch_has_frames(&state.db, *id)? {
             ids.push(*id);
+        } else {
+            gone += 1;
         }
     }
     if ids.is_empty() {
+        if gone > 0 {
+            bail!(
+                "The screenshots for this time were deleted (they are kept for {} days), so it can't be analyzed again.",
+                state.settings().retention_days
+            );
+        }
         bail!("These batches are no longer failed.");
     }
     let start = queue().lock().unwrap_or_else(|e| e.into_inner()).enqueue(&ids);
@@ -326,9 +339,9 @@ pub fn retry_batches(state: Arc<AppState>, batch_ids: &[i64]) -> Result<usize> {
     Ok(ids.len())
 }
 
+/// The analysis loop would keep the batch waiting for an API key (no usable fallback either).
 fn missing_key(state: &AppState) -> bool {
-    let s = state.settings();
-    s.provider == crate::config::ProviderKind::Anthropic && crate::config::stored_key(s.provider, &s.base_url).is_none()
+    crate::llm::routing::waits_for_key(&state.settings())
 }
 
 async fn run(state: Arc<AppState>) {

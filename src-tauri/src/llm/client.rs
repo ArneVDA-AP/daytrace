@@ -455,9 +455,10 @@ impl LlmClient {
     }
 
     /// `complete` for the CLI providers. Retries only failures the classifier calls transient
-    /// (a timeout, an overloaded server): a signed-out CLI fails the same way every time.
+    /// (an overloaded server, a dropped connection): a signed-out CLI fails the same way every
+    /// time, and a run that hit the timeout already spent five minutes of the subscription.
     async fn complete_cli(&self, cli: &super::cli::CliBackend, parts: Vec<Part>, opts: CallOpts) -> Result<String> {
-        let timeout = if opts.op == "test" { Duration::from_secs(120) } else { super::cli::DEFAULT_TIMEOUT };
+        let timeout = if opts.op == "test" { Duration::from_secs(120) } else { super::cli::run_timeout() };
         let images = parts.iter().filter(|p| matches!(p, Part::Jpeg { .. })).count();
         let text: String = parts.iter().filter_map(|p| if let Part::Text(t) = p { Some(t.as_str()) } else { None }).collect::<Vec<_>>().join("\n");
         let req_log = json!({"cli": cli.tool.bin_name(), "system": opts.system, "prompt": text, "images": images}).to_string();
@@ -483,8 +484,9 @@ impl LlmClient {
                     log::warn!("{} attempt {} via {} failed: {e:#}", opts.op, attempt + 1, cli.tool.display_name());
                     let transient = super::failure::classify(&format!("{e:#}")).kind == super::failure::FailureKind::Transient;
                     let cancelled = format!("{e:#}").contains("cancelled");
+                    let timed_out = super::cli::is_timeout(&e);
                     last_err = e;
-                    if !transient || cancelled {
+                    if !transient || cancelled || timed_out {
                         break;
                     }
                 }
@@ -730,8 +732,9 @@ mod reasoning_retry_tests {
         let tmp = tempfile::tempdir().unwrap();
         let runner = Arc::new(FakeRunner::new(vec![
             FakeRunner::ok(&testing::claude_result("Blue")),
-            Err("CLI process timed out after 300 seconds".into()),
+            Err("Claude Code CLI: API Error: 529 Overloaded".into()),
             FakeRunner::ok(&testing::claude_result("Blue again")),
+            Err("CLI process timed out after 300 seconds".into()),
             FakeRunner::exit(1, r#"{"type":"result","is_error":true,"result":"Not logged in · Please run /login"}"#, ""),
         ]));
         let db = crate::db::Db::memory();
@@ -740,13 +743,16 @@ mod reasoning_retry_tests {
             .with_cli_backend(testing::backend(CliTool::Claude, runner.clone(), tmp.path()));
         assert_eq!(c.list_models().await.unwrap(), vec!["haiku", "sonnet", "opus"]);
         assert_eq!(c.complete(vec![Part::Text("color?".into())], opts()).await.unwrap(), "Blue");
-        // A timeout is transient: retried when the caller allows two attempts.
+        // An overloaded server is transient: retried when the caller allows two attempts.
         let two = CallOpts { attempts: 2, ..opts() };
         assert_eq!(c.complete(vec![Part::Text("color?".into())], two.clone()).await.unwrap(), "Blue again");
+        // A timeout already spent the whole run: not retried.
+        let err = c.complete(vec![Part::Text("color?".into())], two.clone()).await.unwrap_err();
+        assert!(super::super::cli::is_timeout(&err), "{err}");
         // Signed out is not retried.
         let err = c.complete(vec![Part::Text("color?".into())], two).await.unwrap_err();
         assert!(err.to_string().contains("Please run /login"));
-        assert_eq!(runner.calls().len(), 4);
+        assert_eq!(runner.calls().len(), 5);
         assert_eq!(db.token_usage_since(0).unwrap(), (220, 40));
     }
 }

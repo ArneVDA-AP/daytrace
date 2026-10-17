@@ -24,6 +24,28 @@ use std::time::Duration;
 /// Dayflow's ChatCLIProcessRunner timeout.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 
+#[cfg(test)]
+thread_local! {
+    /// A shorter analysis timeout for tests on this thread (the tests run on one thread each).
+    pub static TEST_TIMEOUT: std::cell::Cell<Option<Duration>> = const { std::cell::Cell::new(None) };
+}
+
+/// The timeout of an analysis run: `DEFAULT_TIMEOUT` (tests may shorten it).
+pub fn run_timeout() -> Duration {
+    #[cfg(test)]
+    if let Some(t) = TEST_TIMEOUT.with(|c| c.get()) {
+        return t;
+    }
+    DEFAULT_TIMEOUT
+}
+
+/// Whether a CLI run was stopped by its timeout. Such a run already spent the whole timeout on
+/// the user's subscription; running the same request on the same CLI again is not retried at any
+/// level (the batch goes to the fallback provider or fails).
+pub fn is_timeout(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.downcast_ref::<TimedOut>().is_some()) || format!("{e:#}").contains("CLI process timed out")
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CliTool {
     Claude,
@@ -345,25 +367,90 @@ impl CliBackend {
         Ok((program, v.trim().lines().next().unwrap_or("").trim().to_string()))
     }
 
-    /// Deletes the transcript of a resumable Claude session started by Daytrace (Dayflow
-    /// ClaudeSessionCleanup). Claude keeps transcripts in `<config>/projects/<folder>/<id>.jsonl`.
-    pub fn cleanup_session(&self, id: &str) {
-        if self.tool != CliTool::Claude || id.is_empty() {
+    /// Records a resumable Claude session before its first run, so the next start can remove
+    /// its transcript when Daytrace stops during the run (Quit or a crash skip `cleanup_session`).
+    pub fn begin_session(&self, id: &str) {
+        if self.tool != CliTool::Claude || !is_session_id(id) {
             return;
         }
-        let Some(config) = claude_config_dir(self.env.as_ref()) else { return };
-        let Ok(projects) = std::fs::read_dir(config.join("projects")) else { return };
-        for project in projects.flatten() {
-            let file = project.path().join(format!("{id}.jsonl"));
-            if file.is_file() {
-                let _ = std::fs::remove_file(&file);
+        let _ = std::fs::create_dir_all(&self.work_root);
+        let _ = std::fs::write(session_marker(&self.work_root, id), b"");
+    }
+
+    /// Deletes the transcript of a resumable Claude session started by Daytrace (Dayflow
+    /// ClaudeSessionCleanup) and its marker.
+    pub fn cleanup_session(&self, id: &str) {
+        if self.tool != CliTool::Claude || !is_session_id(id) {
+            return;
+        }
+        if let Some(config) = claude_config_dir(self.env.as_ref()) {
+            remove_transcripts(&config, id);
+        }
+        let _ = std::fs::remove_file(session_marker(&self.work_root, id));
+    }
+}
+
+/// A session id as `new_uuid` makes it (36 characters of hex digits and dashes). Anything else is
+/// never turned into a path.
+fn is_session_id(id: &str) -> bool {
+    id.len() == 36 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
+fn session_marker(root: &Path, id: &str) -> PathBuf {
+    root.join(format!("session-{id}.pending"))
+}
+
+/// Claude keeps transcripts in `<config>/projects/<folder>/<id>.jsonl` (plus a `<id>` folder).
+fn remove_transcripts(config: &Path, id: &str) {
+    if !is_session_id(id) {
+        return;
+    }
+    let Ok(projects) = std::fs::read_dir(config.join("projects")) else { return };
+    for project in projects.flatten() {
+        let file = project.path().join(format!("{id}.jsonl"));
+        if file.is_file() {
+            let _ = std::fs::remove_file(&file);
+        }
+        let folder = project.path().join(id);
+        if folder.is_dir() {
+            let _ = std::fs::remove_dir_all(&folder);
+        }
+    }
+}
+
+/// Runs once at startup, before any CLI run and whatever provider is set: removes what CLI runs
+/// cut short by Quit or a crash left behind (see `sweep_work_root`).
+pub fn startup_cleanup() {
+    let n = sweep_work_root(&default_work_root(), claude_config_dir(&RealEnv).as_deref());
+    if n > 0 {
+        log::info!("removed {n} files and folders left by interrupted CLI runs");
+    }
+}
+
+/// Removes every frame and image folder and Codex answer file in `root` (no run is active at
+/// startup, so their age does not matter) and, for each session marker, the Claude transcript
+/// of that session in `claude_config`. Returns how many entries were removed.
+pub fn sweep_work_root(root: &Path, claude_config: Option<&Path>) -> usize {
+    let Ok(entries) = std::fs::read_dir(root) else { return 0 };
+    let mut removed = 0;
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        let path = e.path();
+        if let Some(id) = name.strip_prefix("session-").and_then(|n| n.strip_suffix(".pending")) {
+            if let Some(config) = claude_config {
+                remove_transcripts(config, id);
             }
-            let folder = project.path().join(id);
-            if folder.is_dir() {
-                let _ = std::fs::remove_dir_all(&folder);
+            if std::fs::remove_file(&path).is_ok() {
+                removed += 1;
+            }
+        } else if name.starts_with("frames-") || name.starts_with("images-") || name.starts_with("codex-last-") {
+            let done = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+            if done.is_ok() {
+                removed += 1;
             }
         }
     }
+    removed
 }
 
 /// `CLAUDE_CONFIG_DIR`, else `~/.claude`.
@@ -555,19 +642,59 @@ mod tests {
     }
 
     #[test]
+    fn startup_sweep_removes_leftovers_and_open_sessions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("daytrace-cli");
+        let config = tmp.path().join("claude-config");
+        let proj = config.join("projects").join("C--Temp-daytrace-cli");
+        std::fs::create_dir_all(&proj).unwrap();
+        // What a Quit during a one-step run leaves: the frame copies, the session marker and the
+        // resumable transcript. A fresh folder counts too: no run is active at startup.
+        std::fs::create_dir_all(root.join("frames-1")).unwrap();
+        std::fs::write(root.join("frames-1").join("frame_01.jpg"), b"jpg").unwrap();
+        std::fs::create_dir_all(root.join("images-2")).unwrap();
+        std::fs::write(root.join("codex-last-3.txt"), b"x").unwrap();
+        std::fs::write(root.join("claude-timeline-settings.json"), b"{}").unwrap();
+        let mut env = discover::fake::FakeEnv::new(&[("CLAUDE_CONFIG_DIR", config.to_str().unwrap())], &[]);
+        env.files.insert(r"C:\bin\claude.exe".into());
+        let b = CliBackend::with_parts(CliTool::Claude, "", "haiku", Arc::new(FakeRunner::new(vec![])), Arc::new(env), root.clone(), true);
+        let id = new_uuid();
+        b.begin_session(&id);
+        std::fs::write(proj.join(format!("{id}.jsonl")), "{}").unwrap();
+        std::fs::write(proj.join("someone-elses.jsonl"), "{}").unwrap();
+        // A marker that is not a session id is never turned into a path.
+        std::fs::write(root.join("session-...pending"), b"").unwrap();
+
+        assert_eq!(sweep_work_root(&root, Some(&config)), 5);
+        let left: Vec<String> = std::fs::read_dir(&root).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        assert_eq!(left, vec!["claude-timeline-settings.json".to_string()]);
+        assert!(!proj.join(format!("{id}.jsonl")).exists());
+        assert!(proj.join("someone-elses.jsonl").exists() && config.join("projects").exists());
+        // A finished run removes its own marker.
+        b.begin_session(&id);
+        assert!(session_marker(&root, &id).exists());
+        b.cleanup_session(&id);
+        assert!(!session_marker(&root, &id).exists());
+    }
+
+    #[test]
     fn session_cleanup_removes_only_that_transcript() {
         let tmp = tempfile::tempdir().unwrap();
         let config = tmp.path().join("claude-config");
         let proj = config.join("projects").join("C--Temp-daytrace-cli");
-        std::fs::create_dir_all(proj.join("abc")).unwrap();
-        std::fs::write(proj.join("abc.jsonl"), "{}").unwrap();
+        let id = "0f6c9a52-3b1e-4c2d-9e8f-1a2b3c4d5e6f";
+        std::fs::create_dir_all(proj.join(id)).unwrap();
+        std::fs::write(proj.join(format!("{id}.jsonl")), "{}").unwrap();
         std::fs::write(proj.join("other.jsonl"), "{}").unwrap();
         let mut env = discover::fake::FakeEnv::new(&[("CLAUDE_CONFIG_DIR", config.to_str().unwrap())], &[]);
         env.files.insert(r"C:\bin\claude.exe".into());
         let b = CliBackend::with_parts(CliTool::Claude, "", "haiku", Arc::new(FakeRunner::new(vec![])), Arc::new(env), tmp.path().into(), true);
-        b.cleanup_session("abc");
-        assert!(!proj.join("abc.jsonl").exists());
-        assert!(!proj.join("abc").exists());
+        b.cleanup_session(id);
+        assert!(!proj.join(format!("{id}.jsonl")).exists());
+        assert!(!proj.join(id).exists());
         assert!(proj.join("other.jsonl").exists());
+        // Not a session id: nothing is removed.
+        b.cleanup_session("..");
+        assert!(config.join("projects").exists());
     }
 }

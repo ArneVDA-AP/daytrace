@@ -5,7 +5,7 @@
 //! key) hands the whole batch to the fallback.
 
 use super::client::LlmClient;
-use crate::config::{stored_key, Pipeline, ProviderKind, Settings};
+use crate::config::{stored_fallback_key, stored_key, Pipeline, ProviderKind, Settings};
 use crate::db::Db;
 use anyhow::{anyhow, Result};
 use std::future::Future;
@@ -22,17 +22,29 @@ fn usable(kind: ProviderKind, base_url: &str) -> bool {
     kind != ProviderKind::Anthropic || stored_key(kind, base_url).is_some()
 }
 
+/// The fallback provider can run: not the Claude API, or the Claude API with a key for it.
+fn fallback_usable(kind: ProviderKind, base_url: &str) -> bool {
+    kind != ProviderKind::Anthropic || stored_fallback_key(kind, base_url).is_some()
+}
+
 pub fn has_usable_fallback(s: &Settings) -> bool {
-    s.fallback_provider.map(|k| usable(k, &s.fallback_base_url)).unwrap_or(false)
+    s.fallback_provider.map(|k| fallback_usable(k, &s.fallback_base_url)).unwrap_or(false)
+}
+
+/// True when analysis has to wait for an API key: the main provider is the Claude API without a
+/// stored key and no usable fallback provider is set up (`lanes` would fail). One predicate for
+/// the analysis loop, reprocessing, "Try again" and the missing-key notification.
+pub fn waits_for_key(s: &Settings) -> bool {
+    !usable(s.provider, &s.base_url) && !has_usable_fallback(s)
 }
 
 fn fallback_lane(s: &Settings, db: Option<Db>) -> Option<Lane> {
     let kind = s.fallback_provider?;
-    if !usable(kind, &s.fallback_base_url) {
+    if !fallback_usable(kind, &s.fallback_base_url) {
         log::warn!("fallback provider {} has no API key; not used", kind.label());
         return None;
     }
-    let key = stored_key(kind, &s.fallback_base_url);
+    let key = stored_fallback_key(kind, &s.fallback_base_url);
     let mut client = LlmClient::new(kind, &s.fallback_base_url, &s.fallback_model, key, db).ok()?;
     // The fallback answers now: no Batch API.
     client.reasoning = s.reasoning;
@@ -124,6 +136,45 @@ mod tests {
         .await;
         assert!(r.is_err());
         assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn fallback_key_has_its_own_slot() {
+        unsafe { std::env::remove_var("DAYTRACE_API_KEY") }; // test-only
+        let host = "https://fallback-slot-test.example/v1";
+        crate::platform::secret_set(&crate::config::key_slot(ProviderKind::OpenaiCompatible, host).unwrap(), "main-key").unwrap();
+        // Until the fallback has a key of its own it uses the shared one (installs from before the
+        // split, or one account for both).
+        assert_eq!(stored_fallback_key(ProviderKind::OpenaiCompatible, host).as_deref(), Some("main-key"));
+        assert!(super::super::provider_cmds::provider_key_status(ProviderKind::OpenaiCompatible, host.into()));
+        // "Save key" for the fallback: a second account's key.
+        super::super::provider_cmds::provider_save_key(ProviderKind::OpenaiCompatible, host.into(), " second-account ".into()).unwrap();
+        assert_eq!(stored_key(ProviderKind::OpenaiCompatible, host).as_deref(), Some("main-key"), "the main key is untouched");
+        assert_eq!(stored_fallback_key(ProviderKind::OpenaiCompatible, host).as_deref(), Some("second-account"));
+        let s = Settings {
+            provider: ProviderKind::OpenaiCompatible,
+            base_url: host.into(),
+            model: "main-model".into(),
+            fallback_provider: Some(ProviderKind::OpenaiCompatible),
+            fallback_base_url: host.into(),
+            fallback_model: "other-model".into(),
+            ..Default::default()
+        }
+        .sanitized();
+        let l = lanes(&s, None).unwrap();
+        assert_eq!((l[0].client.key(), l[1].client.key()), (Some("main-key"), Some("second-account")));
+    }
+
+    #[test]
+    fn waiting_for_a_key_counts_the_fallback() {
+        unsafe { std::env::remove_var("DAYTRACE_API_KEY") }; // test-only
+        // No test stores a key in the Claude API slot.
+        let mut s = Settings { provider: ProviderKind::Anthropic, ..Default::default() };
+        assert!(waits_for_key(&s));
+        s.fallback_provider = Some(ProviderKind::Ollama);
+        let s = s.sanitized();
+        assert!(!waits_for_key(&s), "the fallback analyzes the batches");
+        assert!(!waits_for_key(&Settings { provider: ProviderKind::ClaudeCli, ..Default::default() }));
     }
 
     #[test]

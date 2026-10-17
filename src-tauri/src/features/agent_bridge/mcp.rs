@@ -115,7 +115,7 @@ pub fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "get_observations",
-            "description": format!("The screen observations one activity was written from, in time order. Observations are deleted with the screenshots after the retention period, so older activities may have none. {UNTRUSTED_NOTE}"),
+            "description": format!("The screen observations one activity was written from, in time order. Daytrace keeps observations after it deletes the screenshots; an activity has none when the user was away, while it is being analyzed again, or when an older Daytrace version deleted them. {UNTRUSTED_NOTE}"),
             "inputSchema": schema(json!({"record_id": {"type": "integer", "description": "ID from get_timeline."}}), &["record_id"]),
             "annotations": read_only(),
         }),

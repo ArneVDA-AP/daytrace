@@ -39,18 +39,27 @@ pub fn get_settings(state: S) -> SettingsDto {
 pub fn save_settings(app: tauri::AppHandle, state: S, settings: Settings, api_key: Option<String>) -> CmdResult<SettingsDto> {
     crate::features::insights::check_settings(&settings)?;
     let mut settings = settings.sanitized();
-    crate::features::chat::clear_model_on_provider_change(&state.settings(), &mut settings);
-    settings.save(&state.paths.settings).map_err(err)?;
-    if let Some(k) = api_key.filter(|k| !k.trim().is_empty()) {
-        let slot = crate::config::key_slot(settings.provider, &settings.base_url).ok_or("This provider does not use an API key")?;
-        crate::platform::secret_set(&slot, k.trim()).map_err(err)?;
+    // Everything that can refuse the request is checked before anything is written.
+    let key = api_key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
+    let slot = match &key {
+        Some(_) => Some(crate::config::key_slot(settings.provider, &settings.base_url).ok_or("This provider does not use an API key")?),
+        None => None,
+    };
+    {
+        // File and memory change together, in the same order as every other settings change.
+        let _saving = crate::config::save_lock();
+        crate::features::chat::clear_model_on_provider_change(&state.settings(), &mut settings);
+        settings.save(&state.paths.settings).map_err(err)?;
+        *state.settings.write().unwrap() = settings.clone();
+    }
+    if let (Some(slot), Some(k)) = (slot, key) {
+        crate::platform::secret_set(&slot, &k).map_err(err)?;
     }
     {
         use tauri_plugin_autostart::ManagerExt;
         let al = app.autolaunch();
         let _ = if settings.launch_at_login { al.enable() } else { al.disable() };
     }
-    *state.settings.write().unwrap() = settings;
     crate::tray::refresh(&app);
     Ok(get_settings(state))
 }
@@ -87,12 +96,7 @@ pub fn get_status(state: S) -> CmdResult<StatusDto> {
 
 #[tauri::command]
 pub fn set_recording(app: tauri::AppHandle, state: S, enabled: bool) -> CmdResult<()> {
-    let s = {
-        let mut g = state.settings.write().unwrap();
-        g.recording_enabled = enabled;
-        g.clone()
-    };
-    s.save(&state.paths.settings).map_err(err)?;
+    crate::features::platform_extras::update_settings(&state, |g| g.recording_enabled = enabled).map_err(err)?;
     if enabled {
         state.capture_now.store(true, std::sync::atomic::Ordering::SeqCst);
     }
@@ -127,12 +131,19 @@ pub fn get_card_screenshots(state: S, card_id: i64, max: Option<usize>) -> CmdRe
         .filter(|s| s.has_image() || s.hidden_app.is_some())
         .collect();
     let max = max.unwrap_or(24).max(1);
-    let step = (shots.len() / max).max(1);
-    Ok(shots
+    // Spread over the whole card (first and last included), also when `max` is more than half of
+    // the frames; a fixed step would stop at the first `max`.
+    Ok(crate::llm::one_step::evenly_spaced(shots.len(), max)
         .into_iter()
-        .step_by(step)
-        .take(max)
-        .map(|s| ShotDto { id: s.id, captured_at: s.captured_at, app_name: s.app_name, window_title: s.window_title, hidden_app: s.hidden_app, skip_reason: s.skip_reason })
+        .map(|i| &shots[i])
+        .map(|s| ShotDto {
+            id: s.id,
+            captured_at: s.captured_at,
+            app_name: s.app_name.clone(),
+            window_title: s.window_title.clone(),
+            hidden_app: s.hidden_app.clone(),
+            skip_reason: s.skip_reason.clone(),
+        })
         .collect())
 }
 
@@ -173,22 +184,24 @@ pub fn analyze_now(state: S) {
     state.analyze_now.notify_one();
 }
 
-fn client_for(provider: ProviderKind, base_url: &str, model: &str, api_key: Option<String>) -> CmdResult<LlmClient> {
+fn client_for(provider: ProviderKind, base_url: &str, model: &str, api_key: Option<String>, fallback: bool) -> CmdResult<LlmClient> {
     // A key typed in the form is used as-is; otherwise only the key stored for this exact
-    // provider and host is used.
-    let key = api_key.filter(|k| !k.trim().is_empty()).or_else(|| crate::config::stored_key(provider, base_url));
+    // provider and host is used (the fallback provider's own key, for the fallback).
+    let stored = || if fallback { crate::config::stored_fallback_key(provider, base_url) } else { crate::config::stored_key(provider, base_url) };
+    let key = api_key.filter(|k| !k.trim().is_empty()).or_else(stored);
     LlmClient::new(provider, base_url, model, key, None).map_err(err)
 }
 
 #[tauri::command]
 pub async fn list_models(provider: ProviderKind, base_url: String, api_key: Option<String>) -> CmdResult<Vec<String>> {
-    client_for(provider, &base_url, "", api_key)?.list_models().await.map_err(err)
+    client_for(provider, &base_url, "", api_key, false)?.list_models().await.map_err(err)
 }
 
-/// Sends a one-line prompt plus a tiny image, so vision support is checked too.
+/// Sends a one-line prompt plus a tiny image, so vision support is checked too. `fallback`: test
+/// with the fallback provider's stored key.
 #[tauri::command]
-pub async fn test_provider(provider: ProviderKind, base_url: String, model: String, api_key: Option<String>) -> CmdResult<String> {
-    let client = client_for(provider, &base_url, &model, api_key)?;
+pub async fn test_provider(provider: ProviderKind, base_url: String, model: String, api_key: Option<String>, fallback: Option<bool>) -> CmdResult<String> {
+    let client = client_for(provider, &base_url, &model, api_key, fallback.unwrap_or(false))?;
     let img = image::RgbImage::from_pixel(32, 32, image::Rgb([30, 120, 220]));
     let jpg = crate::imaging::encode_jpeg(&img, 90).map_err(err)?;
     let b64 = base64::engine::general_purpose::STANDARD.encode(jpg);

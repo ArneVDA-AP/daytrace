@@ -12,7 +12,7 @@ pub mod update;
 pub use notify::NotificationPrefs;
 
 use crate::capture::RecorderStatus;
-use crate::config::{ProviderKind, Settings};
+use crate::config::Settings;
 use crate::state::AppState;
 use crate::timeutil::{logical_day, now_ts};
 use anyhow::Result;
@@ -64,6 +64,10 @@ pub fn kv_get(state: &AppState, key: &str) -> Option<String> {
     c.query_row("SELECT value FROM platform_state WHERE key = ?", [key], |r| r.get(0)).optional().ok().flatten()
 }
 
+pub fn kv_delete(state: &AppState, key: &str) {
+    let _ = state.db.conn().execute("DELETE FROM platform_state WHERE key = ?", [key]);
+}
+
 pub fn kv_set(state: &AppState, key: &str, value: &str) {
     let c = state.db.conn();
     if let Err(e) = c.execute(
@@ -74,8 +78,11 @@ pub fn kv_set(state: &AppState, key: &str, value: &str) {
     }
 }
 
-/// Changes the settings in memory and on disk.
+/// Changes the settings in memory and on disk. The save lock is held from the change through the
+/// save, so concurrent changes (the settings form, the tray, the platform loop) are written in
+/// the order they were made and the file always matches memory.
 pub fn update_settings(state: &AppState, f: impl FnOnce(&mut Settings)) -> Result<Settings> {
+    let _saving = crate::config::save_lock();
     let s = {
         let mut g = state.settings.write().unwrap();
         f(&mut g);
@@ -87,28 +94,68 @@ pub fn update_settings(state: &AppState, f: impl FnOnce(&mut Settings)) -> Resul
 
 // ---- first run ----
 
-/// True for a settings file written before onboarding existed (no `onboardingCompleted` key):
-/// that install is already set up and keeps recording. A file that does not parse also counts,
-/// so a damaged file never stops an existing install from recording.
-pub fn is_existing_install(raw_settings: Option<&str>) -> bool {
-    match raw_settings {
-        None => false,
-        Some(raw) => match serde_json::from_str::<serde_json::Value>(raw) {
-            Ok(serde_json::Value::Object(m)) => !m.contains_key("onboardingCompleted"),
-            _ => true,
-        },
+/// What the startup finds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Install {
+    /// No settings and no recordings yet: the first-run setup comes up.
+    Fresh,
+    /// Set up before onboarding existed: a settings file without `onboardingCompleted`, or no
+    /// settings file at all but screenshot rows in the database (an install that never saved
+    /// its settings). It keeps recording.
+    Existing,
+    /// A settings file of this version.
+    Current,
+    /// A settings file that does not parse (a typo in a hand edit, a value a newer version
+    /// wrote). It is kept as `settings.json.bad` and recording waits in the setup.
+    Damaged,
+}
+
+pub fn classify_install(raw_settings: Option<&str>, has_recordings: bool) -> Install {
+    let Some(raw) = raw_settings else {
+        return if has_recordings { Install::Existing } else { Install::Fresh };
+    };
+    match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(serde_json::Value::Object(m)) if serde_json::from_str::<Settings>(raw).is_ok() => {
+            if m.contains_key("onboardingCompleted") { Install::Current } else { Install::Existing }
+        }
+        _ => Install::Damaged,
     }
 }
+
+/// Where a settings file that did not parse is kept.
+pub fn bad_settings_path(state: &AppState) -> std::path::PathBuf {
+    state.paths.settings.with_extension("json.bad")
+}
+
+const K_SETTINGS_DAMAGED: &str = "settings_damaged";
 
 /// Runs before the recorder starts.
 pub fn init(state: &AppState) {
     let raw = std::fs::read_to_string(&state.paths.settings).ok();
-    if is_existing_install(raw.as_deref()) {
-        log::info!("existing install: marking first-run setup as done");
-        if let Err(e) = update_settings(state, |s| s.onboarding_completed = true) {
-            log::error!("could not save settings: {e:#}");
+    let has_recordings = state.db.conn().query_row("SELECT EXISTS(SELECT 1 FROM screenshots)", [], |r| r.get::<_, bool>(0)).unwrap_or(false);
+    match classify_install(raw.as_deref(), has_recordings) {
+        Install::Fresh | Install::Current => {}
+        Install::Existing => {
+            log::info!("existing install: marking first-run setup as done");
+            if let Err(e) = update_settings(state, |s| s.onboarding_completed = true) {
+                log::error!("could not save settings: {e:#}");
+            }
+            kv_set(state, K_FIRST_CARDS, "done");
         }
-        kv_set(state, K_FIRST_CARDS, "done");
+        Install::Damaged => {
+            // Nothing is saved over the file here. The defaults in memory have the setup not
+            // done, so recording waits until the user goes through the setup again.
+            let bad = bad_settings_path(state);
+            match std::fs::copy(&state.paths.settings, &bad) {
+                Ok(_) => log::error!("settings.json could not be read; kept as {} and opened the setup", bad.display()),
+                Err(e) => log::error!("settings.json could not be read, and copying it to {} failed: {e}", bad.display()),
+            }
+            {
+                let mut g = state.settings.write().unwrap();
+                g.onboarding_completed = false;
+            }
+            kv_set(state, K_SETTINGS_DAMAGED, &bad.display().to_string());
+        }
     }
 }
 
@@ -124,6 +171,7 @@ pub fn finish_onboarding(state: &AppState, recording: bool) -> Result<Settings> 
     if first_run && kv_get(state, K_FIRST_CARDS).is_none() {
         kv_set(state, K_FIRST_CARDS, &format!("pending:{}", now_ts()));
     }
+    kv_delete(state, K_SETTINGS_DAMAGED);
     if recording {
         state.capture_now.store(true, std::sync::atomic::Ordering::SeqCst);
     }
@@ -222,11 +270,9 @@ pub fn detect(state: &AppState, watch: &mut Watch, now: i64) -> Vec<(Kind, Strin
         out.push((kind, streak.to_string()));
     }
 
-    // Screenshots wait for an API key (the analysis loop keeps such batches pending).
-    if settings.provider == ProviderKind::Anthropic
-        && state.db.count_batches_with_status(&["pending"]).unwrap_or(0) > 0
-        && crate::config::stored_key(settings.provider, &settings.base_url).is_none()
-    {
+    // Screenshots wait for an API key (the analysis loop keeps such batches pending; a usable
+    // fallback provider analyzes them instead).
+    if crate::llm::routing::waits_for_key(&settings) && state.db.count_batches_with_status(&["pending"]).unwrap_or(0) > 0 {
         out.push((Kind::MissingKey, String::new()));
     }
 
@@ -400,7 +446,9 @@ pub async fn check_updates(app: &AppHandle, announce: bool) -> UpdateStatus {
         return update_status(&state);
     }
     let current = env!("CARGO_PKG_VERSION");
-    let st = update::check(current, now_ts(), || update::fetch_github(current)).await;
+    let fresh = update::check(current, now_ts(), || update::fetch_github(current)).await;
+    // A failed check keeps the release found before (and the tray item); it only adds the error.
+    let st = update::merge(&update_status(&state), fresh);
     CHECKING.store(false, std::sync::atomic::Ordering::SeqCst);
     kv_set(&state, K_UPDATE, &serde_json::to_string(&st).unwrap_or_default());
     log::info!("update check: latest {:?}, available {}, error {:?}", st.latest_version, st.available, st.error);
@@ -508,6 +556,8 @@ pub struct PlatformInfo {
     pause_options: Vec<PauseOption>,
     minute_options: Vec<u32>,
     update: UpdateStatus,
+    /// Set when settings.json could not be read at startup: where the unreadable file was kept.
+    damaged_settings_copy: Option<String>,
 }
 
 #[tauri::command]
@@ -518,6 +568,7 @@ pub fn platform_info(state: S) -> PlatformInfo {
         pause_options: pause::choices(&settings).into_iter().map(|c| PauseOption { id: c.id(), label: c.label() }).collect(),
         minute_options: pause::MINUTE_OPTIONS.to_vec(),
         update: update_status(&state),
+        damaged_settings_copy: kv_get(&state, K_SETTINGS_DAMAGED),
     }
 }
 
@@ -599,7 +650,7 @@ pub fn open_release_page(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Paths;
+    use crate::config::{Paths, ProviderKind};
 
     fn state() -> (tempfile::TempDir, AppState) {
         let dir = tempfile::tempdir().unwrap();
@@ -609,10 +660,67 @@ mod tests {
 
     #[test]
     fn detects_existing_installs() {
-        assert!(!is_existing_install(None), "fresh install");
-        assert!(is_existing_install(Some(r#"{"recordingEnabled":true}"#)));
-        assert!(!is_existing_install(Some(r#"{"recordingEnabled":true,"onboardingCompleted":false}"#)));
-        assert!(is_existing_install(Some("{broken")));
+        assert_eq!(classify_install(None, false), Install::Fresh);
+        assert_eq!(classify_install(None, true), Install::Existing, "never saved its settings but has recordings");
+        assert_eq!(classify_install(Some(r#"{"recordingEnabled":true}"#), false), Install::Existing);
+        assert_eq!(classify_install(Some(r#"{"recordingEnabled":true,"onboardingCompleted":false}"#), true), Install::Current);
+        assert_eq!(classify_install(Some("{broken"), true), Install::Damaged);
+        assert_eq!(classify_install(Some(r#"{"provider":"gemini_native"}"#), true), Install::Damaged, "a value this version can't read");
+        assert_eq!(classify_install(Some(""), false), Install::Damaged);
+    }
+
+    #[test]
+    fn damaged_settings_are_kept_and_recording_waits() {
+        let (dir, st) = state();
+        let broken = r#"{"provider":"anthropic","blockedApps":["keepass","bank"],"retentionDays":3,"#;
+        std::fs::write(dir.path().join("settings.json"), broken).unwrap();
+        let st = { drop(st); AppState::new(Paths::new(dir.path().to_path_buf()).unwrap()).unwrap() };
+        init(&st);
+        assert_eq!(std::fs::read_to_string(dir.path().join("settings.json.bad")).unwrap(), broken);
+        assert_eq!(std::fs::read_to_string(dir.path().join("settings.json")).unwrap(), broken, "not overwritten at startup");
+        assert!(!st.settings().onboarding_completed);
+        assert!(!pause::recording_allowed(&st.settings()), "recording waits in the setup");
+        assert!(kv_get(&st, K_SETTINGS_DAMAGED).unwrap().ends_with("settings.json.bad"));
+        // Finishing the setup writes a good file; the copy stays.
+        finish_onboarding(&st, true).unwrap();
+        assert!(kv_get(&st, K_SETTINGS_DAMAGED).is_none());
+        assert!(Settings::load(&st.paths.settings).onboarding_completed);
+        assert!(dir.path().join("settings.json.bad").exists());
+    }
+
+    #[test]
+    fn install_with_recordings_but_no_settings_keeps_recording() {
+        let (dir, st) = state();
+        st.db.insert_screenshot(1_800_000_000, "", 0, 0, Some("code"), None, None, None).unwrap();
+        assert!(!dir.path().join("settings.json").exists());
+        init(&st);
+        assert!(st.settings().onboarding_completed);
+        assert!(pause::recording_allowed(&st.settings()));
+        assert!(Settings::load(&st.paths.settings).onboarding_completed);
+    }
+
+    #[test]
+    fn concurrent_saves_leave_a_whole_file_that_matches_memory() {
+        let (_d, st) = state();
+        let st = std::sync::Arc::new(st);
+        let threads: Vec<_> = (0..8)
+            .map(|i| {
+                let st = st.clone();
+                std::thread::spawn(move || {
+                    for j in 0..25 {
+                        update_settings(&st, |s| s.retention_days = 1 + ((i * 25 + j) % 300) as u32).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        let raw = std::fs::read_to_string(&st.paths.settings).unwrap();
+        let on_disk: Settings = serde_json::from_str(&raw).expect("a whole file");
+        assert_eq!(on_disk.retention_days, st.settings().retention_days, "the last save in memory is the one on disk");
+        let leftovers = std::fs::read_dir(st.paths.settings.parent().unwrap()).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".tmp")).count();
+        assert_eq!(leftovers, 0);
     }
 
     #[test]

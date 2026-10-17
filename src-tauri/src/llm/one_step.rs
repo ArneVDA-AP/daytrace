@@ -10,7 +10,7 @@
 
 use super::cli::args::{Profile, Session};
 use super::cli::output::Usage;
-use super::cli::{CliBackend, CliRequest, CliTool, DEFAULT_TIMEOUT};
+use super::cli::{run_timeout, CliBackend, CliRequest, CliTool};
 use super::one_step_prompts as p;
 use super::Ctx;
 use crate::db::{Shot, StoredCard};
@@ -486,6 +486,8 @@ async fn run_claude(ctx: &Ctx<'_>, cli: &CliBackend, base: &str, frames_dir: &st
             self.0.cleanup_session(&self.1);
         }
     }
+    // A marker for the next start, in case Quit or a crash skips the cleanup below.
+    cli.begin_session(&session);
     let _cleanup = Cleanup(cli, session.clone());
     let mut prompt = base.to_string();
     let mut last_err = anyhow!("No timeline cards returned.");
@@ -498,7 +500,7 @@ async fn run_claude(ctx: &Ctx<'_>, cli: &CliBackend, base: &str, frames_dir: &st
             effort: None,
             read_dir: Some(frames_dir.to_path_buf()),
             images: Vec::new(),
-            timeout: DEFAULT_TIMEOUT,
+            timeout: run_timeout(),
             model: None,
         };
         let started = Instant::now();
@@ -541,7 +543,7 @@ async fn run_codex(ctx: &Ctx<'_>, cli: &CliBackend, base: &str, images: &[String
             effort: Some("high".into()),
             read_dir: None,
             images: images.to_vec(),
-            timeout: DEFAULT_TIMEOUT,
+            timeout: run_timeout(),
             model: Some(model.clone()),
         };
         let started = Instant::now();
@@ -610,6 +612,8 @@ mod tests {
         assert_eq!(evenly_spaced(90, 15)[0], 0);
         assert_eq!(*evenly_spaced(90, 15).last().unwrap(), 89);
         assert_eq!(evenly_spaced(4, 15), vec![0, 1, 2, 3]);
+        // More than half of the items: still spread to the last one (card screenshots).
+        assert_eq!(evenly_spaced(10, 6), vec![0, 2, 4, 5, 7, 9]);
         let (a, b) = window_bounds(ts(9, 0) + 12, ts(9, 14) + 50);
         assert_eq!((a, b), (ts(9, 0), ts(9, 15)));
         let minute: Vec<i64> = (0..15).map(|i| ts(9, 0) + i * 64).collect();

@@ -72,7 +72,7 @@ pub fn clock_span_minutes(start: &str, end: &str) -> Option<f64> {
     Some(d)
 }
 
-fn local_at(date: NaiveDate, t: NaiveTime) -> Option<i64> {
+pub(crate) fn local_at(date: NaiveDate, t: NaiveTime) -> Option<i64> {
     local_candidates(date, t).into_iter().next()
 }
 

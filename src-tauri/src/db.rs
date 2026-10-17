@@ -131,11 +131,15 @@ pub struct Shot {
     pub hidden_app: Option<String>,
     /// Set when no image was stored (e.g. "idle").
     pub skip_reason: Option<String>,
+    /// The image was deleted (retention or a storage purge); the row stays.
+    pub is_deleted: bool,
 }
 
 impl Shot {
+    /// Whether the row still has its image file. Rows purged before purges cleared `file_path`
+    /// keep the old path, so the deleted flag is checked too.
     pub fn has_image(&self) -> bool {
-        !self.file_path.is_empty()
+        !self.is_deleted && !self.file_path.is_empty()
     }
 }
 
@@ -203,6 +207,53 @@ impl ResolvedCard {
     }
 }
 
+/// A card a window rewrite showed the model as a previous card.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SentCard {
+    pub id: i64,
+    pub start_ts: i64,
+    pub end_ts: i64,
+}
+
+fn insert_cards(tx: &rusqlite::Transaction, cards: &[ResolvedCard], batch_id: i64) -> Result<usize> {
+    let mut st = tx.prepare(
+        "INSERT INTO timeline_cards (batch_id, start, end, start_ts, end_ts, day, title, summary, category, subcategory, detailed_summary, metadata)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+    )?;
+    let mut n = 0;
+    for rc in cards {
+        let card = &rc.card;
+        let mut meta = serde_json::Map::new();
+        if let Some(d) = &card.distractions {
+            if !d.is_empty() {
+                meta.insert("distractions".into(), serde_json::to_value(d)?);
+            }
+        }
+        if let Some(a) = &card.app_sites {
+            meta.insert("appSites".into(), serde_json::to_value(a)?);
+        }
+        if let Some(i) = &rc.idle_meta {
+            meta.insert("idle".into(), i.clone());
+        }
+        st.execute(params![
+            batch_id,
+            card.start_time,
+            card.end_time,
+            rc.start_ts,
+            rc.end_ts,
+            timeutil::logical_day(rc.start_ts),
+            card.title,
+            card.summary,
+            card.category,
+            card.subcategory,
+            card.detailed_summary,
+            serde_json::Value::Object(meta).to_string(),
+        ])?;
+        n += 1;
+    }
+    Ok(n)
+}
+
 #[derive(Clone)]
 pub struct Db {
     conn: Arc<Mutex<Connection>>,
@@ -247,10 +298,11 @@ fn shot_from_row(r: &rusqlite::Row) -> rusqlite::Result<Shot> {
         window_title: r.get(5)?,
         hidden_app: r.get(6)?,
         skip_reason: r.get(7)?,
+        is_deleted: r.get::<_, i64>(8)? != 0,
     })
 }
 
-const SHOT_COLS: &str = "s.id, s.captured_at, s.file_path, s.idle_seconds_at_capture, s.app_name, s.window_title, s.hidden_app, s.skip_reason";
+const SHOT_COLS: &str = "s.id, s.captured_at, s.file_path, s.idle_seconds_at_capture, s.app_name, s.window_title, s.hidden_app, s.skip_reason, s.is_deleted";
 
 fn batch_from_row(r: &rusqlite::Row) -> rusqlite::Result<Batch> {
     Ok(Batch {
@@ -459,7 +511,8 @@ impl Db {
             }
         }
         {
-            let mut st = tx.prepare("UPDATE screenshots SET is_deleted = 1 WHERE id = ?")?;
+            // The path goes too, as in `expire_screenshots`: nothing may read the file again.
+            let mut st = tx.prepare("UPDATE screenshots SET is_deleted = 1, file_path = '' WHERE id = ?")?;
             for (id, _, _) in &picked {
                 st.execute([id])?;
             }
@@ -515,6 +568,19 @@ impl Db {
         ))?;
         let rows = st.query_map([batch_id], shot_from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
+    }
+
+    /// Whether the batch can be analyzed again: it still has an image, or it never had one (a
+    /// batch of away or private-app rows only, analyzed from those rows). False once its images
+    /// were deleted (retention or a storage purge), even when rows without an image are left.
+    pub fn batch_has_frames(&self, batch_id: i64) -> Result<bool> {
+        let (images, deleted, rows): (i64, i64, i64) = self.c().query_row(
+            "SELECT COALESCE(SUM(s.is_deleted = 0 AND s.file_path != ''), 0), COALESCE(SUM(s.is_deleted != 0), 0), COUNT(*)
+             FROM batch_screenshots b JOIN screenshots s ON s.id = b.screenshot_id WHERE b.batch_id = ?",
+            [batch_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+        Ok(images > 0 || (deleted == 0 && rows > 0))
     }
 
     pub fn set_batch_status(&self, id: i64, status: &str, reason: Option<&str>) -> Result<()> {
@@ -617,13 +683,13 @@ impl Db {
             .optional()?)
     }
 
-    /// The most recent live card ending at or before `ts`. Cards the user edited are skipped, so
-    /// an Idle card is never stretched over them.
+    /// The most recent live card ending at or before `ts`, edited or not (an Idle card merges only
+    /// with an unedited Idle card right before it, never across an edited card).
     pub fn last_card_ending_by(&self, ts: i64) -> Result<Option<StoredCard>> {
         Ok(self
             .c()
             .query_row(
-                &format!("SELECT {CARD_COLS} FROM timeline_cards WHERE is_deleted = 0 AND end_ts <= ? AND {NOT_USER_EDITED} ORDER BY end_ts DESC LIMIT 1"),
+                &format!("SELECT {CARD_COLS} FROM timeline_cards WHERE is_deleted = 0 AND end_ts <= ? ORDER BY end_ts DESC, id DESC LIMIT 1"),
                 [ts],
                 card_from_row,
             )
@@ -647,43 +713,69 @@ impl Db {
             ),
             params![to, from, batch_id, keep_idle as i64],
         )?;
-        let mut n = 0;
-        {
+        let n = insert_cards(&tx, cards, batch_id)?;
+        tx.commit()?;
+        Ok(n)
+    }
+
+    /// Writes the result of a window rewrite against the cards as they are now, not as they were
+    /// when the model was asked (that can be minutes earlier on a CLI, longer with the Batch API).
+    /// The connection stays locked from the read to the commit, so no edit or delete slips in.
+    ///
+    /// Soft-deleted: the `sent` cards that are still live and still unedited, and this batch's
+    /// own System (failed) cards in [from, to). `build` gets the spans the new cards must stay
+    /// out of: every other live non-System card in the window (Idle cards, cards the user edited,
+    /// also while the model ran) and the sent cards the user deleted meanwhile. `build` must not
+    /// use the database. When it returns no cards, nothing changes.
+    pub fn commit_window_rewrite(
+        &self,
+        from: i64,
+        to: i64,
+        batch_id: i64,
+        sent: &[SentCard],
+        build: impl FnOnce(&[(i64, i64)]) -> Vec<ResolvedCard>,
+    ) -> Result<usize> {
+        let mut c = self.c();
+        let tx = c.transaction()?;
+        let live: Vec<(i64, i64, i64, String, Option<i64>, String)> = {
             let mut st = tx.prepare(
-                "INSERT INTO timeline_cards (batch_id, start, end, start_ts, end_ts, day, title, summary, category, subcategory, detailed_summary, metadata)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "SELECT id, start_ts, end_ts, category, batch_id, coalesce(metadata, '') FROM timeline_cards WHERE is_deleted = 0
+                 AND ((start_ts < ?1 AND end_ts > ?2) OR (start_ts >= ?2 AND start_ts < ?1))",
             )?;
-            for rc in cards {
-                let card = &rc.card;
-                let mut meta = serde_json::Map::new();
-                if let Some(d) = &card.distractions {
-                    if !d.is_empty() {
-                        meta.insert("distractions".into(), serde_json::to_value(d)?);
-                    }
+            st.query_map(params![to, from], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?
+                .collect::<rusqlite::Result<_>>()?
+        };
+        let sent_ids: std::collections::HashSet<i64> = sent.iter().map(|s| s.id).collect();
+        let mut doomed = Vec::new();
+        let mut avoid = Vec::new();
+        for (id, start, end, category, owner, meta) in &live {
+            if category == SYSTEM_CATEGORY {
+                if *owner == Some(batch_id) {
+                    doomed.push(*id);
                 }
-                if let Some(a) = &card.app_sites {
-                    meta.insert("appSites".into(), serde_json::to_value(a)?);
-                }
-                if let Some(i) = &rc.idle_meta {
-                    meta.insert("idle".into(), i.clone());
-                }
-                st.execute(params![
-                    batch_id,
-                    card.start_time,
-                    card.end_time,
-                    rc.start_ts,
-                    rc.end_ts,
-                    timeutil::logical_day(rc.start_ts),
-                    card.title,
-                    card.summary,
-                    card.category,
-                    card.subcategory,
-                    card.detailed_summary,
-                    serde_json::Value::Object(meta).to_string(),
-                ])?;
-                n += 1;
+                continue;
+            }
+            let kept = meta.contains("\"userEdited\":") || meta.contains("\"idle\":");
+            if sent_ids.contains(id) && !kept {
+                doomed.push(*id);
+            } else {
+                avoid.push((*start, *end));
             }
         }
+        for s in sent.iter().filter(|s| !live.iter().any(|l| l.0 == s.id)) {
+            avoid.push((s.start_ts, s.end_ts));
+        }
+        let cards = build(&avoid);
+        if cards.is_empty() {
+            return Ok(0); // the transaction is dropped unchanged
+        }
+        {
+            let mut st = tx.prepare("UPDATE timeline_cards SET is_deleted = 1 WHERE id = ? AND is_deleted = 0")?;
+            for id in &doomed {
+                st.execute([id])?;
+            }
+        }
+        let n = insert_cards(&tx, &cards, batch_id)?;
         tx.commit()?;
         Ok(n)
     }

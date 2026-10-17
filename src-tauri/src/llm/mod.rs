@@ -85,12 +85,14 @@ fn decode_local_segments(text: &str) -> Result<Vec<LocalSegment>> {
 
 /// Local path transcription (Dayflow OllamaProvider+Transcription).
 pub async fn transcribe_local(ctx: &Ctx<'_>, shots: &[Shot]) -> Result<Vec<Observation>> {
-    let n = shots.len();
+    // Rows whose image was deleted carry nothing to describe.
+    let usable: Vec<&Shot> = shots.iter().filter(|s| s.has_image() || hidden_note(s).is_some()).collect();
+    let n = usable.len();
     if n == 0 {
         bail!("No screenshots to transcribe");
     }
     let stride = (n / 15).max(1);
-    let sampled: Vec<&Shot> = shots.iter().step_by(stride).collect();
+    let sampled: Vec<&Shot> = usable.into_iter().step_by(stride).collect();
     let t0 = sampled[0].captured_at;
 
     let mut frames: Vec<(i64, String)> = Vec::new();
@@ -128,6 +130,9 @@ pub async fn transcribe_local(ctx: &Ctx<'_>, shots: &[Shot]) -> Result<Vec<Obser
                 // A connection failure on every frame should fail fast rather than burn 15 calls.
                 if !any_call_ok && e.downcast_ref::<reqwest::Error>().map(|r| r.is_connect()).unwrap_or(false) {
                     return Err(e.context("Could not reach the model server"));
+                }
+                if cli::is_timeout(&e) {
+                    return Err(e);
                 }
             }
         }
@@ -191,6 +196,7 @@ pub async fn transcribe_local(ctx: &Ctx<'_>, shots: &[Shot]) -> Result<Vec<Obser
         .await;
         match outcome {
             Ok(obs) => return Ok(obs),
+            Err(e) if cli::is_timeout(&e) => return Err(e),
             Err(e) => {
                 if attempt == 2 {
                     log::warn!("segment_video_activity exhausted ({e:#}); falling back to frame observations");
@@ -285,8 +291,9 @@ where
         match f(prompt.clone()).await {
             Ok(v) => return Ok(v),
             Err(e) => {
-                // Transport/auth errors are not fixable by re-prompting.
-                if e.downcast_ref::<client::HttpError>().map(|h| h.status == 401 || h.status == 403 || h.status == 404).unwrap_or(false) {
+                // Transport/auth errors are not fixable by re-prompting, and a CLI run that timed out
+                // is not run again (the caller moves to the fallback provider or fails the batch).
+                if e.downcast_ref::<client::HttpError>().map(|h| h.status == 401 || h.status == 403 || h.status == 404).unwrap_or(false) || cli::is_timeout(&e) {
                     return Err(e);
                 }
                 log::warn!("attempt {attempt} failed: {e:#}");
@@ -475,6 +482,7 @@ async fn local_json_call<T: serde::de::DeserializeOwned>(
         .await;
         match res {
             Ok(v) => return Ok(v),
+            Err(e) if cli::is_timeout(&e) => return Err(e),
             Err(e) => {
                 if attempt < 3 {
                     prompt = base.to_string() + &retry(&e.to_string());
@@ -534,6 +542,7 @@ pub async fn cards_local(ctx: &Ctx<'_>, batch_obs: &[Observation], existing: &[A
                 }
                 last_err = Some(anyhow!("Empty title response"));
             }
+            Err(e) if cli::is_timeout(&e) => return Err(e),
             Err(e) => last_err = Some(e),
         }
         if attempt < 3 {

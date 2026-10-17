@@ -93,7 +93,7 @@ mod tests {
     use super::*;
 
     fn shot(id: i64, t: i64, idle: i64) -> Shot {
-        Shot { id, captured_at: t, file_path: String::new(), idle_seconds: idle, app_name: None, window_title: None, hidden_app: None, skip_reason: None }
+        Shot { id, captured_at: t, file_path: String::new(), idle_seconds: idle, app_name: None, window_title: None, hidden_app: None, skip_reason: None, is_deleted: false }
     }
 
     #[test]

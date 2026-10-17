@@ -99,10 +99,10 @@ pub fn days_with_data(db: &crate::db::Db, from_day: &str, to_day: &str) -> Resul
     Ok(rows)
 }
 
+/// Refuses a request that would only wait: the Claude API without a key and no usable fallback
+/// provider (the same check as the analysis loop's).
 fn needs_key(state: &AppState) -> Option<String> {
-    let s = state.settings();
-    (s.provider == crate::config::ProviderKind::Anthropic && crate::config::stored_key(s.provider, &s.base_url).is_none())
-        .then(|| "Add an Anthropic API key in Settings first.".to_string())
+    crate::llm::routing::waits_for_key(&state.settings()).then(|| "Add an Anthropic API key in Settings first.".to_string())
 }
 
 // ---- commands ----

@@ -124,6 +124,8 @@ fn run_blocking(spec: ProcessSpec, cancel: &AtomicBool) -> Result<ProcessOutput>
         reason: e.to_string(),
         not_found: e.kind() == std::io::ErrorKind::NotFound,
     })?;
+    // Ends with Daytrace, however Daytrace ends (Quit, a crash, the end of the session).
+    exit_guard::adopt(&child);
     let pid = child.id();
 
     let out_buf = Arc::new(Mutex::new(Vec::new()));
@@ -206,6 +208,65 @@ fn kill_tree(child: &mut std::process::Child, pid: u32) {
 #[cfg(not(windows))]
 fn kill_tree(child: &mut std::process::Child, _pid: u32) {
     let _ = child.kill();
+}
+
+/// Ties every CLI process to Daytrace's lifetime. On Windows each child goes into one job object
+/// with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE; Daytrace holds the only handle to the job and never
+/// closes it, so when Daytrace exits (Quit calls `app.exit`, which skips the runner's own kill)
+/// Windows closes the handle and ends the CLI and everything it started (the `node` behind an
+/// npm `claude.cmd` shim joins the job automatically). Elsewhere nothing is done.
+#[cfg(windows)]
+mod exit_guard {
+    use std::os::windows::io::AsRawHandle;
+    use std::sync::OnceLock;
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    /// The job's handle as an integer (a HANDLE is not Sync); None when it could not be made.
+    fn job() -> Option<HANDLE> {
+        static JOB: OnceLock<Option<usize>> = OnceLock::new();
+        let raw = *JOB.get_or_init(|| unsafe {
+            let job = match CreateJobObjectW(None, windows::core::PCWSTR::null()) {
+                Ok(h) => h,
+                Err(e) => {
+                    log::warn!("could not create the CLI job object: {e}");
+                    return None;
+                }
+            };
+            let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let set = SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &info as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION as *const core::ffi::c_void,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+            if let Err(e) = set {
+                log::warn!("could not set up the CLI job object: {e}");
+                let _ = CloseHandle(job);
+                return None;
+            }
+            Some(job.0 as usize)
+        });
+        raw.map(|h| HANDLE(h as *mut core::ffi::c_void))
+    }
+
+    pub fn adopt(child: &std::process::Child) {
+        let Some(job) = job() else { return };
+        // SAFETY: the child's handle stays valid while `child` is borrowed; the job handle is
+        // never closed after it was set up.
+        if let Err(e) = unsafe { AssignProcessToJobObject(job, HANDLE(child.as_raw_handle() as *mut core::ffi::c_void)) } {
+            log::warn!("could not tie the CLI process to Daytrace: {e}");
+        }
+    }
+}
+
+#[cfg(not(windows))]
+mod exit_guard {
+    pub fn adopt(_child: &std::process::Child) {}
 }
 
 /// Scripted runner for tests: records every spec and answers from a queue.

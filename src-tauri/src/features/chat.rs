@@ -325,12 +325,7 @@ pub fn chat_info(state: S) -> ChatInfoDto {
 /// Sets the chat-only model (empty uses the timeline model).
 #[tauri::command]
 pub fn chat_set_model(app: tauri::AppHandle, state: S, model: String) -> CmdResult<ChatInfoDto> {
-    let s = {
-        let mut g = state.settings.write().unwrap();
-        g.chat_model = model.trim().to_string();
-        g.clone()
-    };
-    s.save(&state.paths.settings).map_err(err)?;
+    let s = crate::features::platform_extras::update_settings(&state, |g| g.chat_model = model.trim().to_string()).map_err(err)?;
     let _ = app.emit(SETTINGS_EVENT, ());
     Ok(info(&s))
 }

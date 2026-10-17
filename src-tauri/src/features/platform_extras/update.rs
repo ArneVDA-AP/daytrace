@@ -12,6 +12,8 @@ use std::future::Future;
 pub const REPO: &str = "ArneVDA-AP/daytrace";
 /// At most one automatic check per day.
 pub const CHECK_EVERY_SECS: i64 = 24 * 3600;
+/// After a failed check (offline, rate limited) the next try comes this much sooner.
+pub const RETRY_AFTER_ERROR_SECS: i64 = 3600;
 
 pub fn api_url() -> String {
     format!("https://api.github.com/repos/{REPO}/releases/latest")
@@ -136,8 +138,25 @@ pub struct UpdateStatus {
     pub release_url: Option<String>,
     pub available: bool,
     pub no_releases: bool,
+    /// The last check that reached GitHub (the release fields are from then).
     pub checked_at: Option<i64>,
     pub error: Option<String>,
+    /// The last check, also one that failed.
+    pub attempted_at: Option<i64>,
+}
+
+/// The status to keep after a check: a failed check only adds its error and time, so the
+/// release found earlier (and the tray's "Version X available") stays.
+pub fn merge(previous: &UpdateStatus, fresh: UpdateStatus) -> UpdateStatus {
+    if fresh.error.is_none() {
+        return UpdateStatus { attempted_at: fresh.checked_at, ..fresh };
+    }
+    UpdateStatus {
+        current_version: fresh.current_version,
+        error: fresh.error,
+        attempted_at: fresh.checked_at,
+        ..previous.clone()
+    }
 }
 
 /// Runs one check with the given fetcher (injected so tests make no network calls).
@@ -169,12 +188,16 @@ where
     st
 }
 
-/// Whether an automatic check is due.
+/// Whether an automatic check is due: a day after the last check, an hour after a failed one.
 pub fn due(last: &UpdateStatus, now: i64) -> bool {
-    match last.checked_at {
-        None => true,
-        Some(t) => now - t >= CHECK_EVERY_SECS || now < t,
-    }
+    let (at, every) = match (last.error.is_some(), last.attempted_at.or(last.checked_at)) {
+        (true, Some(t)) => (t, RETRY_AFTER_ERROR_SECS),
+        (_, _) => match last.checked_at {
+            None => return true,
+            Some(t) => (t, CHECK_EVERY_SECS),
+        },
+    };
+    now - at >= every || now < at
 }
 
 /// The real fetcher: GitHub's REST API over HTTPS.
@@ -265,5 +288,26 @@ mod tests {
         assert!(!due(&st, 1000 + 3600));
         assert!(due(&st, 1000 + CHECK_EVERY_SECS));
         assert!(due(&st, 10), "clock went backwards");
+    }
+
+    #[tokio::test]
+    async fn a_failed_check_keeps_the_release_and_retries_sooner() {
+        let found = merge(&UpdateStatus::default(), check("0.2.1", 1000, || async { Ok(Fetched::Json(JSON.to_string())) }).await);
+        assert!(found.available && found.attempted_at == Some(1000));
+        // Offline a day later: the known release stays, only the error and the time are new.
+        let later = 1000 + CHECK_EVERY_SECS;
+        let failed = merge(&found, check("0.2.1", later, || async { Err(anyhow!("could not reach GitHub")) }).await);
+        assert!(failed.available);
+        assert_eq!(failed.latest_version.as_deref(), Some("0.3.0"));
+        assert_eq!(failed.release_url, found.release_url);
+        assert_eq!(failed.checked_at, Some(1000), "the last check that reached GitHub");
+        assert_eq!(failed.attempted_at, Some(later));
+        assert!(failed.error.is_some());
+        assert!(!due(&failed, later + 600));
+        assert!(due(&failed, later + RETRY_AFTER_ERROR_SECS), "retried after an hour, not a day");
+        // The next good check clears the error.
+        let ok = merge(&failed, check("0.2.1", later + 3600, || async { Ok(Fetched::NoReleases) }).await);
+        assert!(ok.error.is_none() && ok.no_releases && !ok.available);
+        assert!(!due(&ok, later + 7200));
     }
 }

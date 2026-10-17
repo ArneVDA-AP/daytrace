@@ -51,22 +51,36 @@ pub fn spawn(state: Arc<AppState>) {
         // Let startup (and the first analysis tick) settle first.
         tokio::time::sleep(Duration::from_secs(120)).await;
         let mut last_backup_check = i64::MIN / 2;
+        // After a restore or reset at startup, the images captured since the restored backup (or
+        // all of them) have no rows; once a backup newer than them exists they are swept.
+        let recovered = matches!(backup::health().status, backup::HealthStatus::Restored | backup::HealthStatus::Reset);
+        let mut swept_after_recovery = !recovered;
         loop {
             let check_backup = now_ts() - last_backup_check >= BACKUP_CHECK_SECS;
             if check_backup {
                 last_backup_check = now_ts();
             }
             let st = state.clone();
+            let sweep = !swept_after_recovery;
             let run = tauri::async_runtime::spawn_blocking(move || {
                 if check_backup {
                     if let Err(e) = backup::backup_if_due(&st.paths.db, &backups_dir(&st), now_ts()) {
                         log::error!("database backup failed: {e:#}");
                     }
                 }
+                if sweep {
+                    // A fresh backup first: files older than it and without a row are strays.
+                    if let Err(e) = backup::create_backup(&st.paths.db, &backups_dir(&st)) {
+                        log::error!("database backup after recovery failed: {e:#}");
+                    }
+                    let cutoff = now_ts() - st.settings().retention_days as i64 * 86400;
+                    sweep_screenshot_files(&st, cutoff);
+                }
                 if let Err(e) = enforce_limit(&st) {
                     log::error!("storage limit failed: {e:#}");
                 }
             });
+            swept_after_recovery = true;
             if let Err(e) = run.await {
                 log::error!("storage task panicked: {e}");
             }
@@ -140,6 +154,114 @@ pub fn enforce_limit_bytes(state: &AppState, limit: i64) -> Result<PurgeResult> 
     let res = remove_files(&state.paths.screenshots, &items);
     log::info!("storage: screenshots took {total} bytes, limit {limit}; deleted the oldest {} ({} bytes)", res.files_removed, res.bytes_freed);
     Ok(res)
+}
+
+// ---- files the database does not account for ----
+
+/// A day folder is deleted whole once its day ended this long before the retention cutoff (the
+/// extra day covers a time-zone change between capture and now).
+const DAY_FOLDER_MARGIN_SECS: i64 = 86400;
+/// Damaged database files moved aside by the startup check are kept this long.
+pub const DAMAGED_KEEP_DAYS: i64 = 30;
+
+/// `"YYYY-MM-DD/name.jpg"`: a screenshot path by its day folder and file name, so a data folder
+/// that moved still matches its rows.
+fn file_key(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    let day = path.parent()?.file_name()?.to_str()?;
+    Some(format!("{day}/{name}"))
+}
+
+/// Screenshot files the rows do not account for. Retention and the size limit work from the
+/// rows; after a database restore (images captured after the backup have no row), a reset (no
+/// image has one) or a failed delete, files stay on disk that neither ever sees.
+/// - A day folder (`screenshots/YYYY-MM-DD`, the capture's local date) whose day ended more than a
+///   day before `cutoff` (the retention cutoff) is deleted whole, whatever the rows say.
+/// - In the other folders, a file that no live row points to is deleted when it is older than
+///   the newest database backup: a capture writes its row right after its file, so such a file
+///   would have had its row in that backup and since.
+///
+/// Returns the number of files removed.
+pub fn sweep_files(dir: &Path, db: &crate::db::Db, cutoff: i64, newest_backup: Option<i64>) -> Result<usize> {
+    let mut removed = 0;
+    let mut referenced: Option<std::collections::HashSet<String>> = None;
+    let midnight = |d: chrono::NaiveDate| crate::timeutil::local_at(d, chrono::NaiveTime::MIN);
+    for entry in std::fs::read_dir(dir)?.flatten() {
+        let folder = entry.path();
+        let Some(name) = entry.file_name().to_str().map(str::to_string) else { continue };
+        let Ok(date) = chrono::NaiveDate::parse_from_str(&name, "%Y-%m-%d") else { continue };
+        if !folder.is_dir() {
+            continue;
+        }
+        let (Some(start), Some(end)) = (midnight(date), date.succ_opt().and_then(midnight)) else { continue };
+        if end + DAY_FOLDER_MARGIN_SECS <= cutoff {
+            let files = std::fs::read_dir(&folder).map(|r| r.flatten().count()).unwrap_or(0);
+            if std::fs::remove_dir_all(&folder).is_ok() {
+                removed += files;
+            }
+            continue;
+        }
+        // Stray files: only in folders that can hold files from before the newest backup.
+        let Some(backup_at) = newest_backup.filter(|b| start < *b) else { continue };
+        if referenced.is_none() {
+            let c = db.conn();
+            let mut st = c.prepare("SELECT file_path FROM screenshots WHERE is_deleted = 0 AND file_path != ''")?;
+            let paths = st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            referenced = Some(paths.iter().filter_map(|p| file_key(Path::new(p))).collect());
+        }
+        let known = referenced.as_ref().unwrap();
+        for f in std::fs::read_dir(&folder).into_iter().flatten().flatten() {
+            let path = f.path();
+            if !path.is_file() || file_key(&path).is_some_and(|k| known.contains(&k)) {
+                continue;
+            }
+            let modified = f.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64);
+            if modified.is_some_and(|m| m < backup_at) && std::fs::remove_file(&path).is_ok() {
+                removed += 1;
+            }
+        }
+        let _ = std::fs::remove_dir(&folder); // only succeeds when empty
+    }
+    Ok(removed)
+}
+
+/// `sweep_files` over the app's screenshots folder, against its newest backup. Called by the
+/// hourly retention and once after a database restore or reset.
+pub fn sweep_screenshot_files(state: &AppState, cutoff: i64) -> usize {
+    let newest = backup::list_backups(&backups_dir(state)).into_iter().map(|(_, i)| i.created_at).max();
+    match sweep_files(&state.paths.screenshots, &state.db, cutoff, newest) {
+        Ok(n) => {
+            if n > 0 {
+                log::info!("storage: removed {n} screenshot files the database had no current row for");
+            }
+            n
+        }
+        Err(e) => {
+            log::warn!("storage: sweeping screenshot files failed: {e:#}");
+            0
+        }
+    }
+}
+
+/// Deletes `daytrace-damaged-*.sqlite` files (and their `-wal`) in the data folder that were moved
+/// aside more than `DAMAGED_KEEP_DAYS` ago (by the time in the name, else the file's date). They
+/// hold old observations and window titles, so they do not stay forever.
+pub fn remove_old_damaged_databases(root: &Path, now: i64) -> usize {
+    let mut removed = 0;
+    for e in std::fs::read_dir(root).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        let Some(rest) = name.strip_prefix("daytrace-damaged-") else { continue };
+        let stamp = rest.split(".sqlite").next().unwrap_or("");
+        let at = chrono::NaiveDateTime::parse_from_str(stamp, "%Y-%m-%d_%H%M%S")
+            .ok()
+            .and_then(|t| crate::timeutil::local_at(t.date(), t.time()))
+            .or_else(|| e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64));
+        if at.is_some_and(|t| now - t > DAMAGED_KEEP_DAYS * 86400) && e.path().is_file() && std::fs::remove_file(e.path()).is_ok() {
+            log::info!("removed the damaged database copy {name}");
+            removed += 1;
+        }
+    }
+    removed
 }
 
 /// Applies `storage_limit_gb` from the settings (nothing when it is 0).
@@ -429,6 +551,62 @@ mod tests {
         st.db.insert_screenshot(now - 30 * 86400, &outside.to_string_lossy(), 1, 0, None, None, None, None).unwrap();
         delete_older_than(&st, 7).unwrap();
         assert!(outside.exists());
+    }
+
+    fn set_mtime(p: &Path, ts: i64) {
+        let f = std::fs::File::options().write(true).open(p).unwrap();
+        f.set_modified(std::time::UNIX_EPOCH + Duration::from_secs(ts as u64)).unwrap();
+    }
+
+    #[test]
+    fn sweep_removes_files_the_database_does_not_know() {
+        let (_d, st) = state();
+        let now = now_ts();
+        let cutoff = now - 7 * 86400;
+        // A day past the retention period, with a row that is still live (as after a restore):
+        // the folder goes whole.
+        let old = shot(&st, now - 20 * 86400, 10);
+        // Two days ago: a file with its row, a stray older than the newest backup (captured after
+        // the backup that was restored), and a stray newer than that backup.
+        let known = shot(&st, now - 2 * 86400, 10);
+        set_mtime(&known, now - 2 * 86400);
+        let day = known.parent().unwrap().to_path_buf();
+        let stray = day.join("235959_999.jpg");
+        std::fs::write(&stray, b"x").unwrap();
+        set_mtime(&stray, now - 2 * 86400);
+        let fresh = day.join("235958_999.jpg");
+        std::fs::write(&fresh, b"x").unwrap();
+        // Not a day folder: left alone.
+        let other = st.paths.screenshots.join("notes");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("a.txt"), b"x").unwrap();
+
+        // Without a backup only the old day goes.
+        assert_eq!(sweep_files(&st.paths.screenshots, &st.db, cutoff, None).unwrap(), 1);
+        assert!(!old.exists() && !old.parent().unwrap().exists());
+        assert!(stray.exists());
+        let backup_at = now - 86400;
+        assert_eq!(sweep_files(&st.paths.screenshots, &st.db, cutoff, Some(backup_at)).unwrap(), 1);
+        assert!(!stray.exists());
+        assert!(known.exists() && fresh.exists() && other.join("a.txt").exists());
+        // A file whose row was purged (path cleared) but that is still there counts as a stray.
+        st.db.expire_screenshots_between(now - 3 * 86400, now - 86400, i64::MAX).unwrap();
+        assert_eq!(sweep_files(&st.paths.screenshots, &st.db, cutoff, Some(backup_at)).unwrap(), 1);
+        assert!(!known.exists() && fresh.exists());
+    }
+
+    #[test]
+    fn old_damaged_databases_are_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let stamp_at = crate::timeutil::local_at(chrono::NaiveDate::from_ymd_opt(2026, 8, 1).unwrap(), chrono::NaiveTime::from_hms_opt(10, 10, 10).unwrap()).unwrap();
+        for name in ["daytrace-damaged-2026-08-01_101010.sqlite", "daytrace-damaged-2026-08-01_101010.sqlite-wal", "daytrace-damaged-2026-08-25_090000.sqlite", "daytrace.sqlite"] {
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        let now = stamp_at + 31 * 86400;
+        assert_eq!(remove_old_damaged_databases(dir.path(), now), 2);
+        let mut left: Vec<String> = std::fs::read_dir(dir.path()).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        left.sort();
+        assert_eq!(left, vec!["daytrace-damaged-2026-08-25_090000.sqlite".to_string(), "daytrace.sqlite".to_string()]);
     }
 
     #[test]

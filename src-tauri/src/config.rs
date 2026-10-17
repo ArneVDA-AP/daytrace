@@ -227,6 +227,19 @@ pub fn stored_key(kind: ProviderKind, base_url: &str) -> Option<String> {
     key_slot(kind, base_url).and_then(|s| crate::platform::secret_get(&s))
 }
 
+/// Credential slot for the fallback provider's key. It is separate from the main provider's
+/// slot, so a key for a second account of the same provider never replaces the main key.
+pub fn fallback_key_slot(kind: ProviderKind, base_url: &str) -> Option<String> {
+    key_slot(kind, base_url).map(|s| format!("fallback:{s}"))
+}
+
+/// The fallback provider's key: its own slot first, then the slot of the same provider and
+/// server shared with the main provider. Before the fallback had its own slot its key was saved
+/// there, and when no separate key is saved, a fallback on the same provider uses the main key.
+pub fn stored_fallback_key(kind: ProviderKind, base_url: &str) -> Option<String> {
+    fallback_key_slot(kind, base_url).and_then(|s| crate::platform::secret_get(&s)).or_else(|| stored_key(kind, base_url))
+}
+
 pub fn default_model(kind: ProviderKind) -> &'static str {
     match kind {
         ProviderKind::Anthropic => "claude-haiku-5-5",
@@ -240,6 +253,14 @@ pub fn default_model(kind: ProviderKind) -> &'static str {
     }
 }
 
+/// Serializes every settings change that is saved to disk (the settings form, tray pause and
+/// resume, the platform loop's timed-pause resume, chat's model choice). Take it before the
+/// settings' RwLock, never while holding it.
+pub fn save_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 impl Settings {
     pub fn load(path: &Path) -> Settings {
         std::fs::read_to_string(path)
@@ -249,11 +270,18 @@ impl Settings {
             .unwrap_or_default()
     }
 
+    /// Writes the file through a temporary file of its own (never shared with another writer)
+    /// and a rename. Callers that change the settings in memory too hold `save_lock()` from the
+    /// change through the save, so the file and memory end in the same state.
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_string_pretty(self)?)?;
-        std::fs::rename(tmp, path)?;
-        Ok(())
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = path.with_extension(format!("json.{}-{seq}.tmp", std::process::id()));
+        let result = std::fs::write(&tmp, serde_json::to_string_pretty(self)?).and_then(|_| std::fs::rename(&tmp, path));
+        if result.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        Ok(result?)
     }
 
     pub fn sanitized(mut self) -> Settings {

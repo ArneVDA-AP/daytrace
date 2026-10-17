@@ -1,7 +1,7 @@
 //! Tauri commands for the provider settings: the fallback provider's key, the CLI check, and the
 //! default prompt blocks shown in the prompt editor.
 
-use crate::config::{key_slot, stored_key, PromptOverrides, ProviderKind};
+use crate::config::{fallback_key_slot, stored_fallback_key, PromptOverrides, ProviderKind};
 use serde::Serialize;
 
 fn err<E: std::fmt::Display>(e: E) -> String {
@@ -14,21 +14,22 @@ pub fn provider_prompt_defaults() -> PromptOverrides {
     super::prompts::default_blocks()
 }
 
-/// Whether a key is stored for this provider and server.
+/// Whether the fallback provider has a key for this provider and server: its own, or the one
+/// it shares with the main provider (see `config::stored_fallback_key`).
 #[tauri::command]
 pub fn provider_key_status(provider: ProviderKind, base_url: String) -> bool {
-    stored_key(provider, &base_url).is_some()
+    stored_fallback_key(provider, &base_url).is_some()
 }
 
-/// Stores a key for this provider and server (used for the fallback provider; the main
-/// provider's key is saved with the settings).
+/// Stores the fallback provider's key in its own slot, so it never replaces the main provider's
+/// key (that one is saved with the settings), also when both use the same provider.
 #[tauri::command]
 pub fn provider_save_key(provider: ProviderKind, base_url: String, api_key: String) -> Result<bool, String> {
     let key = api_key.trim();
     if key.is_empty() {
         return Err("The key is empty.".into());
     }
-    let slot = key_slot(provider, &base_url).ok_or("This provider does not use an API key")?;
+    let slot = fallback_key_slot(provider, &base_url).ok_or("This provider does not use an API key")?;
     crate::platform::secret_set(&slot, key).map_err(err)?;
     Ok(true)
 }

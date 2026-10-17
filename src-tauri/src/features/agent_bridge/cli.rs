@@ -372,7 +372,7 @@ fn execute(inv: &Invocation, source: &Source) -> Result<Done, QueryError> {
             let rows = q::fetch_observations(&conn, &a)?;
             let mut text = vec![a.title.clone(), format!("{} · {} – {}", day_header(a.start), clock(a.start), clock(a.end)), String::new()];
             if rows.is_empty() {
-                text.push("No observations for this activity. They are deleted with the screenshots after the retention period.".into());
+                text.push("No observations for this activity: the user was away, it is being analyzed again, or an older Daytrace version deleted them (they are kept now).".into());
             }
             for o in &rows {
                 let mut lines = wrap(&o.text, 64).into_iter();

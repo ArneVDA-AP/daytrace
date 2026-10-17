@@ -267,14 +267,10 @@ pub fn group_failed(cards: &[StoredCard]) -> Vec<FailedGroup> {
     groups
 }
 
-/// Whether a batch still has its screenshot rows (deleted after the retention period).
+/// Whether a batch can be analyzed again: it still has an image, or never had one (see
+/// `Db::batch_has_frames`). Rows without an image left after a purge do not count.
 pub fn batch_has_frames(db: &Db, batch_id: i64) -> Result<bool> {
-    let n: i64 = db.conn().query_row(
-        "SELECT COUNT(*) FROM batch_screenshots b JOIN screenshots s ON s.id = b.screenshot_id WHERE b.batch_id = ? AND s.is_deleted = 0",
-        [batch_id],
-        |r| r.get(0),
-    )?;
-    Ok(n > 0)
+    db.batch_has_frames(batch_id)
 }
 
 /// Ids of the live cards among `cards` that the user edited.
