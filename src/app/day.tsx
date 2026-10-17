@@ -33,6 +33,9 @@ export function isDaySection(s: Section): boolean {
 export function DayProvider({ children }: { children: React.ReactNode }) {
   // Only "today" from the status: a status poll does not re-render the day consumers.
   const today = useAppStatusSelect(selectToday);
+  // The same route snapshot the sections read: lib/router.ts notifies every useRoute() from one
+  // hashchange listener, so after a navigation this provider and the section render together and
+  // useDay().day never lags behind the section's own params (a link that changes day and card).
   const route = useRoute();
   const onDaySection = isDaySection(route.section);
   const routeDay = dayParam(route.params);

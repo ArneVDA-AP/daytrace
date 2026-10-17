@@ -110,6 +110,7 @@ export function Timelapse({
   }, [frames, index, strip]);
   React.useEffect(() => clearWantedThumbs, []);
   const stripRef = React.useRef<HTMLUListElement>(null);
+  const playRef = React.useRef<HTMLButtonElement>(null);
 
   // Playback: wait the real gap to the next frame divided by the speed; hold on a frame whose
   // image has not loaded yet (this runs again when it arrives, through useThumbTick).
@@ -237,10 +238,12 @@ export function Timelapse({
             <Button
               variant="outline"
               size="icon-sm"
-              className="absolute top-2 right-2 bg-popover/90"
+              className="absolute top-2 right-2 bg-popover/90 aria-disabled:cursor-default aria-disabled:opacity-50"
               aria-label="Full size"
-              disabled={!isFrame(cur)}
-              onClick={() => openFull(index)}
+              // aria-disabled, not disabled: playback reaches a private app's frame while this has
+              // the focus, and a disabled button would drop the focus to the page.
+              aria-disabled={!isFrame(cur) || undefined}
+              onClick={() => isFrame(cur) && openFull(index)}
             >
               <Maximize2 aria-hidden="true" />
             </Button>
@@ -251,10 +254,20 @@ export function Timelapse({
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <div className="flex items-center gap-1">
-          <Button size="icon" onClick={togglePlay} disabled={frames.length < 2} aria-label={playing ? "Pause timelapse" : "Play timelapse"} aria-keyshortcuts="Space">
+          <Button ref={playRef} size="icon" onClick={togglePlay} disabled={frames.length < 2} aria-label={playing ? "Pause timelapse" : "Play timelapse"} aria-keyshortcuts="Space">
             {playing ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
           </Button>
-          <Button size="icon-sm" variant="ghost" aria-label="Back to the first frame" onClick={() => step(-frames.length)} disabled={index === 0}>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label="Back to the first frame"
+            onClick={(e) => {
+              // It turns disabled at the first frame: Play, the next step from there, takes the focus.
+              if (document.activeElement === e.currentTarget) playRef.current?.focus();
+              step(-frames.length);
+            }}
+            disabled={index === 0}
+          >
             <SkipBack aria-hidden="true" />
           </Button>
         </div>

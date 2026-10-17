@@ -5,7 +5,7 @@
  * Variants, as `?f4=` before the hash (comma-separated):
  *   whatsnew       "What's new" opens with release notes from GitHub
  *   whatsnew-offline   the same from the bundled CHANGELOG
- *   downloading    an update is downloading (42%)
+ *   downloading    an update (0.3.1) is downloading (42%)
  *   ready          an update is downloaded and waits for the PC to be idle
  *   installfail    the download failed (no signed update in the release)
  *   debugfail      Copy debug info fails
@@ -40,10 +40,10 @@ export function applyF4Mock(base: Record<string, (a: Args) => unknown>, ctx: { q
   const v = new Set((ctx.q.get("f4") ?? "").split(",").filter(Boolean));
   const install = (): InstallStatus => {
     const idle: InstallStatus = { stage: "idle", version: null, downloaded: 0, total: null, error: null, failedAt: null };
-    if (v.has("downloading")) return { ...idle, stage: "downloading", version: "0.3.0", downloaded: 5_100_000, total: 12_200_000 };
-    if (v.has("ready")) return { ...idle, stage: "ready", version: "0.3.0", downloaded: 12_200_000, total: 12_200_000 };
+    if (v.has("downloading")) return { ...idle, stage: "downloading", version: "0.3.1", downloaded: 5_100_000, total: 12_200_000 };
+    if (v.has("ready")) return { ...idle, stage: "ready", version: "0.3.1", downloaded: 12_200_000, total: 12_200_000 };
     if (v.has("installfail"))
-      return { ...idle, stage: "failed", version: "0.3.0", error: "This release has no signed update for Daytrace to install. Use the release page.", failedAt: ctx.now() - 600 };
+      return { ...idle, stage: "failed", version: "0.3.1", error: "This release has no signed update for Daytrace to install. Use the release page.", failedAt: ctx.now() - 600 };
     return idle;
   };
   let whatsNew: WhatsNew | null = v.has("whatsnew")
@@ -59,7 +59,17 @@ export function applyF4Mock(base: Record<string, (a: Args) => unknown>, ctx: { q
       costNote: "With the Batch API on, these requests are sent directly so the day is done in minutes instead of hours. They cost the regular price, twice the Batch API price.",
     });
   Object.assign(base, {
-    platform_info: (a: Args) => ({ ...(info(a) as object), install: install() }),
+    // An update that is downloading, ready or failed is also the one the update check found, so
+    // About says "0.3.1 is available" rather than "up to date" (the running version is 0.3.0).
+    platform_info: (a: Args) => {
+      const base = info(a) as { update: Record<string, unknown> };
+      const inst = install();
+      const update =
+        inst.stage === "idle"
+          ? base.update
+          : { ...base.update, latestVersion: "0.3.1", available: true, releaseUrl: "https://github.com/example/daytrace/releases/tag/v0.3.1" };
+      return { ...base, update, install: inst };
+    },
     platform_install_update: () => {
       throw "The update is no longer offered.";
     },

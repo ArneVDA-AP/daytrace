@@ -12,6 +12,10 @@ function openLink(url: string) {
   shellApi.openUrl(url).catch((e) => toast("Couldn’t open the link", { description: errorText(e), tone: "error" }));
 }
 
+let settle: () => void = () => {};
+/** Resolves once "What's new" has nothing to show or was closed: the goal prompt waits for it. */
+export const whatsNewSettled = new Promise<void>((resolve) => (settle = resolve));
+
 /**
  * "What's new" once after an update (Dayflow's WhatsNewView): the notes of the running version,
  * from its GitHub release or, offline, from the CHANGELOG that came with it. Mounted after the
@@ -28,6 +32,7 @@ export function WhatsNew() {
     void (async () => {
       try {
         const info = await platformApi.whatsNew();
+        if (!info) settle();
         if (!info || !alive) return;
         // The chat's renderer: React elements only, never innerHTML. Loaded only when needed.
         const { renderMarkdown } = await import("@/views/chat/markdown");
@@ -35,12 +40,15 @@ export function WhatsNew() {
         const { nodes } = renderMarkdown(info.notes, {
           cardChip: () => null,
           onExternalLink: openLink,
+          // "### New in the window" under the dialog's h2 title is an h3.
+          headingOffset: 0,
         });
         setNotes({ info, nodes });
         setOpen(true);
         void platformApi.whatsNewSeen(info.version).catch(() => {});
       } catch {
         // Nothing to show; the next start asks again.
+        settle();
       }
     })();
     return () => {
@@ -51,7 +59,13 @@ export function WhatsNew() {
   if (!notes) return null;
   const { info, nodes } = notes;
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (!o) settle();
+      }}
+    >
       <DialogContent
         className="gap-5 sm:max-w-[34rem]"
         onOpenAutoFocus={(e) => {

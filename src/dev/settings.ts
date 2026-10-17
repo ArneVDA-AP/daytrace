@@ -5,11 +5,11 @@
  * Variants, as `?settings=` before the hash (comma-separated):
  *   test-fail      Test connection is refused (401)
  *   models-fail    Show available models fails
- *   update         a new release is available
+ *   update         a new release (0.3.1) is available; the running version is 0.3.0
  *   damaged        the settings file could not be read (setup notice)
  *   restored | reset | db-damaged   database health notices on Storage
  *   storage-error  disk usage can't be read
- *   mcp-ok         daytrace-mcp is installed next to Daytrace
+ *   mcp-missing    daytrace-mcp.exe is not next to Daytrace (the warning on AI tools)
  *   fallback       a fallback provider (Ollama) is set
  *   custom         categories with changed colours and a fourth category
  *   nokeys         no API key stored for any provider (like ?status=nokey, for every slot)
@@ -70,9 +70,9 @@ export function applySettingsMock(
   };
 
   const update = (checked: number) => ({
-    currentVersion: "0.2.1",
-    latestVersion: v.has("update") ? "0.3.0" : "0.2.1",
-    releaseUrl: v.has("update") ? "https://github.com/example/daytrace/releases/tag/v0.3.0" : null,
+    currentVersion: "0.3.0",
+    latestVersion: v.has("update") ? "0.3.1" : "0.3.0",
+    releaseUrl: v.has("update") ? "https://github.com/example/daytrace/releases/tag/v0.3.1" : null,
     available: v.has("update"),
     noReleases: false,
     checkedAt: checked,
@@ -120,7 +120,7 @@ export function applySettingsMock(
       return true;
     },
     platform_info: () => ({
-      version: "0.2.1",
+      version: "0.3.0",
       pauseOptions: [],
       minuteOptions: [5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 480],
       update: update(ctx.now() - 3600),
@@ -135,6 +135,6 @@ export function applySettingsMock(
     if (v.has("storage-error")) throw "Access is denied. (os error 5) while reading C:\\Users\\Preview\\AppData\\Roaming\\dev.daytrace.app\\screenshots";
     return { ...(usage(a) as object), health: health() };
   };
-  handlers.storage_agent_setup = (a) => ({ ...(agent(a) as object), installed: v.has("mcp-ok") });
+  handlers.storage_agent_setup = (a) => ({ ...(agent(a) as object), installed: !v.has("mcp-missing") });
   Object.assign(base, handlers);
 }

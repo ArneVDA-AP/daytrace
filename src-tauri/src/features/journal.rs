@@ -13,9 +13,9 @@
 //!
 //! Dayflow lets each plan pick its focus and distraction categories. Daytrace uses each
 //! category's "Counts as" choice in Settings > Categories, the same numbers as the Daily view
-//! (`insights::stats::focus_split`: focus minus the distractions noted inside focus cards,
-//! distraction categories plus those noted distractions), so Goals, Daily, Weekly and Your day so
-//! far agree.
+//! (`insights::stats::focus_split`: the time of the cards in focus categories and in distraction
+//! categories, as in DaySummaryStats; a distraction noted inside a card stays that card's time), so
+//! Goals, Daily, Weekly, Your day so far and daytrace-mcp agree.
 //!
 //! Daytrace addition: a short checklist of things to get done that day, each with the cards that
 //! mention it (keyword match on the card text, no model call).
@@ -160,9 +160,9 @@ pub struct CategorySecs {
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Progress {
-    /// Time in focus categories, without the distractions noted inside those cards.
+    /// Time in focus categories (distractions noted inside those cards included).
     pub focus_secs: i64,
-    /// Time in distraction categories plus the distractions noted inside other cards.
+    /// Time in distraction categories.
     pub distracted_secs: i64,
     /// Focus categories in settings order, then other focus categories found on cards.
     pub focus_categories: Vec<CategorySecs>,
@@ -171,8 +171,8 @@ pub struct Progress {
 }
 
 /// Focus and distraction time of a day over de-overlapped non-System cards (Dayflow
-/// DaySummaryStats.computeTotalFocusTime / computeTotalDistractedTime), with the noted
-/// distractions moved from focus to distraction like the Daily view.
+/// DaySummaryStats.computeTotalFocusTime / computeTotalDistractedTime), the same numbers as the
+/// Daily view.
 pub fn progress(cards: &[StoredCard], cats: &[Category], day_start: i64, day_end: i64) -> Progress {
     let segs = stats::segments(cards, cats, day_start, day_end);
     let split = stats::focus_split(&stats::remove_overlaps(&segs));
@@ -600,16 +600,16 @@ mod tests {
         work.distractions = vec![crate::features::insights::stats::tests::distraction(at(d, 9, 20), at(d, 9, 28), "Feeds")];
         let cards = vec![work, card(2, at(d, 10, 0), at(d, 11, 0), "Personal", "Bills")];
         let (s, e) = logical_day_bounds("2026-10-14").unwrap();
-        // The 8 noted minutes move from focus to distraction, as on the Daily view.
+        // The 8 noted minutes stay focus time (Dayflow DaySummaryStats), as on the Daily view.
         let p = progress(&cards, &cats, s, e);
-        assert_eq!((p.focus_secs, p.distracted_secs), (3600 - 480 + 3600, 480));
-        assert_eq!(p.focus_categories.iter().map(|c| (c.name.as_str(), c.secs)).collect::<Vec<_>>(), vec![("Work", 3120), ("Personal", 3600)]);
+        assert_eq!((p.focus_secs, p.distracted_secs), (3600 + 3600, 0));
+        assert_eq!(p.focus_categories.iter().map(|c| (c.name.as_str(), c.secs)).collect::<Vec<_>>(), vec![("Work", 3600), ("Personal", 3600)]);
         let daily = crate::features::insights::stats::compute_day("2026-10-14", &cards, &cats, s, e);
         assert_eq!((p.focus_secs, p.distracted_secs), (daily.focus_secs, daily.distracted_secs));
         // Personal set to count as neither leaves focus.
         cats[1].counts_as = Some(crate::types::CountsAs::Neither);
         let p = progress(&cards, &cats, s, e);
-        assert_eq!(p.focus_secs, 3120);
+        assert_eq!(p.focus_secs, 3600);
         assert_eq!(p.focus_categories.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["Work"]);
     }
 

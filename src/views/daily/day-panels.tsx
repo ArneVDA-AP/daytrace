@@ -43,7 +43,7 @@ export function DistractionsCard({ stats, day, isToday }: { stats: DayStats; day
   return (
     <SectionCard
       title={isToday ? "Distractions so far" : "Distractions"}
-      description={`${formatDuration(stats.distractedSecs)}, ${percent(stats.distractedSecs, active)} of active time, from cards that count as distraction and distractions noted inside other cards.`}
+      description={`${formatDuration(stats.distractedSecs)}, ${percent(stats.distractedSecs, active)} of active time, in cards that count as distraction. Distractions noted inside other cards are listed too; they stay in those cards’ time.`}
     >
       {list.length ? (
         <ol className="flex flex-col">

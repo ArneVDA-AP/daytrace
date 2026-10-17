@@ -67,11 +67,11 @@ export function categoriesCounting(what: CountsAs, categories: Category[]): stri
 export function countsSentence(categories: Category[]): string {
   const focus = categoriesCounting("focus", categories);
   const distraction = categoriesCounting("distraction", categories);
-  const f = focus.length ? `Focused is time in ${nameList(focus)}, without the distractions noted inside those cards.` : "No category counts as focus.";
-  const d = distraction.length
-    ? `Distracted is time in ${nameList(distraction)} plus the distractions noted inside other cards.`
-    : "Distracted is the distractions noted inside cards; no category counts as distraction.";
-  return `${f} ${d}`;
+  // Dayflow's rule (DaySummaryStats): a distraction noted inside a card stays that card's time and
+  // makes it an interruption.
+  const f = focus.length ? `Focused is time in ${nameList(focus)}.` : "No category counts as focus.";
+  const d = distraction.length ? `Distracted is time in ${nameList(distraction)}.` : "No category counts as distraction.";
+  return `${f} ${d} A distraction noted inside a card counts as an interruption and stays in that card’s time.`;
 }
 
 /** "Work", "Work and Personal", "Work, Personal and Study". */

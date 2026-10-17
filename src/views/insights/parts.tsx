@@ -121,8 +121,10 @@ export function Legend({ items, className }: { items: LegendItem[]; className?: 
 }
 
 /**
- * Time by category: a 100 % bar (context) and a table (the numbers). Rows in settings order,
- * idle hatched. `footer` adds rows under the total (e.g. time not analyzed).
+ * Time by category: a 100 % bar of the recorded time (context) and a table (the numbers). Rows in
+ * settings order, idle hatched. Shares are of active time (recorded time without idle, the
+ * glossary's denominator); Idle shows its duration without a share. Under the rows: Active time
+ * (100 %) and Recorded. `footer` adds rows under those (e.g. time not analyzed).
  */
 export function CategoryBreakdown({
   totals,
@@ -144,6 +146,7 @@ export function CategoryBreakdown({
     categories,
   );
   const sum = rows.reduce((a, r) => a + r.secs, 0);
+  const active = rows.reduce((a, r) => a + (r.kind === "idle" ? 0 : r.secs), 0);
   if (!sum) return <p className="text-meta text-muted-foreground">No time recorded.</p>;
   return (
     <div className="flex flex-col gap-3">
@@ -163,7 +166,7 @@ export function CategoryBreakdown({
           <tr>
             <th scope="col">Category</th>
             <th scope="col">Time</th>
-            <th scope="col">Share</th>
+            <th scope="col">Share of active time</th>
           </tr>
         </thead>
         <tbody>
@@ -176,16 +179,23 @@ export function CategoryBreakdown({
                 </span>
               </th>
               <td className="py-1.5 text-right font-medium whitespace-nowrap tnum">{formatDuration(r.secs)}</td>
-              <td className="w-14 py-1.5 text-right text-muted-foreground tnum">{percent(r.secs, sum)}</td>
+              <td className="w-14 py-1.5 text-right text-muted-foreground tnum">{r.kind === "idle" ? "" : percent(r.secs, active)}</td>
             </tr>
           ))}
         </tbody>
         <tfoot>
           <tr>
             <th scope="row" className="pt-2 text-left font-normal text-muted-foreground">
+              Active time
+            </th>
+            <td className="pt-2 text-right font-medium whitespace-nowrap tnum">{formatDuration(active)}</td>
+            <td className="w-14 pt-2 text-right text-muted-foreground tnum">{active > 0 ? "100%" : ""}</td>
+          </tr>
+          <tr>
+            <th scope="row" className="pt-1 text-left font-normal text-muted-foreground">
               {totalLabel}
             </th>
-            <td className="pt-2 text-right font-medium whitespace-nowrap tnum">{formatDuration(sum)}</td>
+            <td className="pt-1 text-right font-medium whitespace-nowrap tnum">{formatDuration(sum)}</td>
             <td />
           </tr>
           {footer}

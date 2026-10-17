@@ -294,11 +294,12 @@ export function installMockIpc() {
     storage_delete_day: () => ({ filesRemoved: 2600, bytesFreed: 480_000_000 }),
     storage_backup_now: () => ({ name: "daytrace-backup-2.db", bytes: 48_000_000, createdAt: now() }),
     storage_agent_setup: () => ({
-      exePath: "C:\\Users\\Preview\\AppData\\Local\\Daytrace\\daytrace.exe",
-      installed: false,
-      claudeCodeCommand: "claude mcp add daytrace -- \"C:\\Users\\Preview\\AppData\\Local\\Daytrace\\daytrace.exe\" mcp",
-      desktopConfig: "{\n  \"mcpServers\": {}\n}",
-      desktopConfigPath: "C:\\Users\\Preview\\AppData\\Roaming\\Claude\\claude_desktop_config.json",
+      exePath: "C:\\Users\\Preview\\AppData\\Local\\Daytrace\\daytrace-mcp.exe",
+      installed: true,
+      // As features/storage.rs agent_setup_for writes it (src/dev/w4-f3.ts sets the same text).
+      claudeCodeCommand: "claude mcp add --scope user --transport stdio daytrace -- \"C:\\Users\\Preview\\AppData\\Local\\Daytrace\\daytrace-mcp.exe\"",
+      desktopConfig: JSON.stringify({ mcpServers: { daytrace: { command: "C:\\Users\\Preview\\AppData\\Local\\Daytrace\\daytrace-mcp.exe", args: [] } } }, null, 2),
+      desktopConfigPath: "%APPDATA%\\Claude\\claude_desktop_config.json",
     }),
     // plugins
     "plugin:dialog|save": () => "C:\\Users\\Preview\\Documents\\daytrace-export.md",

@@ -83,13 +83,16 @@ function totals(segs: Seg[]): CategoryTotal[] {
 
 function focusBlocks(segs: Seg[]): Block[] {
   const spans = segs.filter((s) => s.kind === "focus").map((s) => [s.start, s.end] as [number, number]);
-  const merged: [number, number][] = [];
+  // [start, end, focus seconds inside] — a block's secs leave out the short gaps (stats.rs).
+  const merged: [number, number, number][] = [];
   for (const [a, b] of spans) {
     const last = merged[merged.length - 1];
-    if (last && a - last[1] < FOCUS_GAP) last[1] = Math.max(last[1], b);
-    else merged.push([a, b]);
+    if (last && a - last[1] < FOCUS_GAP) {
+      last[2] += Math.max(0, b - Math.max(a, last[1]));
+      last[1] = Math.max(last[1], b);
+    } else merged.push([a, b, b - a]);
   }
-  return merged.map(([a, b]) => ({ startTs: a, endTs: b, secs: b - a }));
+  return merged.map(([a, b, secs]) => ({ startTs: a, endTs: b, secs }));
 }
 
 function programs(segs: Seg[]): NamedSecs[] {
@@ -107,11 +110,9 @@ export function computeDay(day: string, cards: Card[], cats: Category[]): DaySta
   const real = segs.filter((s) => s.kind !== "system");
   const sum = (k: Kind) => real.filter((s) => s.kind === k).reduce((a, s) => a + s.end - s.start, 0);
   const distractions = distractionsOf(real, day);
-  const kindOfCard = new Map(real.map((s) => [s.card.id, s.kind]));
-  const embedded = distractions.filter((d) => d.withinCard).reduce((a, d) => a + d.secs, 0);
-  const embeddedInFocus = distractions.filter((d) => d.withinCard && kindOfCard.get(d.cardId) === "focus").reduce((a, d) => a + d.secs, 0);
-  const focusSecs = sum("focus") - embeddedInFocus;
-  const distractedSecs = sum("distraction") + embedded;
+  // As stats.rs focus_split (Dayflow DaySummaryStats): noted distractions stay their card's time.
+  const focusSecs = sum("focus");
+  const distractedSecs = sum("distraction");
   const capturedSecs = real.reduce((a, s) => a + s.end - s.start, 0);
   const activeSecs = Math.max(0, capturedSecs - sum("idle"));
   let transition = 0;

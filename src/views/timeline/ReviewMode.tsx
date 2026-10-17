@@ -186,8 +186,8 @@ function ReviewBody({
     setAnnounce(next.length ? describe(next[0], 0, next.length) : "");
   };
 
-  // Keys of the layer, read on the document: they also arrive when the focus fell back to <body>
-  // (a focused control that turns disabled, such as the Timelapse's "Back to the first frame").
+  // Keys of the layer, read on the document: they also arrive if the focus ever falls back to
+  // <body> (a focused control that disappears before the layer takes the focus back).
   // Handlers inside the layer run first (the Timelapse's Space); the full-size viewer keeps its
   // keys to itself.
   const onKeyDown = (e: KeyboardEvent) => {
@@ -214,6 +214,21 @@ function ReviewBody({
     }
   };
 
+  // The card's part of the layer is new for every card (and the summary replaces it): when the
+  // focus was in it (the Timelapse's Play, the timeline link) or on a footer button that is gone,
+  // the layer takes it back instead of leaving it on <body>, so Space plays again.
+  // Not on mount: the dialog focuses the layer itself after ReviewMode has noted the opener.
+  const cardKey = card?.id ?? null;
+  const shown = React.useRef<{ card: number | null; done: boolean } | null>(null);
+  React.useLayoutEffect(() => {
+    const before = shown.current;
+    shown.current = { card: cardKey, done };
+    if (!before || (before.card === cardKey && before.done === done)) return;
+    const el = layer.current;
+    const a = document.activeElement;
+    if (el && (!a || a === document.body || !el.contains(a))) el.focus();
+  }, [cardKey, done, layer]);
+
   const keyRef = React.useRef(onKeyDown);
   keyRef.current = onKeyDown;
   React.useEffect(() => {
@@ -230,7 +245,7 @@ function ReviewBody({
       <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b px-4 py-2.5">
         <div className="min-w-0 flex-1">
           <DialogPrimitive.Title className="truncate text-body font-semibold">Rate the cards of {formatDayTitle(day)}</DialogPrimitive.Title>
-          <p id="review-keys" className="truncate text-caption text-muted-foreground">
+          <p id="review-keys" className="text-caption text-pretty text-muted-foreground">
             1 Focused, 2 Neutral, 3 Distracted · ← and → move between cards · Space plays and pauses · Esc closes
           </p>
         </div>

@@ -783,8 +783,9 @@ mod tests {
         assert_eq!(st.idle_secs / 60, 60);
         assert_eq!(st.active_secs, st.captured_secs - st.idle_secs);
         assert_eq!(st.days.iter().map(|d| d.active_secs).sum::<i64>(), st.active_secs);
-        assert_eq!(st.distracted_secs / 60, 40);
-        assert_eq!(st.focus_secs / 60, 150 + 60 - 10);
+        // The 10 minutes noted inside the Work card stay focus time (Dayflow DaySummaryStats).
+        assert_eq!(st.distracted_secs / 60, 30);
+        assert_eq!(st.focus_secs / 60, 150 + 60);
         assert_eq!(st.days[0].context_shifts, 1, "Work → Distraction (Idle is left out)");
         assert_eq!(st.days[0].distraction_count, 2, "one noted distraction and one Distraction card");
         assert_eq!(st.days[1].context_shifts, 1);
