@@ -1,6 +1,6 @@
 import { CalendarClock, Download, FolderOpen, Images, Laptop, Moon, Pause, Play, RotateCcw, Sun } from "lucide-react";
 import { api } from "@/api";
-import { useDay } from "@/app/day";
+import { isDaySection, useDay } from "@/app/day";
 import { NAV, SETTINGS_NAV } from "@/app/Shell";
 import { useAppState } from "@/app/state";
 import {
@@ -14,12 +14,12 @@ import {
   CommandShortcut,
 } from "@/components/ui/command";
 import { toast } from "@/components/ui/toast";
-import { isDaySection } from "@/app/day";
 import { navigate } from "@/lib/router";
 import { clock, formatDayTitle, shiftDay } from "@/lib/time";
 import type { Appearance } from "@/lib/theme";
 import { errorText } from "@/lib/utils";
 import { OPEN_ONBOARDING_EVENT, pauseOptions, platformApi } from "@/views/platform-api";
+import { SETTINGS_SECTION_META } from "@/views/settings/sections";
 
 /** Ctrl+K: every section, recent days and the frequent actions, reachable without the mouse. */
 export function CommandMenu({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
@@ -78,7 +78,7 @@ export function CommandMenu({ open, onOpenChange }: { open: boolean; onOpenChang
                 }
               >
                 <Pause aria-hidden="true" />
-                Pause recording: {o.label.charAt(0).toLowerCase() + o.label.slice(1)}
+                Pause recording: {lowerFirst(o.label)}
               </CommandItem>
             ))
           ) : (
@@ -116,6 +116,15 @@ export function CommandMenu({ open, onOpenChange }: { open: boolean; onOpenChang
           </CommandItem>
         </CommandGroup>
         <CommandSeparator />
+        <CommandGroup heading="Settings">
+          {SETTINGS_SECTION_META.map((m) => (
+            <CommandItem key={m.id} value={`settings ${m.label} ${m.keywords}`} onSelect={() => run(() => navigate("settings", { section: m.id }))}>
+              <m.icon aria-hidden="true" />
+              Settings: {lowerFirst(m.label)}
+            </CommandItem>
+          ))}
+        </CommandGroup>
+        <CommandSeparator />
         <CommandGroup heading="Theme">
           <CommandItem value="theme follow windows system" onSelect={() => theme("system")}>
             <Laptop aria-hidden="true" />
@@ -136,4 +145,9 @@ export function CommandMenu({ open, onOpenChange }: { open: boolean; onOpenChang
       </CommandList>
     </CommandDialog>
   );
+}
+
+/** "Model provider" -> "model provider"; keeps acronyms such as "AI tools". */
+function lowerFirst(s: string): string {
+  return /^[A-Z]{2}/.test(s) ? s : s.charAt(0).toLowerCase() + s.slice(1);
 }

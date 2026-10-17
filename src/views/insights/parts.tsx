@@ -1,5 +1,4 @@
 import * as React from "react";
-import { OctagonAlert } from "lucide-react";
 import type { Category } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -236,43 +235,7 @@ export function BarList({ items, empty, label }: { items: BarItem[]; empty: stri
   );
 }
 
-/**
- * An error that belongs to the view: what failed, the fix as a button, and the raw message in a
- * collapsed "Error details". Same look as the shared Banner (tone error), which has no place for
- * the details block.
- */
-export function ErrorNotice({
-  title,
-  children,
-  error,
-  action,
-  className,
-}: {
-  title: React.ReactNode;
-  children?: React.ReactNode;
-  error?: string | null;
-  action?: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <div role="alert" className={cn("flex flex-wrap items-start gap-x-3 gap-y-2 rounded-lg border border-destructive/40 bg-destructive-surface px-3.5 py-3", className)}>
-      <OctagonAlert className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden="true" />
-      <div className="min-w-0 flex-1 basis-72">
-        <p className="font-semibold">{title}</p>
-        {children && <div className="mt-0.5 text-meta text-pretty">{children}</div>}
-        {error && (
-          <details className="mt-1.5 text-caption text-muted-foreground">
-            <summary className="w-fit rounded-sm underline-offset-2 hover:text-foreground hover:underline">Error details</summary>
-            <p className="mt-1 font-mono break-words whitespace-pre-wrap text-foreground">{error}</p>
-          </details>
-        )}
-      </div>
-      {action && <div className="flex shrink-0 flex-wrap items-center gap-2 self-center">{action}</div>}
-    </div>
-  );
-}
-
-/** "Try again" for an ErrorNotice. */
+/** "Try again" for an error Banner. */
 export function RetryButton({ onClick, busy, label = "Try again" }: { onClick: () => void; busy?: boolean; label?: string }) {
   return (
     <Button variant="outline" size="sm" onClick={onClick} disabled={busy}>

@@ -1,10 +1,11 @@
 import * as React from "react";
-import { ClipboardCopy, FileDown, Moon, SquareArrowOutUpRight } from "lucide-react";
+import { ClipboardCopy, FileDown, Moon, OctagonAlert, SquareArrowOutUpRight } from "lucide-react";
 import { api, type Card } from "@/api";
 import { useDay } from "@/app/day";
 import { useAppState } from "@/app/state";
 import { DayNav } from "@/components/day-nav";
 import { PageHeader, TitleBadge } from "@/components/page-header";
+import { Banner } from "@/components/banner";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -12,7 +13,7 @@ import { useDelayedLoading } from "@/lib/use-delayed";
 import { formatDayShort, formatDayTitle, formatDuration } from "@/lib/time";
 import { errorText } from "@/lib/utils";
 import { insightsApi, type DayStats, type RecapView } from "@/views/insights/api";
-import { CardSkeleton, CategoryBreakdown, ErrorNotice, RetryButton, SectionCard } from "@/views/insights/parts";
+import { CardSkeleton, CategoryBreakdown, RetryButton, SectionCard } from "@/views/insights/parts";
 import { failedSecs, quarterSlots } from "./activity";
 import { ActivityGrid } from "./activity-grid";
 import { DayStatStrip, DistractionsCard, FocusCard, ProgramsCard } from "./day-panels";
@@ -203,9 +204,9 @@ export default function DailySection() {
                 </div>
               </div>
             ) : dayErr && !current ? (
-              <ErrorNotice title="Couldn’t load this day’s numbers" error={dayErr} action={<RetryButton onClick={() => void loadDay(day)} />}>
+              <Banner tone="error" icon={<OctagonAlert />} title="Couldn’t load this day’s numbers" details={dayErr} actions={<RetryButton onClick={() => void loadDay(day)} />}>
                 Daytrace tries again every minute.
-              </ErrorNotice>
+              </Banner>
             ) : current ? (
               current.cards.length === 0 ? (
                 <Empty className="border py-10">

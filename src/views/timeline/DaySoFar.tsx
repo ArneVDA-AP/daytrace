@@ -81,6 +81,7 @@ export function DaySoFar({
             tone="error"
             icon={<TriangleAlert />}
             title="Couldn’t work out this day’s numbers"
+            details={statsError}
             actions={
               <Button size="sm" variant="outline" onClick={reloadStats}>
                 Try again
@@ -89,10 +90,6 @@ export function DaySoFar({
           >
             The cards are fine; only the focus and distraction totals are missing.
           </Banner>
-          <details className="px-1 text-meta text-muted-foreground">
-            <summary className="w-fit cursor-default rounded-sm select-none hover:text-foreground">Error details</summary>
-            <pre className="mt-1.5 overflow-x-auto rounded-md border bg-surface-2 p-3 font-mono text-caption whitespace-pre-wrap">{statsError}</pre>
-          </details>
         </div>
       )}
 

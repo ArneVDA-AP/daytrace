@@ -228,6 +228,7 @@ export default function TimelineSection() {
               tone="error"
               icon={<TriangleAlert />}
               title={`Couldn’t load the timeline of ${formatDayTitle(day)}`}
+              details={data.error}
               actions={
                 <Button size="sm" variant="outline" onClick={data.reload}>
                   Try again
@@ -236,10 +237,6 @@ export default function TimelineSection() {
             >
               Daytrace could not read this day from its database. Your recording is not affected.
             </Banner>
-            <details className="mt-2 px-1 text-meta text-muted-foreground">
-              <summary className="w-fit cursor-default rounded-sm select-none hover:text-foreground">Error details</summary>
-              <pre className="mt-1.5 overflow-x-auto rounded-md border bg-surface-2 p-3 font-mono text-caption whitespace-pre-wrap">{data.error}</pre>
-            </details>
           </div>
         ) : empty ? (
           <EmptyDay day={day} today={today} recording={app.recorder.tone === "live"} userPaused={app.recorder.userPaused} pending={app.status.pendingBatches} onDay={setDay} onResume={app.resume} />

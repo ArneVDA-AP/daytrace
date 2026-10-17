@@ -242,7 +242,10 @@
    Category marks keep their shapes and hatching; their colour becomes the system text colour,
    so labels and texture carry identity (designer-bespoke). */
 @media (forced-colors: active) {
-  :root {
+  /* Same specificity as the theme selectors above (0,2,0) and later in the file, so this block
+     wins in light, dark and with either override. A plain :root would lose to the dark blocks. */
+  :root:not([data-theme="light"]),
+  :root[data-theme="light"] {
     --border: CanvasText;
     --border-strong: CanvasText;
     --input: CanvasText;

@@ -1,6 +1,5 @@
-// Stylesheets first: index.css declares the cascade layer order (legacy CSS files repeat it).
+// Stylesheet first, so its rules load before any component module.
 import "./index.css";
-import "./styles.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "@/app/App";

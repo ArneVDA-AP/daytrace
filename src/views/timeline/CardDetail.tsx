@@ -322,7 +322,7 @@ export function CardDetail({
             <div className="grid grid-cols-2 gap-3 max-split:grid-cols-1">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="card-edit-category">Category</Label>
-                <NativeSelect id="card-edit-category" value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })} className="w-full">
+                <NativeSelect id="card-edit-category" value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })} wrapperClassName="w-full">
                   {catNames.map((n) => (
                     <NativeSelectOption key={n} value={n}>
                       {n}
@@ -518,7 +518,7 @@ export function CardDetail({
               }}
             >
               {RATINGS.map((r) => (
-                <ToggleGroupItem key={r.id} value={r.id} className="h-7 px-2.5 text-meta text-muted-foreground data-[state=on]:font-semibold data-[state=on]:text-foreground">
+                <ToggleGroupItem key={r.id} value={r.id}>
                   {r.label}
                 </ToggleGroupItem>
               ))}
@@ -540,10 +540,10 @@ export function CardDetail({
                 disabled={busy}
                 onValueChange={(v) => void setThumb(v === "up" || v === "down" ? v : null)}
               >
-                <ToggleGroupItem value="up" className="h-7 px-2.5 text-meta text-muted-foreground data-[state=on]:font-semibold data-[state=on]:text-foreground">
+                <ToggleGroupItem value="up">
                   <ThumbsUp aria-hidden="true" /> Accurate
                 </ToggleGroupItem>
-                <ToggleGroupItem value="down" className="h-7 px-2.5 text-meta text-muted-foreground data-[state=on]:font-semibold data-[state=on]:text-foreground">
+                <ToggleGroupItem value="down">
                   <ThumbsDown aria-hidden="true" /> Not accurate
                 </ToggleGroupItem>
               </ToggleGroup>

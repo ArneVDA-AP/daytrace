@@ -1,10 +1,11 @@
 import * as React from "react";
-import { CalendarX2 } from "lucide-react";
+import { CalendarX2, OctagonAlert } from "lucide-react";
 import { api, type Card } from "@/api";
 import { useDay } from "@/app/day";
 import { useAppState } from "@/app/state";
 import { DayNav } from "@/components/day-nav";
 import { PageHeader, TitleBadge } from "@/components/page-header";
+import { Banner } from "@/components/banner";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -14,7 +15,7 @@ import { useDelayedLoading } from "@/lib/use-delayed";
 import { errorText } from "@/lib/utils";
 import { insightsApi, type CategoryTotal, type WeekStats } from "@/views/insights/api";
 import { kindOf, percent, weekdayLong } from "@/views/insights/format";
-import { CardSkeleton, CategoryBreakdown, ErrorNotice, RetryButton, SectionCard, StatStrip, StatTile } from "@/views/insights/parts";
+import { CardSkeleton, CategoryBreakdown, RetryButton, SectionCard, StatStrip, StatTile } from "@/views/insights/parts";
 import {
   DistractionHeatmap,
   FocusChart,
@@ -147,9 +148,9 @@ export default function WeeklySection() {
                 </div>
               </div>
             ) : err && !current ? (
-              <ErrorNotice title="Couldn’t load this week" error={err} action={<RetryButton onClick={() => void load(start)} />}>
+              <Banner tone="error" icon={<OctagonAlert />} title="Couldn’t load this week" details={err} actions={<RetryButton onClick={() => void load(start)} />}>
                 Daytrace tries again every 2 minutes.
-              </ErrorNotice>
+              </Banner>
             ) : current ? (
               <WeekBody data={current} today={today} asTable={asTable} categories={categories} colorFor={colorFor} />
             ) : null}

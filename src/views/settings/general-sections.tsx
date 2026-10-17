@@ -12,6 +12,8 @@ import { errorText } from "@/lib/utils";
 import { OPEN_ONBOARDING_EVENT, platformApi, type UpdateStatus } from "@/views/platform-api";
 import { FieldError, Group, OutcomeLine, Row, type Outcome } from "./fields";
 import { useSave } from "./save";
+import mitLicence from "../../../LICENSE?raw";
+import oflLicence from "@/assets/cascadia-mono-OFL.txt?raw";
 
 const SPINNER = { "aria-hidden": true, role: undefined, "aria-label": undefined } as const;
 
@@ -214,9 +216,43 @@ export function AboutSection() {
       <Group title="About">
         <Row
           label="Daytrace is an unofficial Windows port of Dayflow"
-          description="Open source under the MIT license. Not affiliated with the Dayflow authors."
+          description={
+            <>
+              <p>
+                The analysis design, its constants and the prompt texts come from Dayflow by Jerry Liu (© 2025, MIT License). The app around
+                them is a new implementation. Not affiliated with or endorsed by the Dayflow project.
+              </p>
+              <p>Daytrace is open source under the MIT License.</p>
+              <LicenceText label="MIT License text" text={mitLicence} />
+            </>
+          }
+        />
+        <Row
+          label="Daytrace Mono"
+          description={
+            <>
+              <p>
+                Clock times use a subset of Cascadia Mono, © 2019 – present Microsoft Corporation, with Reserved Font Name Cascadia Code,
+                licensed under the SIL Open Font License 1.1. As the licence asks for a modified font, the subset carries its own name,
+                Daytrace Mono. A Cascadia Mono installed on this PC is used instead when present.
+              </p>
+              <LicenceText label="SIL Open Font License text" text={oflLicence} />
+            </>
+          }
         />
       </Group>
     </>
+  );
+}
+
+/** A licence text, collapsed until asked for. */
+function LicenceText({ label, text }: { label: string; text: string }) {
+  return (
+    <details className="mt-1.5 text-caption">
+      <summary className="w-fit cursor-default rounded-sm select-none hover:text-foreground">{label}</summary>
+      <pre className="scroll-thin mt-1.5 max-h-64 overflow-auto rounded-md border bg-surface-2 p-3 font-mono text-caption whitespace-pre-wrap text-foreground [overflow-wrap:anywhere]">
+        {text.trim()}
+      </pre>
+    </details>
   );
 }

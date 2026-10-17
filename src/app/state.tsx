@@ -4,7 +4,8 @@ import { api, type Category, type SettingsDto, type Status } from "@/api";
 import { makeColorFor } from "@/lib/categories";
 import { applyAppearance, useAppearanceSync, type Appearance } from "@/lib/theme";
 import { errorText } from "@/lib/utils";
-import { platformApi, withLiveRecordingState } from "@/views/platform-api";
+import { platformApi } from "@/views/platform-api";
+import { savePatch } from "@/app/settings-writes";
 import { describeAnalysis, describeRecorder, problems, type AnalysisView, type Problems, type RecorderView } from "@/app/status";
 
 /*
@@ -28,7 +29,7 @@ export interface AppState {
   /** Reloads settings and status now. */
   reload: () => Promise<void>;
   reloadStatus: () => Promise<void>;
-  /** Puts a settings object returned by save_settings into the app state. */
+  /** Puts a settings object returned by save_settings into the app state (newest result wins). */
   setSettings: (dto: SettingsDto) => void;
   /** Pause for a preset ("15", "tomorrow", "indefinite"); throws the backend's message. */
   pause: (choice: string) => Promise<void>;
@@ -56,14 +57,38 @@ export function AppStateProvider({ children, fallback }: { children: React.React
   const latest = React.useRef(load);
   latest.current = load;
 
+  // Responses are applied in order: every read takes a ticket when it starts, every save when its
+  // result arrives, and a result older than the last one applied is dropped. So a refetch that
+  // started before a save landed (settings-changed, a poll) cannot put the old value back.
+  const order = React.useRef({ next: 0, settings: 0, status: 0 });
+  const ticket = () => ++order.current.next;
+  const claim = (part: "settings" | "status", t: number) => {
+    if (t <= order.current[part]) return false;
+    order.current[part] = t;
+    return true;
+  };
+
+  const applySettings = React.useCallback((dto: SettingsDto) => {
+    if (!claim("settings", ticket())) return;
+    setLoad((cur) => (cur.kind === "ready" && !same(cur.settings, dto) ? { ...cur, settings: dto } : cur));
+  }, []);
+
   const fetchAll = React.useCallback(async () => {
+    const t = ticket();
     try {
       const [settings, status] = await Promise.all([api.getSettings(), api.getStatus()]);
+      const newSettings = claim("settings", t);
+      const newStatus = claim("status", t);
       // Apply the theme before the first render of the shell, so it paints in the right colours.
       if (latest.current.kind !== "ready") applyAppearance(settings.settings.appearance);
       setLoad((cur) => {
-        if (cur.kind === "ready" && same(cur.settings, settings) && same(cur.status, status)) return cur;
-        return { kind: "ready", settings, status };
+        if (cur.kind !== "ready") return { kind: "ready", settings, status };
+        const next = {
+          ...cur,
+          settings: newSettings && !same(cur.settings, settings) ? settings : cur.settings,
+          status: newStatus && !same(cur.status, status) ? status : cur.status,
+        };
+        return next.settings === cur.settings && next.status === cur.status ? cur : next;
       });
     } catch (e) {
       if (latest.current.kind !== "ready") setLoad({ kind: "error", message: errorText(e) });
@@ -71,8 +96,10 @@ export function AppStateProvider({ children, fallback }: { children: React.React
   }, []);
 
   const reloadStatus = React.useCallback(async () => {
+    const t = ticket();
     try {
       const status = await api.getStatus();
+      if (!claim("status", t)) return;
       // Only re-render when something changed, so a poll never moves anything on screen.
       setLoad((cur) => (cur.kind === "ready" && !same(cur.status, status) ? { ...cur, status } : cur));
     } catch {
@@ -115,7 +142,7 @@ export function AppStateProvider({ children, fallback }: { children: React.React
       problems: problems(status, settings),
       reload: fetchAll,
       reloadStatus,
-      setSettings: (dto) => setLoad((cur) => (cur.kind === "ready" ? { ...cur, settings: dto } : cur)),
+      setSettings: applySettings,
       pause: async (choice) => {
         await platformApi.pause(choice);
         await fetchAll();
@@ -126,13 +153,11 @@ export function AppStateProvider({ children, fallback }: { children: React.React
       },
       saveAppearance: async (a) => {
         applyAppearance(a);
-        // Start from the backend's copy so a pause made from the tray meanwhile is kept.
-        const fresh = (await api.getSettings()).settings;
-        const dto = await api.saveSettings(await withLiveRecordingState({ ...fresh, appearance: a }));
-        setLoad((cur) => (cur.kind === "ready" ? { ...cur, settings: dto } : cur));
+        // Through the app-wide write queue, ordered with the Settings pages' own writes.
+        applySettings(await savePatch({ appearance: a }));
       },
     };
-  }, [ready, categories, colorFor, fetchAll, reloadStatus]);
+  }, [ready, categories, colorFor, fetchAll, reloadStatus, applySettings]);
 
   if (!value) return <>{fallback({ error: load.kind === "error" ? load.message : null, retry: () => void fetchAll() })}</>;
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

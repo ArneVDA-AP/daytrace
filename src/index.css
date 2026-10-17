@@ -1,15 +1,9 @@
 /*
  * Daytrace stylesheet entry: Tailwind v4, tokens, theme mapping and base rules.
  *
- * Cascade layers, lowest to highest: theme, base, legacy, components, utilities.
- * "legacy" holds the stylesheets of views that still use the old design (styles.css and the
- * per-feature CSS files). Every legacy rule is scoped to `.legacy` (see styles.css), so it cannot
- * reach the shell or new components, and Tailwind's base cannot reach inside legacy views.
- *
  * CSP: everything here is a static stylesheet. Never add an inline <style> to index.html and never
- * inject <style> elements at runtime (scripts/check-csp.mjs fails the build on the first).
+ * inject <style> elements at runtime (scripts/check-dist.mjs fails the build on the first).
  */
-@layer theme, base, legacy, components, utilities;
 
 @import "tailwindcss" source(none);
 @source "./app";

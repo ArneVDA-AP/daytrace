@@ -218,7 +218,9 @@ export function Shell({ children, onOpenCommand }: { children: React.ReactNode; 
       >
         Skip to content
       </a>
-      <nav aria-label="Sections" className="scroll-thin flex w-(--rail-w-collapsed) shrink-0 flex-col gap-1 overflow-y-auto px-2 pt-3 pb-2 wide:w-(--rail-w) wide:px-3">
+      {/* The rail: only the section and Settings links are navigation landmarks; search, the
+          status block and the theme switch sit beside them. */}
+      <div className="scroll-thin flex w-(--rail-w-collapsed) shrink-0 flex-col gap-1 overflow-y-auto px-2 pt-3 pb-2 wide:w-(--rail-w) wide:px-3">
         <div className="mb-3 flex h-8 items-center gap-2.5 px-1.5 max-wide:justify-center max-wide:px-0">
           <LogoMark className="size-6 shrink-0" />
           <span className="hidden font-display text-[1.0625rem] font-semibold tracking-[-0.01em] wide:inline" translate="no">
@@ -226,16 +228,18 @@ export function Shell({ children, onOpenCommand }: { children: React.ReactNode; 
           </span>
         </div>
         <SearchButton onClick={onOpenCommand} collapsed={collapsed} />
-        <div className="mt-2 flex flex-col gap-0.5">
+        <nav aria-label="Sections" className="mt-2 flex flex-col gap-0.5">
           {NAV.map((n) => (
             <NavLink key={n.id} item={n} active={section === n.id} collapsed={collapsed} />
           ))}
-        </div>
+        </nav>
         <div className="min-h-4 flex-1" />
         <StatusBlock />
-        <NavLink item={SETTINGS_NAV} active={section === "settings"} collapsed={collapsed} />
+        <nav aria-label="Settings" className="flex flex-col">
+          <NavLink item={SETTINGS_NAV} active={section === "settings"} collapsed={collapsed} />
+        </nav>
         <ThemeSwitch collapsed={collapsed} />
-      </nav>
+      </div>
       <div className="flex min-w-0 flex-1 flex-col py-2 pr-2">
         <main
           id="content"

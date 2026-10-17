@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Bell, Bot, CircleAlert, CircleCheck, Cpu, EyeOff, FileText, HardDrive, Languages, Palette, RefreshCw, Shapes, Video, type LucideIcon } from "lucide-react";
+import { CircleAlert, CircleCheck } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -14,6 +14,7 @@ import { ProviderSection } from "./provider-section";
 import { RecapSection } from "./recap-section";
 import { RecordingSection } from "./recording-section";
 import { SaveStatusProvider, useSaveState, useSaveStatusValue } from "./save";
+import { SETTINGS_SECTION_META, type SettingsSectionMeta } from "./sections";
 import { StorageSection } from "./storage-section";
 
 /*
@@ -22,26 +23,25 @@ import { StorageSection } from "./storage-section";
  * save when you leave them, and when you leave the page (see save.ts).
  */
 
-interface SettingsPage {
-  id: string;
-  label: string;
-  icon: LucideIcon;
+interface SettingsPage extends SettingsSectionMeta {
   Component: React.ComponentType;
 }
 
-export const SETTINGS_SECTIONS: SettingsPage[] = [
-  { id: "provider", label: "Model provider", icon: Cpu, Component: ProviderSection },
-  { id: "prompts", label: "Language and prompts", icon: Languages, Component: PromptsSection },
-  { id: "recording", label: "Recording", icon: Video, Component: RecordingSection },
-  { id: "privacy", label: "Private apps", icon: EyeOff, Component: PrivateAppsSection },
-  { id: "categories", label: "Categories", icon: Shapes, Component: CategoriesSection },
-  { id: "recap", label: "Daily recap", icon: FileText, Component: RecapSection },
-  { id: "storage", label: "Storage", icon: HardDrive, Component: StorageSection },
-  { id: "ai-tools", label: "AI tools", icon: Bot, Component: AiToolsSection },
-  { id: "notifications", label: "Notifications", icon: Bell, Component: NotificationsSection },
-  { id: "appearance", label: "Appearance", icon: Palette, Component: AppearanceSection },
-  { id: "about", label: "Updates and about", icon: RefreshCw, Component: AboutSection },
-];
+const COMPONENTS: Record<string, React.ComponentType> = {
+  provider: ProviderSection,
+  prompts: PromptsSection,
+  recording: RecordingSection,
+  privacy: PrivateAppsSection,
+  categories: CategoriesSection,
+  recap: RecapSection,
+  storage: StorageSection,
+  "ai-tools": AiToolsSection,
+  notifications: NotificationsSection,
+  appearance: AppearanceSection,
+  about: AboutSection,
+};
+
+export const SETTINGS_SECTIONS: SettingsPage[] = SETTINGS_SECTION_META.map((m) => ({ ...m, Component: COMPONENTS[m.id] }));
 
 export default function SettingsSection() {
   const { params } = useRoute();

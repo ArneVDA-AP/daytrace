@@ -20,11 +20,7 @@
  * Example: http://localhost:1420/?status=offline,away#/timeline
  */
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
-import { emit } from "@tauri-apps/api/event";
-import type { Card, ProviderKind, Settings, SettingsDto, Shot, Status } from "@/api";
-import type { ChatInfo, ChatMessage, Conversation, ConversationDetail } from "@/views/chat-api";
-import type { GoalItem, GoalsView } from "@/views/journal-api";
-import type { DayExtras } from "@/timeline-extras-api";
+import type { Card, ProviderKind, Settings, Shot, Status } from "@/api";
 import type { StorageUsage } from "@/views/settings/storage-api";
 import { at, shiftDay } from "@/lib/time";
 import { allCards, DEFAULT_CATEGORIES, fmtClock, makeDataset } from "@/dev/fixtures";
@@ -99,7 +95,7 @@ export function installMockIpc() {
     settings.recordingEnabled = false;
     settings.pauseUntil = now() + 45 * 60;
   }
-  let hasApiKey = !flags.has("nokey");
+  const hasApiKey = !flags.has("nokey");
 
   const recorder = (): Status["recorder"] => {
     if (!settings.recordingEnabled || flags.has("starting")) return { state: "off" };
@@ -140,7 +136,7 @@ export function installMockIpc() {
     };
   };
 
-  const dto = (): SettingsDto => ({ settings: structuredClone(settings), hasApiKey: provider === "anthropic" ? hasApiKey : true, dataDir: "C:\\Users\\Preview\\AppData\\Roaming\\dev.daytrace.app" });
+  const dataDir = "C:\\Users\\Preview\\AppData\\Roaming\\dev.daytrace.app";
   const cardsOf = (day: string) => ds.days.get(day) ?? [];
   const cardById = (id: number) => allCards(ds).find((c) => c.id === id) ?? null;
 
@@ -169,142 +165,13 @@ export function installMockIpc() {
     return screenSvg(c.isIdleShortcut ? null : (c.appSites?.primary ?? "Microsoft Edge"), `${c.title} - ${c.appSites?.primary ?? ""}`, fmtClock(ts), id % 97);
   };
 
-  const extras = (day: string): DayExtras => {
-    const cards = cardsOf(day);
-    const failed = cards.filter((c) => c.category === "System");
-    return {
-      day,
-      edited: [],
-      feedback: [],
-      reviews: cards.filter((c) => c.category === "Work").slice(0, 3).map((c) => ({ cardId: c.id, rating: "focused", coverage: 1 })),
-      reviewSummary: { focusedSecs: 3 * 3600, neutralSecs: 0, distractedSecs: 0, lastReviewedAt: now() - 3600, unreviewedCards: Math.max(0, cards.length - 3), firstUnreviewed: cards[3]?.id ?? null },
-      failedGroups: failed.map((c) => ({ cardIds: [c.id], batchIds: [c.batchId ?? 0], startTs: c.startTs, endTs: c.endTs, retryable: true })),
-    };
-  };
-
   // Recaps (src/dev/insights.ts): written for earlier days, not yet for today; ?recap=… variants.
   const recaps = makeRecapMock({ today: ds.today, cardsOf, model: () => settings.model, q, now, sleep });
-
-  // Goals (journal) items per day.
-  let itemSeq = 1;
-  const items = new Map<string, GoalItem[]>();
-  const goalItems = (day: string): GoalItem[] => {
-    if (!items.has(day)) {
-      const cards = cardsOf(day);
-      const ev = (word: string) => {
-        const m = cards.filter((c) => c.title.toLowerCase().includes(word));
-        return { totalSecs: m.reduce((a, c) => a + c.endTs - c.startTs, 0), cardCount: m.length, cards: m.map((c) => ({ cardId: c.id, title: c.title, start: c.start, end: c.end, secs: c.endTs - c.startTs, matched: [word] })) };
-      };
-      items.set(day, cards.length ? [
-        { id: itemSeq++, text: "Finish the activity table migration", done: true, evidence: ev("migration") },
-        { id: itemSeq++, text: "Review the export pull requests", done: false, evidence: ev("review") },
-        { id: itemSeq++, text: "Write the weekly status update", done: false, evidence: ev("status") },
-      ] : []);
-    }
-    return items.get(day)!;
-  };
-  const goals = (day: string): GoalsView => {
-    const st = computeDay(day, cardsOf(day), settings.categories);
-    const plan = { day, focusTargetMinutes: 300, distractionLimitMinutes: 45, isSkipped: false, saved: day <= ds.today, carriedFrom: null };
-    const progress = {
-      focusSecs: st.focusSecs,
-      distractedSecs: st.distractedSecs,
-      focusCategories: st.totals
-        .filter((t) => t.kind === "focus")
-        .map((t) => ({ name: t.name, color: settings.categories.find((c) => c.name === t.name)?.color ?? "#878D94", secs: t.secs })),
-      distractionCategories: ["Distraction"],
-    };
-    return {
-      day,
-      isToday: day === ds.today,
-      plan,
-      progress,
-      review: day < ds.today ? { plan, progress, focusMet: st.focusSecs >= 300 * 60, distractionMet: st.distractedSecs <= 45 * 60 } : null,
-      reference: { yesterdayFocusMinutes: 262, lastWeekFocusMinutes: 241, yesterdayDistractionMinutes: 58, lastWeekDistractionMinutes: 49 },
-      prompt: false,
-      items: goalItems(day),
-    };
-  };
-
-  // Chat.
-  const convs: ConversationDetail[] = [];
-  if (q.get("chat") !== "empty") {
-    const y = shiftDay(ds.today, -1);
-    const cited = cardsOf(y).filter((c) => c.category === "Work").slice(0, 2);
-    const t0 = now() - 2 * 3600;
-    convs.push({
-      conversation: { id: 1, title: "Standup notes for yesterday", provider: "anthropic", model: "claude-haiku-5-5", createdAt: t0, updatedAt: t0 + 40, messageCount: 2 },
-      messages: [
-        { id: 1, role: "user", content: "Generate standup notes for yesterday", detail: null, tools: [], citations: [], suggestions: [], provider: null, model: null, inputTokens: null, outputTokens: null, createdAt: t0 },
-        {
-          id: 2,
-          role: "assistant",
-          content: `**Yesterday**\n\n- Built the command menu for the desktop app [card:${cited[0]?.id ?? 0}]\n- Fixed keyboard navigation in the day calendar [card:${cited[1]?.id ?? 0}]\n\n**Today**\n\n- Finish the retry scheduler persistence\n\n**Blockers**\n\n- None`,
-          detail: null,
-          tools: [{ name: "get_day", label: `Read ${cardsOf(y).length} cards from yesterday`, input: { day: y }, summary: `${cardsOf(y).length} cards`, ok: true }],
-          citations: cited.map((c) => ({ citedId: c.id, cardId: c.id, day: y, title: c.title, category: c.category, start: c.start, end: c.end })),
-          suggestions: ["What did I get done last week?", "When was I most focused this week"],
-          provider: "anthropic",
-          model: "claude-haiku-5-5",
-          inputTokens: 2140,
-          outputTokens: 180,
-          createdAt: t0 + 40,
-        },
-      ],
-    });
-  }
-  const chatInfo = (): ChatInfo => ({
-    provider: provider === "claude_cli" || provider === "codex_cli" ? "anthropic" : provider,
-    providerLabel: provider === "anthropic" ? "Claude API" : provider,
-    model: settings.chatModel || settings.model,
-    chatModel: settings.chatModel,
-    timelineModel: settings.model,
-    problem: hasApiKey ? null : "Add an API key in Settings to use chat.",
-    busy: false,
-    busyConversationId: null,
-    welcomePrompts: ["Generate standup notes for yesterday", "What did I get done last week?", "When was I most focused this week", "Compare this week to last week"],
-  });
-  const chatSend = async (conversationId: number | null, text: string): Promise<ConversationDetail> => {
-    let c = convs.find((x) => x.conversation.id === conversationId);
-    const t = now();
-    if (!c) {
-      c = { conversation: { id: convs.length + 1, title: text.slice(0, 60), provider: "anthropic", model: settings.model, createdAt: t, updatedAt: t, messageCount: 0 }, messages: [] };
-      convs.unshift(c);
-    }
-    const id = c.conversation.id;
-    const msgId = () => c!.messages.length + 1;
-    c.messages.push({ id: msgId(), role: "user", content: text, detail: null, tools: [], citations: [], suggestions: [], provider: null, model: null, inputTokens: null, outputTokens: null, createdAt: t });
-    await emit("chat-progress", { conversationId: id, stage: "thinking" });
-    await sleep(500);
-    await emit("chat-progress", { conversationId: id, stage: "toolStarted", name: "search_cards", label: "Searching cards from this week" });
-    await sleep(700);
-    await emit("chat-progress", { conversationId: id, stage: "toolFinished", name: "search_cards", summary: "14 cards", ok: true });
-    await sleep(400);
-    const today = cardsOf(ds.today).filter((x) => x.category === "Work");
-    const answer: ChatMessage = {
-      id: msgId(),
-      role: "assistant",
-      content: `This is a preview answer from synthetic data. Your longest focus block today was the migration work [card:${today[2]?.id ?? 0}].`,
-      detail: null,
-      tools: [{ name: "search_cards", label: "Searched cards from this week", input: { query: text }, summary: "14 cards", ok: true }],
-      citations: today[2] ? [{ citedId: today[2].id, cardId: today[2].id, day: ds.today, title: today[2].title, category: today[2].category, start: today[2].start, end: today[2].end }] : [],
-      suggestions: [],
-      provider: "anthropic",
-      model: settings.model,
-      inputTokens: 1800,
-      outputTokens: 120,
-      createdAt: now(),
-    };
-    c.messages.push(answer);
-    c.conversation.messageCount = c.messages.length;
-    c.conversation.updatedAt = now();
-    return structuredClone(c);
-  };
 
   const storage = (): StorageUsage => {
     const days = Array.from({ length: 7 }, (_, i) => shiftDay(ds.today, -i)).map((d, i) => ({ day: d, screenshots: i === 2 ? 0 : 2600 + i * 37, bytes: i === 2 ? 0 : 480_000_000 + i * 11_000_000 }));
     return {
-      dataDir: "C:\\Users\\Preview\\AppData\\Roaming\\dev.daytrace.app",
+      dataDir,
       screenshotsBytes: days.reduce((a, d) => a + d.bytes, 0),
       screenshotCount: days.reduce((a, d) => a + d.screenshots, 0),
       days,
@@ -325,14 +192,10 @@ export function installMockIpc() {
     return Number.isFinite(m) ? now() + m * 60 : null;
   };
 
+  // Handlers the area mocks override (settings, timeline extras, goals, chat) live in their files:
+  // src/dev/settings.ts, timeline.ts and goalschat.ts, applied below.
   const handlers: Record<string, (a: Args) => unknown> = {
     // core
-    get_settings: () => dto(),
-    save_settings: (a) => {
-      Object.assign(settings, a.settings as Settings);
-      if (typeof a.apiKey === "string" && a.apiKey.trim()) hasApiKey = true;
-      return dto();
-    },
     provider_defaults: (a) => {
       const s = defaultSettings(a.provider as ProviderKind);
       return [s.baseUrl, s.model];
@@ -350,8 +213,6 @@ export function installMockIpc() {
     get_screenshot: (a) => screenshot(a.id as number),
     retry_card: () => null,
     analyze_now: () => null,
-    list_models: () => ["claude-haiku-5-5", "claude-sonnet-5", "claude-opus-5-5"],
-    test_provider: () => "Connected. claude-haiku-5-5 answered in 0.8 s.",
     export_markdown: (a) => {
       let n = 0;
       for (let d = a.fromDay as string; d <= (a.toDay as string); d = shiftDay(d, 1)) n += cardsOf(d).length;
@@ -364,19 +225,8 @@ export function installMockIpc() {
       lightweightTitle: "Write a short title.",
       lightweightSummary: "Summarize in one sentence.",
     }),
-    provider_key_status: () => hasApiKey,
-    provider_save_key: () => {
-      hasApiKey = true;
-      return true;
-    },
     provider_check_cli: () => ({ path: "C:\\Users\\Preview\\AppData\\Roaming\\npm\\claude.cmd", version: "2.1.0" }),
     // platform
-    platform_info: () => ({
-      version: "0.2.1",
-      pauseOptions: [],
-      minuteOptions: [5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 480],
-      update: { currentVersion: "0.2.1", latestVersion: "0.2.1", releaseUrl: null, available: false, noReleases: false, checkedAt: now() - 3600, error: null },
-    }),
     platform_pause: (a) => {
       settings.recordingEnabled = false;
       settings.pauseUntil = pauseUntilFor(a.choice as string);
@@ -400,26 +250,14 @@ export function installMockIpc() {
       { name: "Microsoft Teams", running: false, lastSeen: now() - 7200, captures: 270 },
       { name: "Signal", running: true, lastSeen: now() - 1800, captures: 12 },
     ],
-    platform_check_updates: () => ({ currentVersion: "0.2.1", latestVersion: "0.2.1", releaseUrl: null, available: false, noReleases: false, checkedAt: now(), error: null }),
     platform_open_release: () => null,
     platform_open_screenshots: () => null,
     platform_test_notification: () => null,
     // timeline extras
-    te_day_extras: (a) => extras(a.day as string),
-    te_update_card: (a) => {
-      const c = cardById(a.cardId as number);
-      if (!c) throw "card not found";
-      if (a.title) c.title = a.title as string;
-      if (a.category) c.category = a.category as string;
-      if (a.subcategory) c.subcategory = a.subcategory as string;
-      return structuredClone(c);
-    },
     te_delete_card: (a) => {
       for (const [d, cards] of ds.days) ds.days.set(d, cards.filter((c) => c.id !== a.cardId));
       return true;
     },
-    te_set_feedback: (a) => (a.direction ? { cardId: a.cardId, direction: a.direction, note: a.note ?? "", updatedAt: now() } : null),
-    te_rate_card: () => null,
     te_days_with_data: (a) => {
       const out = [];
       for (let d = a.fromDay as string; d <= (a.toDay as string); d = shiftDay(d, 1)) {
@@ -429,63 +267,16 @@ export function installMockIpc() {
       return out;
     },
     te_timeline_text: (a) => cardsOf(a.day as string).map((c) => `${c.start} - ${c.end}  ${c.title}`).join("\n"),
-    te_reprocess_day_plan: (a) => ({ day: a.day, batchIds: cardsOf(a.day as string).map((c) => c.batchId ?? 0), keptEditedCards: 0, blocked: null }),
-    te_reprocess_day: (a) => ({ day: a.day, batchIds: [], keptEditedCards: 0, blocked: null }),
     te_reprocess_card: () => 812,
-    te_batch_progress: () => ({ waiting: 0, running: 0, failed: 0, step: null }),
-    te_retry_batches: (a) => (a.batchIds as number[]).length,
-    te_retry_status: () => [],
     // insights
     insights_day: (a) => computeDay(a.day as string, cardsOf(a.day as string), settings.categories),
     insights_week: (a) => computeWeek(a.day as string, cardsOf, settings.categories),
     ...recaps,
-    // goals
-    journal_get: (a) => goals(a.day as string),
-    journal_save_plan: (a) => goals(a.day as string),
-    journal_skip: (a) => goals(a.day as string),
-    journal_add_item: (a) => {
-      goalItems(a.day as string).push({ id: itemSeq++, text: a.text as string, done: false, evidence: { totalSecs: 0, cardCount: 0, cards: [] } });
-      return goals(a.day as string);
-    },
-    journal_update_item: (a) => {
-      for (const [d, list] of items) {
-        const it = list.find((x) => x.id === a.id);
-        if (it) {
-          if (typeof a.text === "string") it.text = a.text;
-          if (typeof a.done === "boolean") it.done = a.done;
-          return goals(d);
-        }
-      }
-      return goals(ds.today);
-    },
-    journal_delete_item: (a) => {
-      const day = a.day as string;
-      items.set(day, goalItems(day).filter((x) => x.id !== a.id));
-      return goals(day);
-    },
-    // chat
-    chat_info: () => chatInfo(),
-    chat_set_model: (a) => {
-      settings.chatModel = a.model as string;
-      return chatInfo();
-    },
-    chat_list_conversations: (): Conversation[] => convs.map((c) => c.conversation),
-    chat_get_conversation: (a) => structuredClone(convs.find((c) => c.conversation.id === a.id) ?? convs[0]),
-    chat_send: (a) => chatSend(a.conversationId as number | null, a.text as string),
-    chat_cancel: () => null,
-    chat_delete_conversation: (a) => {
-      const i = convs.findIndex((c) => c.conversation.id === a.id);
-      if (i >= 0) convs.splice(i, 1);
-    },
-    chat_get_memory: () => ({ content: "Works on a desktop app. Prefers short standup notes.", updatedAt: now() - 86400 * 3, maxChars: 2000 }),
-    chat_save_memory: (a) => ({ content: a.content, updatedAt: now(), maxChars: 2000 }),
-    chat_open_link: () => null,
     // storage
     storage_usage: () => storage(),
     storage_delete_older_than: () => ({ filesRemoved: 5400, bytesFreed: 980_000_000 }),
     storage_delete_day: () => ({ filesRemoved: 2600, bytesFreed: 480_000_000 }),
     storage_backup_now: () => ({ name: "daytrace-backup-2.db", bytes: 48_000_000, createdAt: now() }),
-    storage_health: () => storage().health,
     storage_agent_setup: () => ({
       exePath: "C:\\Users\\Preview\\AppData\\Local\\Daytrace\\daytrace.exe",
       installed: false,
@@ -501,7 +292,7 @@ export function installMockIpc() {
   // Goals and Chat: richer fixtures and variants (?goals=…, ?chat=…) from src/dev/goalschat.ts.
   Object.assign(handlers, goalsChatHandlers({ ds, settings, provider, q, now, cardsOf, hasApiKey: () => hasApiKey }));
   Object.assign(handlers, timelineMock(ds, now)); // Timeline fixtures and handlers (src/dev/timeline.ts)
-  applySettingsMock(handlers, { q, flags, settings, now, dataDir: dto().dataDir });
+  applySettingsMock(handlers, { q, flags, settings, now, dataDir });
 
   mockWindows("main");
   mockIPC(

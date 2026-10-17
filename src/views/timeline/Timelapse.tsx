@@ -235,7 +235,7 @@ export function Timelapse({ card }: { card: Card }) {
         </div>
         <ToggleGroup type="single" value={String(speed)} onValueChange={changeSpeed} aria-label="Playback speed" variant="outline" size="sm" spacing={0}>
           {SPEEDS.map((s) => (
-            <ToggleGroupItem key={s} value={String(s)} aria-label={`${s} times real time`} className="h-7 font-mono text-caption text-muted-foreground data-[state=on]:font-bold data-[state=on]:text-foreground">
+            <ToggleGroupItem key={s} value={String(s)} aria-label={`${s} times real time`} className="font-mono text-caption">
               {s}×
             </ToggleGroupItem>
           ))}

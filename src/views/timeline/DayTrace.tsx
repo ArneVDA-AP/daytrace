@@ -374,7 +374,7 @@ export function DayTrace({
           pressed={fit}
           onPressedChange={onFitChange}
           disabled={list.length === 0}
-          className="ml-auto h-7 gap-1.5 px-2 text-meta font-medium data-[state=on]:border-foreground"
+          className="ml-auto gap-1.5"
           aria-label="Fit to recorded hours"
         >
           {fit ? <UnfoldHorizontal aria-hidden="true" /> : <FoldHorizontal aria-hidden="true" />}

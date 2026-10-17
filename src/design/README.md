@@ -1,16 +1,17 @@
 # Daytrace design contract
 
-For the engineers porting Timeline, Daily, Weekly, Goals, Chat, Settings and Onboarding onto the
-new design. Base: designer-shadcn's proposal (shadcn/ui on Radix, Tailwind 4, lucide), with the
-bespoke category palette and fluent's status block, title bar and Contrast-theme rules.
+For everyone working on the views (Timeline, Daily, Weekly, Goals, Chat, Settings, Onboarding),
+which all run on this design now. Base: designer-shadcn's proposal (shadcn/ui on Radix,
+Tailwind 4, lucide), with the bespoke category palette and fluent's status block, title bar and
+Contrast-theme rules.
 
 ## Files: what you own, what you leave alone
 
 | Path | Owner | Notes |
 |---|---|---|
 | `src/views/<area>/**` | you | `index.tsx` default-exports the section; put everything else of your view next to it |
-| `src/views/*.tsx`, `src/*.tsx`, `src/settings/*`, legacy CSS | you, to delete | the old view you replace; delete its CSS rules when nothing uses them |
-| `src/app/*` | foundation | shell, rail, status block, banners, command menu, app state, day state |
+| `src/views/*-api.ts`, `src/timeline-extras-api.ts` | shared | typed IPC wrappers; change with the backend command |
+| `src/app/*` | foundation | shell, rail, status block, banners, command menu, app state, day state, settings write queue |
 | `src/components/ui/*` | foundation | shadcn copies, already edited for Daytrace; do not restyle them per view |
 | `src/components/{page-header,day-nav,day-picker,banner}.tsx` | foundation | shared page parts |
 | `src/design/tokens.css`, `src/index.css` | foundation | no new colours, sizes or global rules from views |
@@ -32,10 +33,12 @@ Need a token, a component variant or a shell change? Write it in your notes file
 - Fixture days are relative to today: today a workday (with a failed card, an idle card, a
   40-minute gap, interruptions), yesterday a night-owl day (9 PM to 2:40 AM), two days ago empty,
   then generated days. If a view needs more (a recap with blockers, a goal day), add it there.
-- Screenshots: `npm run screenshots -- --out <folder>` shoots the default routes at 1280×800 in
-  light and dark (clock fixed at Fri 16 Oct 2026, 5:42 PM). `--only daily`, `--width 760`,
+- Screenshots: `npm run screenshots -- --out <folder>` shoots the default routes (every section and
+  the main states, named `<section>-<state>`) at 1280×800 in light and dark, clock fixed at Fri 16
+  Oct 2026, 5:42 PM. `--only daily`, `--widths 1280,760`, `--forced` (Windows Contrast theme),
   `--route name='/?empty=1#/daily|w=760|keys=Control+k'`, `--url http://127.0.0.1:1420` to reuse a
-  running server. Look at your screenshots in both themes and at 760 px before you hand over.
+  running server. Files: `<name>-<theme>[-<width>][-forced].png`. Look at your screenshots in both
+  themes and at 760 px before you hand over.
 - `npm run contrast` prints the measured token pairs. `npx tsc --noEmit && npm run build` must
   pass; the build also runs `scripts/check-dist.mjs` (CSP and dev-mock checks).
 
@@ -102,12 +105,14 @@ by the `color` field of insights payloads (it is the stored hex, wrong in dark m
 
 Button (`default` ink, `outline`, `secondary`, `ghost`, `destructive`, `link`; sizes `sm`
 `default` `lg`, `icon-sm` `icon` `icon-lg`), Input, Textarea, NativeSelect (use for every single
-choice: Windows draws the list), Checkbox, RadioGroup, Switch, Slider, Label, Tabs (`line`
-variant for pages within a page, default pill only for 2–3 view switches), Toggle, ToggleGroup,
-DropdownMenu (actions: "More", "Export…"), Popover (pickers), Tooltip (names of icon-only
-buttons; never essential text), Dialog, AlertDialog (destructive confirmations whose buttons say
-what happens: "Delete 3.4 GB of screenshots"), Command (cmdk), Kbd, Skeleton, Spinner, Empty,
-Separator, Toast. Shared: `PageHeader`, `TitleBadge`, `DayNav`, `DayPicker`, `Banner`.
+choice: Windows draws the list; `wrapperClassName="w-full"` to fill a column), Checkbox,
+RadioGroup, Switch, Label, Toggle and ToggleGroup (pressed = ink fill, Highlight in Contrast
+themes; do not restyle the pressed state per view), DropdownMenu (actions: "More", "Export…"),
+Popover (pickers), Tooltip (names of icon-only buttons; never essential text), Dialog,
+AlertDialog (destructive confirmations whose buttons say what happens: "Delete 3.4 GB of
+screenshots"), Command (cmdk), Kbd, Skeleton, Spinner, Empty, Toast. Shared: `PageHeader`,
+`TitleBadge`, `DayNav`, `DayPicker`, `Banner` (`details` puts the raw error in a collapsed
+"Error details"). Unused shadcn parts (Tabs, Slider, Separator) were removed; ask to bring one back.
 No other UI libraries; ask before adding one (bundle and CSP). Charts are hand-written SVG.
 
 ## Page pattern
@@ -146,10 +151,11 @@ export default function DailySection() {
 ## States
 
 - Loading: show nothing for 150 ms, then a `Skeleton` in the shape of the content; keep it at
-  least 300 ms (`useDelayedLoading` in `lib/use-delayed.ts`). Polling refreshes must not show loaders or move anything (compare, then set).
+  least 300 ms (`useDelayedLoading` in `lib/use-delayed.ts`). Polling refreshes must not show
+  loaders or move anything (compare, then set).
 - Empty: `Empty` with what happened and the next step ("No recording on Sunday 11 October" + Go to
   today). Errors that belong to the view: inline `Banner tone="error"` with the fix as a button
-  and the raw message in a collapsed "Error details". Toasts only confirm finished actions
+  and the raw message in `details` (a collapsed "Error details"). Toasts only confirm finished actions
   ("Exported", "Copied") and offer Undo; never for errors that need action.
 - Global problems (no key, provider unreachable, capture failing) are already shown under every
   PageHeader and in the rail. Do not repeat them inside views.
@@ -174,11 +180,10 @@ export default function DailySection() {
 - No network: fonts, images and scripts come from the bundle. Screenshots come from IPC as data
   URLs (`img-src 'self' data:`).
 
-## Interim: the legacy frame
+## Settings writes
 
-Until your view is ported, `src/views/<area>/index.tsx` renders the old view inside
-`<LegacyFrame>` (`div.legacy`). Old CSS is in the `legacy` cascade layer, scoped to that
-container, with browser defaults restored inside it and the old variables (`--paper`, `--ink`,
-`--muted`, `--accent`, …) mapped onto the tokens. Never put new components inside a LegacyFrame:
-`--muted` and `--accent` mean different things there. When you port: drop the frame, delete the
-old component and its CSS rules, and check `npm run build` still passes.
+Every settings change goes through `savePatch()` in `app/settings-writes.ts` (Settings pages via
+`useSave()`, the rail's theme switch, the command menu): one queue, each write a patch on a fresh
+`get_settings`. Put the returned settings into the app state with `setSettings(dto)`; the app
+state applies reads and writes in order, so a refetch that started before a save cannot show the
+old value again.

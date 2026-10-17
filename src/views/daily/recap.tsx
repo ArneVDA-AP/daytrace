@@ -1,6 +1,6 @@
 import * as React from "react";
 import { save } from "@tauri-apps/plugin-dialog";
-import { Pencil, RefreshCw, Sparkles } from "lucide-react";
+import { OctagonAlert, Pencil, RefreshCw, Sparkles } from "lucide-react";
 import type { SettingsDto } from "@/api";
 import { providerLabel } from "@/app/status";
 import {
@@ -13,6 +13,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Banner } from "@/components/banner";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -23,7 +24,7 @@ import { at, clock, formatDayShort, formatDayTitle } from "@/lib/time";
 import { cn, errorText } from "@/lib/utils";
 import { insightsApi, type AutoPlan, type RecapEntry, type RecapView } from "@/views/insights/api";
 import { relativeDayLabel } from "@/views/insights/format";
-import { ErrorNotice, RetryButton, SectionCard } from "@/views/insights/parts";
+import { RetryButton, SectionCard } from "@/views/insights/parts";
 
 /*
  * The standup (Dayflow's daily recap) for the selected day: highlights from the last active day
@@ -247,9 +248,9 @@ export function StandupCard({
   let body: React.ReactNode;
   if (!recap) {
     body = loadError ? (
-      <ErrorNotice title="Couldn’t load the standup" error={loadError} action={<RetryButton onClick={onRetryLoad} />}>
+      <Banner tone="error" icon={<OctagonAlert />} title="Couldn’t load the standup" details={loadError} actions={<RetryButton onClick={onRetryLoad} />}>
         The day’s numbers below may still show. Daytrace tries again every minute.
-      </ErrorNotice>
+      </Banner>
     ) : (
       <ColumnsSkeleton />
     );
@@ -335,12 +336,14 @@ export function StandupCard({
 
   const failed =
     error && error.kind !== "export" ? (
-      <ErrorNotice
+      <Banner
+        tone="error"
+        icon={<OctagonAlert />}
         title={
           error.kind === "generate" ? "The standup could not be written" : error.kind === "save" ? "Couldn’t save the standup" : "Couldn’t copy the standup"
         }
-        error={error.message}
-        action={
+        details={error.message}
+        actions={
           error.kind === "generate" ? (
             entry ? (
               <RetryButton onClick={() => void actions.generate()} busy={!!busy} />
@@ -351,12 +354,12 @@ export function StandupCard({
         }
       >
         {error.kind === "generate" ? (entry ? "The standup below is unchanged." : "Nothing was lost. Generate again below, or write the standup yourself.") : error.kind === "save" ? "Your text is still in the fields." : undefined}
-      </ErrorNotice>
+      </Banner>
     ) : null;
 
   const exportFailed =
     error?.kind === "export" ? (
-      <ErrorNotice title="Couldn’t export the recap" error={error.message} action={<RetryButton onClick={() => void actions.exportRecap()} busy={!!busy} />}>
+      <Banner tone="error" icon={<OctagonAlert />} title="Couldn’t export the recap" details={error.message} actions={<RetryButton onClick={() => void actions.exportRecap()} busy={!!busy} />}>
         {settings.settings.recapExportDir.trim() ? (
           <>
             Check that the folder <span translate="no">{settings.settings.recapExportDir}</span> exists and can be written to, or change it in Settings.
@@ -364,17 +367,19 @@ export function StandupCard({
         ) : (
           "Nothing was written."
         )}
-      </ErrorNotice>
+      </Banner>
     ) : null;
 
   const autoFailed =
     recap && !entry && recap.autoError && !error && !generating && !editing ? (
-      <ErrorNotice
+      <Banner
+        tone="error"
+        icon={<OctagonAlert />}
         title="The automatic standup could not be written"
-        error={recap.autoError}
+        details={recap.autoError}
       >
         Daytrace tries up to three times a day by itself. Generate standup below writes it now.
-      </ErrorNotice>
+      </Banner>
     ) : null;
 
   return (

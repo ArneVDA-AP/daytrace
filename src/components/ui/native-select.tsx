@@ -2,14 +2,20 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 import { ChevronDownIcon } from "lucide-react"
 
+/**
+ * A styled native <select> (Windows draws the list). `className` styles the select; the wrapper
+ * is as wide as its content unless `wrapperClassName` says otherwise (e.g. "w-full" to fill a
+ * grid column).
+ */
 function NativeSelect({
   className,
+  wrapperClassName,
   size = "default",
   ...props
-}: Omit<React.ComponentProps<"select">, "size"> & { size?: "sm" | "default" }) {
+}: Omit<React.ComponentProps<"select">, "size"> & { size?: "sm" | "default"; wrapperClassName?: string }) {
   return (
     <div
-      className="group/native-select relative w-fit has-[select:disabled]:opacity-50"
+      className={cn("group/native-select relative w-fit has-[select:disabled]:opacity-50", wrapperClassName)}
       data-slot="native-select-wrapper"
     >
       <select

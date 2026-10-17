@@ -80,9 +80,15 @@ export function timelineMock(ds: Dataset, now: () => number): Record<string, (a:
   const feedback = new Map<number, Feedback>();
   const reviews = new Map<number, CardReview>();
 
-  // Seed: a few rated cards today and one summary marked as not accurate.
+  // Seed: a few rated cards today, most of yesterday rated (a mix), none on other days, and one
+  // summary marked as not accurate. Ratings totals come from these, per day.
   const today = cardsOf(ds.today).filter((c) => c.category === "Work");
   today.slice(0, 2).forEach((c) => reviews.set(c.id, { cardId: c.id, rating: "focused", coverage: 1 }));
+  const ratingOf = (cat: string): CardReview["rating"] => (cat === "Work" ? "focused" : cat === "Distraction" ? "distracted" : "neutral");
+  cardsOf(shiftDay(ds.today, -1))
+    .filter((c) => c.category !== "System" && !c.isIdleShortcut)
+    .slice(0, -1)
+    .forEach((c) => reviews.set(c.id, { cardId: c.id, rating: ratingOf(c.category), coverage: 1 }));
   if (today[3]) feedback.set(today[3].id, { cardId: today[3].id, direction: "down", note: "This was a review, not debugging.", updatedAt: now() - 3600 });
 
   const extras = (day: string): DayExtras => {
