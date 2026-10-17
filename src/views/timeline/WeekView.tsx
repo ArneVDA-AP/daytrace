@@ -160,8 +160,19 @@ export function WeekView({
         Week overview
       </h2>
       <div className="flex shrink-0 flex-col gap-2 border-b px-(--page-x) py-2.5">
-        <CategoryChips lanes={lanes} colorFor={colorFor} muted={muted} onToggle={onToggleMute} />
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-caption text-muted-foreground">
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <CategoryChips lanes={lanes} colorFor={colorFor} muted={muted} onToggle={onToggleMute} />
+          </div>
+          {/* A view option that is on by default (as on the day trace); hidden when there is nothing to fit. */}
+          {(cols === null || anyCards) && !data.error && (
+            <label className="inline-flex h-7 shrink-0 items-center gap-2 text-meta text-foreground">
+              <Switch checked={fit} onCheckedChange={onFitChange} />
+              Fit to recorded hours
+            </label>
+          )}
+        </div>
+        <div className="flex min-h-4 flex-wrap items-center gap-x-4 gap-y-1 text-caption text-muted-foreground">
           {nights.length > 0 && anyCards && (
             <span className="inline-flex items-center gap-1.5">
               <span aria-hidden="true" className="inline-block h-2.5 w-3.5 rounded-[2px] border border-border bg-surface-2" />
@@ -196,12 +207,6 @@ export function WeekView({
             Recorded this week{" "}
             <span className="tnum text-foreground">{cols ? formatDuration(weekTotal) : data.error ? "–" : "…"}</span>
           </span>
-          {anyCards && (
-            <label className="ml-auto inline-flex items-center gap-2 text-meta text-foreground">
-              <Switch checked={fit} onCheckedChange={onFitChange} />
-              Fit to recorded hours
-            </label>
-          )}
         </div>
       </div>
 
@@ -253,7 +258,7 @@ export function WeekView({
           </div>
 
           {showSkeleton || !cols ? (
-            showSkeleton ? <GridSkeleton /> : null
+            showSkeleton ? <GridSkeleton future={days.map((d) => d > today)} /> : null
           ) : (
             <Grid
               days={days}
@@ -287,8 +292,8 @@ const HEADER_PX = 44;
 function BreakMark({ vertical = false }: { vertical?: boolean }) {
   return (
     <span aria-hidden="true" className={cn("inline-flex items-center justify-center gap-[3px]", vertical ? "h-3.5 w-3 flex-col" : "h-3 w-3.5")}>
-      <span className={cn("bg-muted-foreground", vertical ? "h-px w-3 -rotate-[20deg]" : "h-3 w-px rotate-[20deg]")} />
-      <span className={cn("bg-muted-foreground", vertical ? "h-px w-3 -rotate-[20deg]" : "h-3 w-px rotate-[20deg]")} />
+      <span className={cn("bg-muted-foreground forced-colors:bg-[CanvasText]", vertical ? "h-px w-3 -rotate-[20deg]" : "h-3 w-px rotate-[20deg]")} />
+      <span className={cn("bg-muted-foreground forced-colors:bg-[CanvasText]", vertical ? "h-px w-3 -rotate-[20deg]" : "h-3 w-px rotate-[20deg]")} />
     </span>
   );
 }
@@ -313,7 +318,7 @@ function DayHeader({ day, today, recorded, cards }: { day: string; today: string
         </span>
         {isToday && <span className="truncate text-caption text-muted-foreground max-wide:hidden">Today</span>}
       </span>
-      <span className="truncate text-caption text-muted-foreground tnum">{sub || " "}</span>
+      <span className="truncate text-caption text-muted-foreground tnum">{sub || "\u00a0"}</span>
     </>
   );
   const cls = "flex min-w-0 flex-col justify-center border-l px-2 text-meta leading-4";
@@ -329,16 +334,17 @@ function DayHeader({ day, today, recorded, cards }: { day: string; today: string
   );
 }
 
-function GridSkeleton() {
+function GridSkeleton({ future }: { future: boolean[] }) {
   return (
     <div aria-busy="true" aria-label="Loading the week" className="grid px-(--page-x) pt-3" style={{ gridTemplateColumns: GRID_COLS }}>
       <span />
       <div className="grid grid-cols-7">
-        {[0, 1, 2, 3, 4, 5, 6].map((i) => (
+        {future.map((f, i) => (
           <div key={i} className="flex flex-col gap-2 border-l px-1">
-            {[56, 28, 72, 40].map((h, j) => (
-              <Skeleton key={j} className="w-full rounded-[3px]" style={{ height: h, marginTop: j === 0 ? (i % 3) * 16 : 0 }} />
-            ))}
+            {!f &&
+              [56, 28, 72, 40].map((h, j) => (
+                <Skeleton key={j} className="w-full rounded-[3px]" style={{ height: h, marginTop: j === 0 ? (i % 3) * 16 : 0 }} />
+              ))}
           </div>
         ))}
       </div>

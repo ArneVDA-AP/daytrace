@@ -67,18 +67,19 @@ export function ReviewMode({
   returnFocus?: ReturnFocus;
 }) {
   const opener = useOpener(open);
+  const contentRef = React.useRef<HTMLDivElement>(null);
   return (
     <DialogPrimitive.Root open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogPortal>
         <DialogOverlay className="bg-background" />
         <DialogPrimitive.Content
+          ref={contentRef}
           aria-describedby="review-keys"
           className="fixed inset-0 z-50 flex flex-col bg-background text-foreground outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0"
           onOpenAutoFocus={(e) => {
-            // The layer itself takes the focus (where its keys are handled), so Space plays: a
-            // focused rating button would rate.
+            // The layer itself takes the focus, so Space plays: a focused rating button would rate.
             e.preventDefault();
-            document.getElementById("review-body")?.focus();
+            contentRef.current?.focus();
           }}
           onCloseAutoFocus={(e) => {
             const el = opener.ref.current;
@@ -90,6 +91,8 @@ export function ReviewMode({
           }}
         >
           <ReviewBody
+            key={day}
+            layer={contentRef}
             day={day}
             cards={cards}
             extras={extras}
@@ -106,6 +109,7 @@ export function ReviewMode({
 }
 
 function ReviewBody({
+  layer,
   day,
   cards,
   extras,
@@ -115,6 +119,7 @@ function ReviewBody({
   colorFor,
   idleKey,
 }: {
+  layer: React.RefObject<HTMLDivElement | null>;
   day: string;
   cards: Card[] | null;
   extras: DayExtras | null;
@@ -181,13 +186,18 @@ function ReviewBody({
     setAnnounce(next.length ? describe(next[0], 0, next.length) : "");
   };
 
-  const onKeyDown = (e: React.KeyboardEvent) => {
+  // Keys of the layer, read on the document: they also arrive when the focus fell back to <body>
+  // (a focused control that turns disabled, such as the Timelapse's "Back to the first frame").
+  // Handlers inside the layer run first (the Timelapse's Space); the full-size viewer keeps its
+  // keys to itself.
+  const onKeyDown = (e: KeyboardEvent) => {
+    const t = e.target as HTMLElement;
+    if (t !== document.body && !layer.current?.contains(t)) return;
     // The window's shortcuts (J/K, [ and ], Ctrl+K) stay out while the review is open.
     e.stopPropagation();
-    const t = e.target as HTMLElement;
     // (isTypingTarget counts the whole dialog as typing; this layer has no text fields.)
     if (e.defaultPrevented || e.ctrlKey || e.altKey || e.metaKey || t.closest('textarea, select, [contenteditable="true"], input:not([type="range"])')) return;
-    const d = digitOf(e.nativeEvent);
+    const d = digitOf(e);
     if (d !== null && d >= 1 && d <= 3 && card) {
       e.preventDefault();
       void rate(RATINGS[d - 1].id);
@@ -204,11 +214,19 @@ function ReviewBody({
     }
   };
 
+  const keyRef = React.useRef(onKeyDown);
+  keyRef.current = onKeyDown;
+  React.useEffect(() => {
+    const on = (e: KeyboardEvent) => keyRef.current(e);
+    document.addEventListener("keydown", on);
+    return () => document.removeEventListener("keydown", on);
+  }, []);
+
   const showSkeleton = useDelayedLoading(!ready && !error);
   const total = queue?.length ?? 0;
 
   return (
-    <div id="review-body" tabIndex={-1} className="flex min-h-0 flex-1 flex-col outline-none" onKeyDown={onKeyDown}>
+    <div className="flex min-h-0 flex-1 flex-col">
       <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b px-4 py-2.5">
         <div className="min-w-0 flex-1">
           <DialogPrimitive.Title className="truncate text-body font-semibold">Rate the cards of {formatDayTitle(day)}</DialogPrimitive.Title>
@@ -219,7 +237,7 @@ function ReviewBody({
         {queue && total > 0 && (
           <div className="flex items-center gap-2 text-meta text-muted-foreground">
             <span className="tnum">{done ? `${total} of ${total}` : `Card ${index + 1} of ${total}`}</span>
-            <span aria-hidden="true" className="h-1.5 w-24 overflow-hidden rounded-full bg-surface-3">
+            <span aria-hidden="true" className="h-1.5 w-24 overflow-hidden rounded-full bg-surface-3 forced-colors:border forced-colors:border-[CanvasText]">
               <span data-mark="" className="block h-full rounded-full bg-foreground" style={{ width: `${(Math.min(index, total) / total) * 100}%` }} />
             </span>
           </div>
@@ -292,7 +310,14 @@ function ReviewBody({
             </p>
           )}
           <div className="flex flex-wrap items-center justify-center gap-2">
-            <Button variant="ghost" onClick={() => go(index - 1)} disabled={index === 0} aria-keyshortcuts="ArrowLeft">
+            {/* aria-disabled, not disabled: a focused button that turns disabled drops the focus out of the layer. */}
+            <Button
+              variant="ghost"
+              onClick={() => index > 0 && go(index - 1)}
+              aria-disabled={index === 0 || undefined}
+              aria-keyshortcuts="ArrowLeft"
+              className="aria-disabled:cursor-default aria-disabled:opacity-50"
+            >
               <ArrowLeft aria-hidden="true" /> Previous card
             </Button>
             <div role="group" aria-label="Rate this card and go to the next" className="flex flex-wrap justify-center gap-2">
@@ -302,9 +327,9 @@ function ReviewBody({
                   variant={current === r.id ? "default" : "outline"}
                   aria-pressed={current === r.id}
                   aria-keyshortcuts={r.key}
-                  disabled={busy}
+                  aria-disabled={busy || undefined}
                   onClick={() => void rate(r.id)}
-                  className="min-w-[8.5rem]"
+                  className="min-w-[8.5rem] aria-disabled:cursor-default"
                 >
                   {busy ? (
                     <Spinner className="size-3.5" aria-hidden="true" role="presentation" />
