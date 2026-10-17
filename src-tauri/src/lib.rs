@@ -52,6 +52,7 @@ pub fn run() {
             app.manage(state.clone());
             tray::create(app.handle())?;
             capture::spawn(state.clone());
+            features::insights::spawn(state.clone());
             analysis::spawn(state);
             if !start_minimized {
                 tray::show_main(app.handle());
@@ -74,6 +75,12 @@ pub fn run() {
             commands::export_markdown,
             commands::open_data_dir,
             // insights commands
+            features::insights::insights_day,
+            features::insights::insights_week,
+            features::insights::insights_recap,
+            features::insights::insights_generate_recap,
+            features::insights::insights_save_recap,
+            features::insights::insights_export_recap,
             // chat commands
             // journal commands
             // platform_extras commands

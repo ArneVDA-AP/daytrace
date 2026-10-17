@@ -64,6 +64,13 @@ pub struct Settings {
     pub use_batch_api: bool,
     /// Hidden reasoning for Claude models (Anthropic provider only).
     pub reasoning: Reasoning,
+    /// Folder for the daily recap Markdown files (`<dir>/Daytrace/<day>.md`); empty turns the
+    /// export off.
+    pub recap_export_dir: String,
+    /// Write the daily recap automatically after `recap_time` (and export it when a folder is set).
+    pub recap_auto: bool,
+    /// Local time ("HH:MM", 24-hour) after which the automatic recap runs.
+    pub recap_time: String,
 }
 
 impl Default for Settings {
@@ -85,6 +92,9 @@ impl Default for Settings {
             idle_pause_secs: 120,
             use_batch_api: false,
             reasoning: Reasoning::Low,
+            recap_export_dir: String::new(),
+            recap_auto: true,
+            recap_time: "08:00".into(),
         }
     }
 }
