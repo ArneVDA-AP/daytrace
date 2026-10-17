@@ -121,6 +121,9 @@ private final class HarnessRecorder {
     let canned = cannedResponse(operation: operation)
     entry["response_text"] = canned
     entry["dry_run"] = true
+    // What live mode would send, so the conversion can be checked without a key.
+    entry["anthropic_request_preview"] = Self.redactJSON(
+      anthropicBody(request, withTemperature: sendTemperature))
     return canned
   }
 

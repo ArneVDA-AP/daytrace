@@ -144,7 +144,7 @@ python3 reference/fetch_log_output.py run.log out/harness-out
 | `batches.json` | each batch: frames, time range, status, request count |
 | `observations.json` | every observation with Unix times, clock strings and offsets from the first frame |
 | `cards.json` | `final`: the timeline after the last batch; `per_batch`: what each card request returned |
-| `requests.json` | every request as Dayflow built it, images replaced by their size and dimensions; in live mode also the converted Anthropic request, the response text, stop reason and usage |
+| `requests.json` | every request as Dayflow built it, images replaced by their size and dimensions; the converted Anthropic request (`anthropic_request` in live mode, `anthropic_request_preview` in dry mode), the response text, and in live mode the stop reason and usage |
 | `xcodebuild.log` | full build and test log |
 
 ## Comparing with Daytrace
