@@ -15,6 +15,10 @@ function Switch({
       data-size={size}
       className={cn(
         "peer group/switch inline-flex shrink-0 items-center rounded-full border border-transparent shadow-xs transition-[color,background-color,border-color,box-shadow,opacity] duration-(--dur-fast) focus-visible:border-ring disabled:cursor-not-allowed disabled:opacity-50 data-[size=default]:h-[1.15rem] data-[size=default]:w-8 data-[size=sm]:h-3.5 data-[size=sm]:w-6 data-[state=checked]:bg-primary data-[state=unchecked]:bg-input dark:data-[state=unchecked]:bg-input/80",
+        // Contrast themes: the system would paint track and thumb in the same Canvas color, so the
+        // switch keeps its own system colors: an outlined track with a CanvasText thumb when off,
+        // a Highlight track with a HighlightText thumb when on.
+        "forced-colors:forced-color-adjust-none forced-colors:border-[CanvasText]! forced-colors:data-[state=unchecked]:bg-[Canvas]! forced-colors:data-[state=checked]:border-[Highlight]! forced-colors:data-[state=checked]:bg-[Highlight]! forced-colors:disabled:border-[GrayText]! forced-colors:disabled:opacity-100",
         className
       )}
       {...props}
@@ -22,7 +26,8 @@ function Switch({
       <SwitchPrimitive.Thumb
         data-slot="switch-thumb"
         className={cn(
-          "pointer-events-none block rounded-full bg-background ring-0 transition-transform group-data-[size=default]/switch:size-4 group-data-[size=sm]/switch:size-3 data-[state=checked]:translate-x-[calc(100%-2px)] data-[state=unchecked]:translate-x-0 dark:data-[state=checked]:bg-primary-foreground dark:data-[state=unchecked]:bg-foreground"
+          "pointer-events-none block rounded-full bg-background ring-0 transition-transform group-data-[size=default]/switch:size-4 group-data-[size=sm]/switch:size-3 data-[state=checked]:translate-x-[calc(100%-2px)] data-[state=unchecked]:translate-x-0 dark:data-[state=checked]:bg-primary-foreground dark:data-[state=unchecked]:bg-foreground",
+          "forced-colors:forced-color-adjust-none forced-colors:bg-[CanvasText]! forced-colors:data-[state=checked]:bg-[HighlightText]! forced-colors:group-disabled/switch:bg-[GrayText]!"
         )}
       />
     </SwitchPrimitive.Root>

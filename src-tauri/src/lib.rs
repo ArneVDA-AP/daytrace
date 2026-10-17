@@ -138,6 +138,11 @@ pub fn run() {
             features::platform_extras::platform_open_release,
             features::platform_extras::platform_open_screenshots,
             features::platform_extras::platform_test_notification,
+            // shell commands
+            features::shell::shell_badges,
+            features::shell::shell_recap_opened,
+            features::shell::shell_set_overlay,
+            features::shell::shell_open_link,
             // provider commands
             llm::provider_cmds::provider_prompt_defaults,
             llm::provider_cmds::provider_key_status,

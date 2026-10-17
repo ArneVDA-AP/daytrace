@@ -112,6 +112,7 @@ export function ExportDialog({ open, onOpenChange, day, today }: { open: boolean
                     size="sm"
                     variant="outline"
                     aria-pressed={on}
+                    data-choice=""
                     className={cn("h-7", on && "border-foreground bg-surface-2 font-semibold")}
                     onClick={() => {
                       setFrom(p.from);

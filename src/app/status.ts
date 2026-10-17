@@ -1,4 +1,5 @@
 import type { SettingsDto, Status } from "@/api";
+import { describeFailure, isUnreachable, type FailureView } from "@/app/failure";
 import { clock } from "@/lib/time";
 
 /*
@@ -25,6 +26,10 @@ export interface AnalysisView {
   tone: AnalysisTone;
   label: string;
   detail: string;
+  /** "noKey" draws the key icon; the rest follow the tone. */
+  icon?: "key";
+  /** A link under the detail ("Show", to the card that was not analyzed). */
+  link?: { label: string; href: string };
 }
 
 export interface Problems {
@@ -32,6 +37,8 @@ export interface Problems {
   noKey: boolean;
   /** The last analysis failed because the provider could not be reached. */
   unreachable: boolean;
+  /** The last analysis failed for another reason (a refused key, no credits, a busy server...). */
+  failure: FailureView | null;
   /** The recorder reports that Windows returned no image. */
   captureError: string | null;
 }
@@ -63,17 +70,20 @@ function host(url: string): string | null {
   }
 }
 
-const NETWORK_ERROR = /error sending request|connect|connection|timed out|timeout|dns|resolve|unreachable|network|no route|refused|offline|failed to fetch/i;
-
 /** Whether an analysis error means the provider could not be reached (vs. a refused key, a bad answer...). */
-export function isNetworkError(message: string | null | undefined): boolean {
-  return !!message && NETWORK_ERROR.test(message);
+export function isNetworkError(message: string | null | undefined, provider?: SettingsDto["settings"]["provider"]): boolean {
+  return isUnreachable(message, provider);
 }
 
 export function problems(status: Status, dto: SettingsDto): Problems {
+  const s = dto.settings;
+  const noKey = s.provider === "anthropic" && !dto.hasApiKey;
+  const err = status.analysis.lastError;
+  const unreachable = isUnreachable(err, s.provider);
   return {
-    noKey: dto.settings.provider === "anthropic" && !dto.hasApiKey,
-    unreachable: isNetworkError(status.analysis.lastError),
+    noKey,
+    unreachable,
+    failure: err && !noKey && !unreachable ? describeFailure(err, { provider: s.provider, host: host(s.baseUrl), recording: s.recordingEnabled }) : null,
     captureError: status.recorder.state === "error" ? status.recorder.detail || "Windows returned no image." : null,
   };
 }
@@ -138,7 +148,7 @@ export function describeAnalysis(status: Status, dto: SettingsDto): AnalysisView
       : { tone: "busy", label: "Writing timeline cards…", detail: more || stepText(step) };
   }
   if (p.noKey) {
-    return { tone: "warn", label: "Waiting for an API key", detail: "Screenshots are kept until a key is added" };
+    return { tone: "warn", icon: "key", label: "Waiting for an API key", detail: "Screenshots are kept until a key is added" };
   }
   if (a.lastError) {
     if (p.unreachable) {
@@ -148,7 +158,9 @@ export function describeAnalysis(status: Status, dto: SettingsDto): AnalysisView
         detail: queued > 0 ? `${queued} ${queued === 1 ? "batch" : "batches"} waiting. Tries again with the next batch` : "Tries again with the next batch",
       };
     }
-    return { tone: "error", label: "The last batch failed", detail: firstLine(a.lastError) };
+    // The cause in plain words; the banner under the page header has the fix and the raw error.
+    const f = p.failure;
+    if (f) return { tone: f.selfHealing ? "warn" : "error", label: f.label, detail: f.next };
   }
   if (queued > 0) {
     return { tone: "busy", label: `${queued} ${queued === 1 ? "batch" : "batches"} waiting`, detail: "Analysis runs within a minute" };
@@ -160,11 +172,20 @@ export function describeAnalysis(status: Status, dto: SettingsDto): AnalysisView
   };
 }
 
-function stepText(step: string): string {
-  return step.replace(/\s*\(.*\)\s*$/, "");
+/**
+ * The rail's analysis line with today's "Not analyzed" cards counted in (UX7): "Timeline up to
+ * date" only when there are none.
+ */
+export function withNotAnalyzed(view: AnalysisView, count: number, href: string | null): AnalysisView {
+  if (count <= 0 || view.tone !== "ok") return view;
+  return {
+    tone: "warn",
+    label: `${count} ${count === 1 ? "card" : "cards"} not analyzed`,
+    detail: "Daytrace tries again after the next card is written",
+    link: href ? { label: count === 1 ? "Show the card" : "Show the first one", href } : undefined,
+  };
 }
 
-function firstLine(msg: string): string {
-  const line = msg.split("\n")[0].trim();
-  return line.length > 120 ? `${line.slice(0, 117)}…` : line;
+function stepText(step: string): string {
+  return step.replace(/\s*\(.*\)\s*$/, "");
 }

@@ -14,7 +14,7 @@ Contrast-theme rules.
 | `src/app/*` | foundation | shell, rail, status block, banners, command menu, app state, day state, settings write queue |
 | `src/components/ui/*` | foundation | shadcn copies, already edited for Daytrace; do not restyle them per view |
 | `src/components/{page-header,day-nav,day-picker,banner}.tsx` | foundation | shared page parts |
-| `src/design/tokens.css`, `src/index.css` | foundation | no new colours, sizes or global rules from views |
+| `src/design/tokens.css`, `src/index.css` | foundation | no new colors, sizes or global rules from views |
 | `src/lib/{router,time,theme,categories,utils}.ts` | foundation | add pure helpers only after asking |
 | `src/dev/*` | everyone, carefully | fixtures may grow; keep them synthetic (invented people, invented days) |
 | `src-tauri/**` | backend | not part of the view work |
@@ -42,9 +42,9 @@ Need a token, a component variant or a shell change? Write it in your notes file
 - `npm run contrast` prints the measured token pairs. `npx tsc --noEmit && npm run build` must
   pass; the build also runs `scripts/check-dist.mjs` (CSP and dev-mock checks).
 
-## Colour
+## Color
 
-Colour is data: chrome is graphite and ink; hue belongs to categories and status. Use the
+Color is data: chrome is graphite and ink; hue belongs to categories and status. Use the
 Tailwind names, never hex or `rgb()` in views.
 
 | Role | Classes | Use |
@@ -63,12 +63,12 @@ Tailwind names, never hex or `rgb()` in views.
 | charts | `--chart-*`, `--chart-axis`, `--chart-grid`, `--heat-0…4` | hand-drawn SVG; heat ramp is one hue (plum) |
 | timeline | `--trace-track`, `--trace-hatch`, `--trace-now`, `--trace-gridline` | day strip and rails |
 
-**Category colours.** Take `colorFor` from the section props or `useAppState()`. It returns a
-CSS colour for a card's category name: the theme-aware token for the recommended defaults, the
-user's hex otherwise, `--cat-system` for failed cards, a neutral for unknown names. Do not colour
+**Category colors.** Take `colorFor` from the section props or `useAppState()`. It returns a
+CSS color for a card's category name: the theme-aware token for the recommended defaults, the
+user's hex otherwise, `--cat-system` for failed cards, a neutral for unknown names. Do not color
 by the `color` field of insights payloads (it is the stored hex, wrong in dark mode). Rules:
 
-- Every coloured mark has its category name next to it (label, legend, row text or tooltip plus a
+- Every colored mark has its category name next to it (label, legend, row text or tooltip plus a
   table). Personal and the recording green share a hue; the words keep them apart.
 - Idle is texture: `.hatch-idle` (stroke `--cat-idle`), never a solid block. Not recorded:
   `.hatch-gap`. Failed / not analyzed: `.stripes-failed` plus the words "Not analyzed".

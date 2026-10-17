@@ -29,6 +29,7 @@ import { screenSvg } from "@/dev/screens";
 import { goalsChatHandlers } from "@/dev/goalschat";
 import { timelineMock } from "@/dev/timeline";
 import { applySettingsMock } from "@/dev/settings";
+import { applyF1Mock } from "@/dev/w4-f1";
 
 export const DEV_MOCK_MARKER = "DAYTRACE_DEV_MOCK_IPC";
 
@@ -293,6 +294,7 @@ export function installMockIpc() {
   Object.assign(handlers, goalsChatHandlers({ ds, settings, provider, q, now, cardsOf, hasApiKey: () => hasApiKey }));
   Object.assign(handlers, timelineMock(ds, now)); // Timeline fixtures and handlers (src/dev/timeline.ts)
   applySettingsMock(handlers, { q, flags, settings, now, dataDir });
+  applyF1Mock(handlers, { q, today: ds.today, now }); // shell commands and variants (src/dev/w4-f1.ts)
 
   mockWindows("main");
   mockIPC(

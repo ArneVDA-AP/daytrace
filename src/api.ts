@@ -114,6 +114,17 @@ export interface Card {
   distractions: Distraction[];
   appSites: { primary: string | null; secondary: string | null } | null;
   isIdleShortcut: boolean;
+  /** Which provider and model wrote the card; null for Idle and failed cards and cards written
+   *  before Daytrace recorded it. */
+  generatedBy?: GeneratedBy | null;
+}
+
+export interface GeneratedBy {
+  /** The provider's name as Settings shows it, e.g. "Claude API". */
+  provider: string;
+  model: string;
+  /** Written by the fallback provider. */
+  fallback: boolean;
 }
 
 export interface Shot {

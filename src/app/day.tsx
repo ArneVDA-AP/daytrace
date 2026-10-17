@@ -1,6 +1,6 @@
 import * as React from "react";
 import { DAY_SECTIONS, dayParam, navigate, useRoute, type Params, type Section } from "@/lib/router";
-import { useAppState } from "@/app/state";
+import { useAppStatusSelect } from "@/app/state";
 
 /*
  * The day travels with you: Timeline, Daily, Weekly and Goals share the `day` route param. Moving
@@ -31,7 +31,8 @@ export function isDaySection(s: Section): boolean {
 }
 
 export function DayProvider({ children }: { children: React.ReactNode }) {
-  const { today } = useAppState();
+  // Only "today" from the status: a status poll does not re-render the day consumers.
+  const today = useAppStatusSelect(selectToday);
   const route = useRoute();
   const onDaySection = isDaySection(route.section);
   const routeDay = dayParam(route.params);
@@ -65,6 +66,8 @@ export function DayProvider({ children }: { children: React.ReactNode }) {
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
+
+const selectToday = (s: { today: string }) => s.today;
 
 function clamp(day: string, today: string): string {
   return day > today ? today : day;

@@ -4,11 +4,20 @@ import { XIcon } from "lucide-react"
 import { Dialog as DialogPrimitive } from "radix-ui"
 
 import { Button } from "@/components/ui/button"
+import { FocusReturnProvider, useCloseAutoFocus, useOpener, type ReturnFocus } from "@/components/ui/focus-return"
 
+/** Remembers what had focus when it opened and gives it back on close (see focus-return.ts). */
 function Dialog({
+  open,
+  onOpenChange,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Root>) {
-  return <DialogPrimitive.Root data-slot="dialog" {...props} />
+  const opener = useOpener(open, onOpenChange)
+  return (
+    <FocusReturnProvider value={opener.ref}>
+      <DialogPrimitive.Root data-slot="dialog" open={open} onOpenChange={opener.onOpenChange} {...props} />
+    </FocusReturnProvider>
+  )
 }
 
 function DialogTrigger({
@@ -49,15 +58,21 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  returnFocus,
+  onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
+  /** Where focus goes on close when the element that opened the dialog is gone. */
+  returnFocus?: ReturnFocus
 }) {
+  const closeAutoFocus = useCloseAutoFocus(returnFocus, onCloseAutoFocus)
   return (
     <DialogPortal data-slot="dialog-portal">
       <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"
+        onCloseAutoFocus={closeAutoFocus}
         className={cn(
           "fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-xl border bg-popover p-6 text-popover-foreground shadow-lg duration-(--dur-slow) data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
           className

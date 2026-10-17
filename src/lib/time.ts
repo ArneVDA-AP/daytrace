@@ -122,6 +122,126 @@ export function formatDuration(seconds: number): string {
   return m === 0 ? `${h} h` : `${h} h ${m} min`;
 }
 
+// ---------------------------------------------------------------- typed days (Ctrl+K)
+
+const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+// Dutch names too: the owner's region writes dates that way ("12 okt", "3 mei").
+const MONTHS_NL = ["januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus", "september", "oktober", "november", "december"];
+const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+const WEEKDAYS_NL = ["zondag", "maandag", "dinsdag", "woensdag", "donderdag", "vrijdag", "zaterdag"];
+
+function prefixIndex(word: string, names: string[]): number {
+  if (word.length < 3) return -1;
+  return names.findIndex((n) => n.startsWith(word));
+}
+
+function monthOf(word: string): number | null {
+  if (word === "mrt") return 2;
+  const i = prefixIndex(word, MONTHS);
+  if (i >= 0) return i;
+  const j = prefixIndex(word, MONTHS_NL);
+  return j >= 0 ? j : null;
+}
+
+function weekdayOf(word: string): number | null {
+  const i = prefixIndex(word, WEEKDAYS);
+  if (i >= 0) return i;
+  const j = prefixIndex(word, WEEKDAYS_NL);
+  return j >= 0 ? j : null;
+}
+
+/** A real date as a day key, or null (31 February is not one). */
+function validDay(y: number, m: number, d: number): string | null {
+  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) return null;
+  const dt = new Date(y, m, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== m || dt.getDate() !== d) return null;
+  return dayKey(dt);
+}
+
+/** A date without a year: this year, or last year when it would be after today. */
+function inPast(m: number, d: number, today: string, year?: number): string | null {
+  const ty = dateOf(today).getFullYear();
+  if (year !== undefined) return validDay(year, m, d);
+  const k = validDay(ty, m, d);
+  if (k && k <= today) return k;
+  return validDay(ty - 1, m, d);
+}
+
+/**
+ * A day typed in the command menu, never after today: "today", "yesterday", "monday" (the most
+ * recent one, today included), "last monday" (before today), "12 oct", "oct 12", "12 october
+ * 2025", "12/10" (day/month), "2026-10-12", or a day of the month ("12"). Dutch month and weekday
+ * names work as well. Returns null when the text is not a day.
+ */
+export function parseDayQuery(input: string, today: string): string | null {
+  const q = input.trim().toLowerCase().replace(/\s+/g, " ");
+  if (!q) return null;
+  if (q === "today" || q === "vandaag") return today;
+  if (q === "yesterday" || q === "gisteren") return shiftDay(today, -1);
+
+  const check = (k: string | null) => (k && k <= today ? k : null);
+
+  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(q);
+  if (m) return check(validDay(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+
+  m = /^(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2}|\d{4}))?$/.exec(q);
+  if (m) {
+    const y = m[3] ? (m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3])) : undefined;
+    return check(inPast(Number(m[2]) - 1, Number(m[1]), today, y));
+  }
+
+  const words = q.split(/[\s,]+/).filter((w) => w && w !== "the" && w !== "of" && w !== "on");
+  let last = false;
+  let weekday: number | null = null;
+  let month: number | null = null;
+  let dayNum: number | null = null;
+  let year: number | undefined;
+  for (const raw of words) {
+    const w = raw.replace(/(st|nd|rd|th)$/, (s) => (/^\d/.test(raw) ? "" : s)).replace(/\.$/, "");
+    if (w === "last" || w === "vorige" || w === "vorig") {
+      last = true;
+      continue;
+    }
+    if (/^\d{4}$/.test(w)) {
+      year = Number(w);
+      continue;
+    }
+    if (/^\d{1,2}$/.test(w)) {
+      if (dayNum !== null) return null;
+      dayNum = Number(w);
+      continue;
+    }
+    const mo = monthOf(w);
+    if (mo !== null && month === null) {
+      month = mo;
+      continue;
+    }
+    const wd = weekdayOf(w);
+    if (wd !== null && weekday === null) {
+      weekday = wd;
+      continue;
+    }
+    return null;
+  }
+
+  if (dayNum !== null && month !== null) return check(inPast(month, dayNum, today, year));
+  if (dayNum !== null && month === null && weekday === null && year === undefined) {
+    // "12": the 12th of this month, or of last month when that is still to come.
+    const t = dateOf(today);
+    const k = validDay(t.getFullYear(), t.getMonth(), dayNum);
+    if (k && k <= today) return k;
+    const prev = new Date(t.getFullYear(), t.getMonth() - 1, 1);
+    return check(validDay(prev.getFullYear(), prev.getMonth(), dayNum));
+  }
+  if (weekday !== null && dayNum === null && month === null && year === undefined) {
+    const dow = dateOf(today).getDay();
+    let back = (dow - weekday + 7) % 7;
+    if (last && back === 0) back = 7;
+    return shiftDay(today, -back);
+  }
+  return null;
+}
+
 /** Compact form for chart labels and tight cells: "1h 30m". */
 export function formatDurationShort(seconds: number): string {
   const mins = Math.max(0, Math.round(seconds / 60));

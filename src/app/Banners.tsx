@@ -1,6 +1,8 @@
 import * as React from "react";
-import { KeyRound, PlugZap, ScreenShareOff } from "lucide-react";
+import { FileWarning, KeyRound, PlugZap, ScreenShareOff } from "lucide-react";
 import { api } from "@/api";
+import type { FixAction } from "@/app/failure";
+import { shellApi } from "@/app/shell-api";
 import { useAppState } from "@/app/state";
 import { providerLabel } from "@/app/status";
 import { Banner } from "@/components/banner";
@@ -13,7 +15,9 @@ import { teApi } from "@/timeline-extras-api";
 /**
  * Problems that stop the timeline from filling, shown once, under the page header of every
  * section, each with its fix as a button. Routine status lives in the rail; these are only for
- * the three blocking problems: no API key, provider unreachable, screen capture failing.
+ * the blocking problems: screen capture failing, no API key, provider unreachable, and every
+ * other reason the last batch failed (a refused key, no credits, a usage limit, a signed-out CLI,
+ * an unreadable answer...), with the cause in plain words and the raw error under Error details.
  */
 export function GlobalBanners() {
   const app = useAppState();
@@ -30,6 +34,14 @@ export function GlobalBanners() {
       setBusy(null);
       void app.reloadStatus();
     }
+  };
+
+  // Today's failed batches again, or the waiting queue when there are none.
+  const retryNow = async () => {
+    const extras = await teApi.dayExtras(today);
+    const ids = extras.failedGroups.filter((g) => g.retryable).flatMap((g) => g.batchIds);
+    if (ids.length) await teApi.retryBatches(ids);
+    else await api.analyzeNow();
   };
 
   const items: React.ReactNode[] = [];
@@ -89,6 +101,7 @@ export function GlobalBanners() {
         tone="error"
         icon={<PlugZap aria-hidden />}
         title={`Can’t reach ${providerLabel(settings)}`}
+        details={status.analysis.lastError}
         actions={
           <>
             <Button
@@ -97,10 +110,7 @@ export function GlobalBanners() {
               disabled={busy === "net"}
               onClick={() =>
                 run("net", async () => {
-                  const extras = await teApi.dayExtras(today);
-                  const ids = extras.failedGroups.filter((g) => g.retryable).flatMap((g) => g.batchIds);
-                  if (ids.length) await teApi.retryBatches(ids);
-                  else await api.analyzeNow();
+                  await retryNow();
                   toast("Trying again", { description: "This message goes away once a request gets through." });
                 })
               }
@@ -118,6 +128,40 @@ export function GlobalBanners() {
           ? "Daytrace tries again when the next batch of screenshots is ready (about every 15 minutes), then rewrites the cards that failed. "
           : "Daytrace tries again when recording resumes and the next batch is ready. "}
         Screenshots stay on this PC.
+      </Banner>,
+    );
+  } else if (problems.failure) {
+    // Every other cause: what happened, what Daytrace does by itself, and the fix (UX2).
+    const f = problems.failure;
+    const act = (fix: FixAction) => {
+      if (fix.kind === "settings") navigate("settings", { section: "provider" });
+      else if (fix.kind === "link") void run("link", () => shellApi.openLink(fix.target));
+      else
+        void run("retry", async () => {
+          await retryNow();
+          toast("Trying again", { description: "The failed cards are rewritten as the batches go through." });
+        });
+    };
+    items.push(
+      <Banner
+        key="failure"
+        tone={f.selfHealing ? "warn" : "error"}
+        icon={f.kind === "apiKey" ? <KeyRound aria-hidden /> : <FileWarning aria-hidden />}
+        title="Timeline cards can’t be written"
+        details={status.analysis.lastError}
+        actions={f.fixes.map((fix, i) => (
+          <Button
+            key={fix.label}
+            size="sm"
+            variant={i === 0 ? (f.selfHealing ? "outline" : "default") : "ghost"}
+            disabled={(fix.kind === "retry" && busy === "retry") || (fix.kind === "link" && busy === "link")}
+            onClick={() => act(fix)}
+          >
+            {fix.label}
+          </Button>
+        ))}
+      >
+        <span className="font-medium">{f.label}.</span> {f.body}
       </Banner>,
     );
   }
