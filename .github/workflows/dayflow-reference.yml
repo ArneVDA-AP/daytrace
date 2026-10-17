@@ -98,6 +98,10 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p harness-out
+          # Xcode 26.3's type checker gives up on a long string concatenation in Dayflow's
+          # Core/Flow/FlowSessionTimeline.swift ("unable to type-check this expression in
+          # reasonable time"). Raise its solver limits instead of editing Dayflow's source.
+          SOLVER_FLAGS="-Xfrontend -solver-scope-threshold=16777216 -Xfrontend -solver-memory-threshold=2147483648"
           xcodebuild test \
             -project dayflow/Dayflow/Dayflow.xcodeproj \
             -scheme Dayflow \
@@ -106,6 +110,7 @@ jobs:
             -only-testing:DayflowTests/ReplayHarnessTests \
             -skipPackagePluginValidation -skipMacroValidation \
             CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= \
+            "OTHER_SWIFT_FLAGS=\$(inherited) $SOLVER_FLAGS" \
             2>&1 | tee xcodebuild.log \
             | (grep -E --line-buffered 'error:|ReplayHarness|REPLAY HARNESS|tokens in=|^  [0-9]|Test (Suite|Case)|\*\* (BUILD|TEST)' || true)
 
