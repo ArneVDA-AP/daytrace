@@ -8,7 +8,7 @@
 //!
 //! The six write tools appear in tools/list only while "Allow edits" is on (Dayflow), and go to
 //! the running app over the bridge (bridge.rs), which checks the setting again. With `--chat`
-//! (the server Daytrace's own chat starts through the Claude Code CLI) only the read tools exist,
+//! (the server Daytrace's own chat starts through the Claude Code or Codex CLI) only the read tools exist,
 //! marked to load up front.
 
 use super::queries::{self as q, QueryError, Source};
@@ -56,7 +56,7 @@ pub const WRITE_TOOLS: &[(&str, &str)] = &[
     ("set_day_goal", "goal_set"),
 ];
 
-/// Names of the read tools, for allow lists (chat through the Claude Code CLI).
+/// Names of the read tools, for allow lists (chat through the Claude Code and Codex CLIs).
 pub const READ_TOOLS: &[&str] =
     &["get_time_breakdown", "get_timeline", "get_activity_detail", "search_activities", "get_daily", "get_weekly", "list_categories", "get_status", "get_observations", "list_days"];
 
