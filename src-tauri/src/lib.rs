@@ -124,6 +124,8 @@ pub fn run() {
             features::timeline_extras::te_batch_progress,
             features::timeline_extras::te_retry_batches,
             features::timeline_extras::te_retry_status,
+            // timeline commands
+            features::timeline_extras::reveal_screenshot,
             // platform_extras commands
             features::platform_extras::platform_info,
             features::platform_extras::platform_pause,

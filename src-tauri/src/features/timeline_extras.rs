@@ -197,6 +197,35 @@ pub fn te_retry_status() -> Vec<reprocess::RetryItem> {
     reprocess::retry_items()
 }
 
+// ---- timeline view: "Show in File Explorer" in the screenshot viewer ----
+
+const SHOT_GONE: &str = "This screenshot was deleted (retention period or storage limit).";
+
+/// The file of a live screenshot, only when it lies inside the screenshots folder.
+fn screenshot_file(state: &AppState, id: i64) -> CmdResult<std::path::PathBuf> {
+    let shot = state.db.screenshot(id).map_err(err)?.ok_or(SHOT_GONE)?;
+    if shot.file_path.is_empty() {
+        return Err(SHOT_GONE.into());
+    }
+    let path = std::path::PathBuf::from(&shot.file_path);
+    let (Ok(file), Ok(root)) = (path.canonicalize(), state.paths.screenshots.canonicalize()) else {
+        return Err(SHOT_GONE.into());
+    };
+    if !file.is_file() || !file.starts_with(&root) {
+        return Err("This screenshot is not in Daytrace's screenshots folder.".into());
+    }
+    Ok(path)
+}
+
+/// Opens File Explorer with the screenshot's file selected. The path is looked up here and never
+/// sent to the UI.
+#[tauri::command]
+pub fn reveal_screenshot(app: tauri::AppHandle, state: S, id: i64) -> CmdResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let path = screenshot_file(&state, id)?;
+    app.opener().reveal_item_in_dir(&path).map_err(err)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,5 +280,30 @@ mod tests {
         let f = day_extras(&st, "2026-10-17").unwrap();
         assert_eq!(f.failed_groups.len(), 1);
         assert!(f.failed_groups[0].retryable, "the batch's screenshot row is not expired");
+    }
+
+    #[test]
+    fn screenshot_file_only_inside_the_screenshots_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = AppState::new(Paths::new(dir.path().to_path_buf()).unwrap()).unwrap();
+        let inside = st.paths.screenshots.join("2026-10-16").join("a.jpg");
+        std::fs::create_dir_all(inside.parent().unwrap()).unwrap();
+        std::fs::write(&inside, b"jpg").unwrap();
+        let outside = dir.path().join("elsewhere.jpg");
+        std::fs::write(&outside, b"jpg").unwrap();
+        let sneaky = st.paths.screenshots.join("..").join("elsewhere.jpg");
+
+        let ok = st.db.insert_screenshot(1, &inside.to_string_lossy(), 3, 0, None, None, None, None).unwrap();
+        let out = st.db.insert_screenshot(2, &outside.to_string_lossy(), 3, 0, None, None, None, None).unwrap();
+        let up = st.db.insert_screenshot(3, &sneaky.to_string_lossy(), 3, 0, None, None, None, None).unwrap();
+        let missing = st.db.insert_screenshot(4, &st.paths.screenshots.join("gone.jpg").to_string_lossy(), 3, 0, None, None, None, None).unwrap();
+        let empty = st.db.insert_screenshot(5, "", 0, 0, None, None, None, Some("idle")).unwrap();
+
+        assert_eq!(screenshot_file(&st, ok).unwrap(), inside);
+        assert!(screenshot_file(&st, out).unwrap_err().contains("not in Daytrace"));
+        assert!(screenshot_file(&st, up).unwrap_err().contains("not in Daytrace"));
+        assert_eq!(screenshot_file(&st, missing).unwrap_err(), SHOT_GONE);
+        assert_eq!(screenshot_file(&st, empty).unwrap_err(), SHOT_GONE);
+        assert_eq!(screenshot_file(&st, 9999).unwrap_err(), SHOT_GONE);
     }
 }

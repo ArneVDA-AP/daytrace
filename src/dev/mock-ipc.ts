@@ -31,6 +31,7 @@ import { allCards, DEFAULT_CATEGORIES, fmtClock, makeDataset } from "@/dev/fixtu
 import { computeDay, computeWeek, makeRecapMock } from "@/dev/insights";
 import { screenSvg } from "@/dev/screens";
 import { goalsChatHandlers } from "@/dev/goalschat";
+import { timelineMock } from "@/dev/timeline";
 
 export const DEV_MOCK_MARKER = "DAYTRACE_DEV_MOCK_IPC";
 
@@ -498,6 +499,7 @@ export function installMockIpc() {
 
   // Goals and Chat: richer fixtures and variants (?goals=…, ?chat=…) from src/dev/goalschat.ts.
   Object.assign(handlers, goalsChatHandlers({ ds, settings, provider, q, now, cardsOf, hasApiKey: () => hasApiKey }));
+  Object.assign(handlers, timelineMock(ds, now)); // Timeline fixtures and handlers (src/dev/timeline.ts)
 
   mockWindows("main");
   mockIPC(
