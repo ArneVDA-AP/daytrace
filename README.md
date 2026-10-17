@@ -22,10 +22,23 @@ Daytrace is an unofficial port of [Dayflow](https://github.com/JerryZLiu/Dayflow
 | Ollama | `http://localhost:11434` | Nothing leaves your PC. Use the Lightweight mode. |
 | LM Studio | `http://localhost:1234` | Same as Ollama. |
 | Other | Any OpenAI-compatible endpoint | OpenAI, OpenRouter, or Gemini's `/v1beta/openai` endpoint. |
-| Claude Code CLI | `claude -p`, default `haiku` | Uses your Claude subscription. Screenshots go to the CLI as files in a temporary folder; it writes the cards in one step. Needs Claude Code signed in (and Git for Windows). |
+| Claude Code CLI | `claude -p`, default `haiku` | Uses your Claude subscription. Screenshots go to the CLI as files in a temporary folder; it writes the cards in one step. Chat runs through it too, with Daytrace's read tools only. Needs Claude Code signed in (and Git for Windows). |
 | Codex CLI | `codex exec`, default `gpt-6-luna` | Uses your ChatGPT account, same one-step mode. |
 
-A fallback provider (Settings → Model) takes over a step when the main provider fails, for example when the CLI is signed out or out of usage. The title and summary instructions of the Detailed and Lightweight prompts can be edited in Settings.
+A fallback provider (Settings → Model provider) takes over a step when the main provider fails, for example when the CLI is signed out or out of usage. The title and summary instructions of the Detailed and Lightweight prompts can be edited in Settings.
+
+## AI tools
+
+`daytrace-mcp.exe`, installed next to Daytrace, gives Claude Code, Claude Desktop and other MCP clients your timeline: activities, time per category, daily recaps and the screen notes behind each activity. The installer puts its folder on your PATH. Reading works while Daytrace is closed and never returns screenshots or the names of private apps.
+
+- **Claude Code plugin** with skills for a standup, a weekly review and questions about your day. In Claude Code:
+  ```
+  /plugin marketplace add ArneVDA-AP/daytrace
+  /plugin install daytrace@daytrace
+  ```
+- **One click** in Settings → AI tools adds `daytrace-mcp` to Claude Code (`claude mcp add --scope user`) or Claude Desktop (its config file, after a backup copy). The same page has the setup to copy for other clients.
+- **Terminal:** `daytrace-mcp cli today`, `daytrace-mcp help` for every command.
+- **Allow edits** (Settings → AI tools, off by default) lets these tools rename, recategorize and delete activities, change categories and set day goals. Changes go through the running app over a named pipe that only your Windows account can open, and each one is logged in `agent-writes.log` in the data folder.
 
 ## Privacy
 
@@ -67,6 +80,8 @@ DAYTRACE_API_KEY=... DAYTRACE_REPLAY_DIR=path/to/frames DAYTRACE_PIPELINE=cloud 
 | `src-tauri/src/llm/` | Model client (Anthropic and OpenAI-compatible), both pipelines, prompts |
 | `src-tauri/src/db.rs` | SQLite schema and queries |
 | `src-tauri/src/platform.rs` | Win32: idle time, lock state, foreground app, Credential Manager |
+| `src-tauri/src/features/agent_bridge/` | `daytrace-mcp`: MCP server, command line, write bridge, PATH and client setup |
+| `claude-plugin/`, `.claude-plugin/` | Claude Code plugin and its marketplace file |
 | `src/` | React UI |
 
 ## License
