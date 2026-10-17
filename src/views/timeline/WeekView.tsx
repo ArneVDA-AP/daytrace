@@ -318,7 +318,17 @@ function DayHeader({ day, today, recorded, cards }: { day: string; today: string
         </span>
         {isToday && <span className="truncate text-caption text-muted-foreground max-wide:hidden">Today</span>}
       </span>
-      <span className="truncate text-caption text-muted-foreground tnum">{sub || "\u00a0"}</span>
+      {/* "Not recorded" does not fit an 86 px column below 960 px: the recorded time, 0 min, there. */}
+      <span className="truncate text-caption text-muted-foreground tnum">
+        {sub === "Not recorded" ? (
+          <>
+            <span className="max-split:hidden">Not recorded</span>
+            <span className="split:hidden">0 min</span>
+          </>
+        ) : (
+          sub || "\u00a0"
+        )}
+      </span>
     </>
   );
   const cls = "flex min-w-0 flex-col justify-center border-l px-2 text-meta leading-4";

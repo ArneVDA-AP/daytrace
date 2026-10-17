@@ -62,6 +62,8 @@ export function DaySoFar({
   const totals = React.useMemo(() => laneTotals(cards, lanes, from, to), [cards, lanes, from, to]);
   const shares = lanes.map((l) => ({ lane: l, secs: totals.get(l.key) ?? 0 })).filter((s) => s.secs > 0);
   const captured = shares.reduce((a, s) => a + s.secs, 0);
+  // Shares are of active time (the glossary's denominator); Idle keeps its duration, no share.
+  const activeShare = shares.reduce((a, s) => a + (s.lane.isIdle ? 0 : s.secs), 0);
   const review = extras?.reviewSummary;
   const reviewed = review ? review.focusedSecs + review.neutralSecs + review.distractedSecs : 0;
   const longest = stats?.longestFocus ?? null;
@@ -145,7 +147,7 @@ export function DaySoFar({
                 <tr>
                   <th scope="col">Category</th>
                   <th scope="col">Time</th>
-                  <th scope="col">Share</th>
+                  <th scope="col">Share of active time</th>
                 </tr>
               </thead>
               <tbody>
@@ -163,10 +165,21 @@ export function DaySoFar({
                       </span>
                     </th>
                     <td className="py-1.5 text-right tnum">{formatDuration(s.secs)}</td>
-                    <td className="w-16 py-1.5 text-right text-muted-foreground tnum">{Math.round((s.secs / captured) * 100)}%</td>
+                    <td className="w-16 py-1.5 text-right text-muted-foreground tnum">
+                      {s.lane.isIdle || activeShare === 0 ? "" : `${Math.round((s.secs / activeShare) * 100)}%`}
+                    </td>
                   </tr>
                 ))}
               </tbody>
+              <tfoot>
+                <tr>
+                  <th scope="row" className="pt-2 text-left font-normal text-muted-foreground">
+                    Active time
+                  </th>
+                  <td className="pt-2 text-right tnum">{formatDuration(activeShare)}</td>
+                  <td className="w-16 pt-2 text-right text-muted-foreground tnum">{activeShare > 0 ? "100%" : ""}</td>
+                </tr>
+              </tfoot>
             </table>
           </>
         )}

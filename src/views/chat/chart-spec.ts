@@ -265,9 +265,9 @@ function gantt(o: Record<string, unknown>): GanttChart {
 /** Validates one block. Never throws; the reason is a sentence for the person reading the chat. */
 export function parseChart(type: string | null, body: string): ChartResult {
   try {
-    if (type === null) fail("The block has no chart type. It must start with ```chart type=bar (or line, stacked_bar, donut, heatmap, gantt).");
+    if (type === null) fail("The block has no chart type, so Daytrace can’t tell which chart to draw. It draws bar, line, stacked bar, donut, heat map and Gantt charts.");
     const t = type === "pie" ? "donut" : type;
-    if (!(CHART_TYPES as readonly string[]).includes(t)) fail(`"${type.slice(0, 32)}" is not a chart type Daytrace draws. The types are bar, line, stacked_bar, donut, heatmap and gantt.`);
+    if (!(CHART_TYPES as readonly string[]).includes(t)) fail(`“${type.slice(0, 32)}” is not a chart type Daytrace draws. It draws bar, line, stacked bar, donut, heat map and Gantt charts.`);
     const text = body.trim();
     if (!text) fail("The block has no chart data.");
     if (text.length > CHART_LIMITS.body) fail(`The chart data is longer than ${count(CHART_LIMITS.body)} characters.`);

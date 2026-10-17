@@ -21,14 +21,14 @@ function names(list: string[]): string {
 
 /** What the distraction numbers include, in the Daily view's words. */
 export function distractionCounts(categories: string[]): string {
-  if (!categories.length) return "Counts the distractions noted inside cards. No category counts as distraction.";
-  return `Counts ${names(categories)} cards and the distractions noted inside other cards.`;
+  if (!categories.length) return "No category counts as distraction.";
+  return `Counts ${names(categories)} cards.`;
 }
 
 /** What the focus numbers include. */
 export function focusCounts(categories: string[]): string {
   if (!categories.length) return "No category counts as focus.";
-  return `Counts ${names(categories)}, without the distractions noted inside them.`;
+  return `Counts ${names(categories)}, interruptions inside those cards included.`;
 }
 
 function OpenCategories() {

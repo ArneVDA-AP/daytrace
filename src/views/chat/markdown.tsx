@@ -21,6 +21,12 @@ export interface MarkdownOptions {
   onExternalLink: (url: string) => void;
   /** Draws a chart block (index counts the answer's chart blocks from 0). */
   chart?: (block: ChartBlock, key: string) => ReactNode;
+  /**
+   * Added to the number of `#` to get the heading level, which stays between h3 and h6 (the page
+   * or dialog has its h1 and h2). Default 2: a chat answer's `#` is an h3. "What's new" passes 0,
+   * so the changelog's `###` sections are h3 under the dialog's h2 title.
+   */
+  headingOffset?: number;
 }
 
 export interface RenderedMarkdown {
@@ -150,7 +156,7 @@ function blocks(lines: string[], ctx: Ctx, keyPrefix: string, depth = 0): ReactN
     }
     const h = HEADING_RE.exec(line);
     if (h) {
-      const level = Math.min(6, h[1].length + 2);
+      const level = Math.max(3, Math.min(6, h[1].length + (ctx.headingOffset ?? 2)));
       const Tag = `h${level}` as "h3" | "h4" | "h5" | "h6";
       out.push(
         <Tag key={key} className={`mt-1 ${HEADING_CLASS[level]}`}>

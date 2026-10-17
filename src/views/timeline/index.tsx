@@ -25,8 +25,8 @@ import { toast } from "@/components/ui/toast";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isKey } from "@/lib/keys";
-import { dayParam, navigate, numParam, setParams, useRoute } from "@/lib/router";
-import { formatDayTitle, formatWeekRange, shiftDay, weekStart } from "@/lib/time";
+import { navigate, numParam, setParams, useRoute } from "@/lib/router";
+import { formatDayTitle, formatDuration, formatWeekRange, shiftDay, weekStart } from "@/lib/time";
 import { useDelayedLoading } from "@/lib/use-delayed";
 import { errorText, isTypingTarget } from "@/lib/utils";
 import { timelineApi, type Card, type FailedGroup } from "./api";
@@ -72,14 +72,8 @@ export default function TimelineSection() {
   const recording = useAppStatusSelect(selectRecording);
   const userPaused = useAppStatusSelect(selectUserPaused);
   const pending = useAppStatusSelect(selectPending);
-  const { today, setDay } = useDay();
+  const { day, today, setDay } = useDay();
   const route = useRoute();
-  // The day comes from the same route snapshot as the card (DayProvider's rule: the day param,
-  // never after today). useDay().day can lag one render behind a navigation that changes both
-  // (hashchange listeners run in mount order with a render in between), and the gone-card effect
-  // below would then drop a card of the new day.
-  const routeDay = dayParam(route.params);
-  const day = routeDay && routeDay < today ? routeDay : today;
   const isToday = day === today;
   const selected = numParam(route.params, "card");
   const exportOpen = route.params.get("export") === "1";
@@ -511,16 +505,15 @@ export default function TimelineSection() {
 
 // ---------------------------------------------------------------- parts
 
+/** The week's recorded time, today included (insights_week capturedSecs). Dayflow shows whole
+ *  hours rounded down, which said "0 hours" next to 30 recorded minutes; this shows the duration. */
 function WeekFooter({ day, today, secs }: { day: string; today: string; secs: number | null }) {
   if (secs === null) return <div className="h-10" />;
-  const hours = Math.floor(secs / 3600);
   const thisWeek = weekStart(day) === weekStart(today);
   return (
     <p className="border-t px-4 py-3 text-caption text-muted-foreground">
-      <span className="font-semibold text-foreground tnum">
-        {hours} {hours === 1 ? "hour" : "hours"}
-      </span>{" "}
-      tracked {thisWeek ? "this week" : `in the week of ${formatWeekRange(weekStart(day))}`}
+      <span className="font-semibold text-foreground tnum">{formatDuration(secs)}</span> tracked{" "}
+      {thisWeek ? "this week" : `in the week of ${formatWeekRange(weekStart(day))}`}
     </p>
   );
 }

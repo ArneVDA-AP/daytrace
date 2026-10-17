@@ -165,7 +165,9 @@ mod tests {
         };
         let md = recap_markdown("2026-10-16", &st, Some(&r), &cards, None);
         assert!(md.starts_with("# Friday 16 October 2026\n\n## Recap\n\n### Highlights\n\n- Finished the pricing page FAQ.\n\n### Tasks for Saturday 17 October 2026\n\n- Send it to Lisa.\n\n### Blockers\n\n- None\n\n## Day in numbers"), "{md}");
-        assert!(md.contains("- Recorded: 2 h 15 min\n- Focused: 2 h 10 min (96% of active time)\n- Distracted: 5 min (4% of active time)\n"), "{md}");
+        // The 5 minutes noted inside the Work card stay focus time, so the longest block (2 h 15 min)
+        // equals the focus total instead of exceeding it.
+        assert!(md.contains("- Recorded: 2 h 15 min\n- Focused: 2 h 15 min (100% of active time)\n- Distracted: 0 min (0% of active time)\n"), "{md}");
         assert!(md.contains("- Longest focus block: 9:00 AM – 11:15 AM (2 h 15 min)\n"));
         assert!(md.contains("- 9:40 AM – 9:45 AM: Checked X (5 min, during “Pricing page”)\n"));
         assert!(md.contains("### 9:00 AM – 11:15 AM · Work\n\n**Pricing page**\n\nPricing page summary\n\n"));

@@ -36,9 +36,25 @@ function snapshot(): Route {
   return cached.route;
 }
 
+/*
+ * One hashchange listener for every useRoute(). With one window listener per component, a hash
+ * change from a link or `location.hash = …` (an event the browser dispatches) ran React's
+ * microtasks between the listeners: the components subscribed first (sections, mounted before
+ * DayProvider) rendered the new route while DayProvider still gave the old day, one render
+ * behind. Calling every subscriber from a single listener puts them in one render.
+ */
+const subscribers = new Set<() => void>();
+function notify() {
+  for (const cb of [...subscribers]) cb();
+}
+
 function subscribe(cb: () => void) {
-  addEventListener("hashchange", cb);
-  return () => removeEventListener("hashchange", cb);
+  if (subscribers.size === 0) addEventListener("hashchange", notify);
+  subscribers.add(cb);
+  return () => {
+    subscribers.delete(cb);
+    if (subscribers.size === 0) removeEventListener("hashchange", notify);
+  };
 }
 
 /** The current route; re-renders on every hash change. */

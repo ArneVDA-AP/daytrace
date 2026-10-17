@@ -319,22 +319,26 @@ pub fn category_totals(normalized: &[Seg]) -> Vec<CategoryTotal> {
         .collect()
 }
 
-/// Focus blocks: focus-category time merged across gaps shorter than 5 minutes.
+/// Focus blocks: focus-category time merged across gaps shorter than 5 minutes (Dayflow
+/// DaySummaryStats.computeFocusBlocks). A block's `secs` is the focus time inside it, without the
+/// short gaps it spans, so the longest block never exceeds the day's focus total (Dayflow shows
+/// end minus start, which can).
 pub fn focus_blocks(normalized: &[Seg]) -> Vec<Block> {
-    let spans: Vec<(i64, i64)> = normalized.iter().filter(|s| s.cat.kind == Kind::Focus).map(|s| (s.start, s.end)).collect();
-    let mut merged: Vec<(i64, i64)> = Vec::new();
-    let mut sorted = spans;
-    sorted.sort();
-    for (s, e) in sorted {
+    let mut spans: Vec<(i64, i64)> = normalized.iter().filter(|s| s.cat.kind == Kind::Focus).map(|s| (s.start, s.end)).collect();
+    spans.sort();
+    // (start, end, focus seconds inside)
+    let mut merged: Vec<(i64, i64, i64)> = Vec::new();
+    for (s, e) in spans {
         if let Some(last) = merged.last_mut() {
             if s - last.1 < FOCUS_GAP_SECS {
+                last.2 += (e - s.max(last.1)).max(0);
                 last.1 = last.1.max(e);
                 continue;
             }
         }
-        merged.push((s, e));
+        merged.push((s, e, e - s));
     }
-    merged.into_iter().map(|(s, e)| Block { start_ts: s, end_ts: e, secs: e - s }).collect()
+    merged.into_iter().map(|(s, e, secs)| Block { start_ts: s, end_ts: e, secs }).collect()
 }
 
 pub fn longest(blocks: &[Block]) -> Option<Block> {
@@ -380,19 +384,6 @@ pub fn distractions(segs: &[Seg]) -> Vec<DistractionItem> {
     out.sort_by_key(|d| (d.start_ts, d.end_ts));
     out.dedup_by(|a, b| a.start_ts == b.start_ts && a.end_ts == b.end_ts && a.title == b.title);
     out
-}
-
-/// Seconds of distractions noted inside each focus segment (merged per segment).
-fn embedded_secs(s: &Seg) -> i64 {
-    let spans: Vec<(i64, i64)> = s
-        .card
-        .distractions
-        .iter()
-        .filter_map(|d| distraction_span(s.card, d))
-        .map(|(a, b)| (a.max(s.start), b.min(s.end)))
-        .filter(|(a, b)| b > a)
-        .collect();
-    merge_intervals(spans, 0).iter().map(|(a, b)| b - a).sum()
 }
 
 /// The Dayflow daily grid: one row per category, 15-minute slots, each cell the share of the slot
@@ -514,9 +505,12 @@ pub fn grid(segs: &[Seg], cats: &[Category]) -> Grid {
     Grid { start_minute: start, end_minute: end, slot_minutes: SLOT_MINUTES, rows, dominant, markers }
 }
 
-/// Focus and distraction of de-overlapped segments: time in focus categories (minus the
-/// distractions noted inside those cards), and time in distraction categories plus the noted
-/// distractions. Daily, Weekly, Goals and Your day so far all use these numbers.
+/// Focus and distraction of de-overlapped segments, as Dayflow's DaySummaryStats counts them
+/// (computeTotalFocusTime, computeTotalDistractedTime, which LongestFocusCard and
+/// DayFocusSummarySection show): the whole time of the cards in focus categories, and of the cards
+/// in distraction categories. A distraction noted inside a card does not move time out of it; it
+/// counts as an interruption, is listed with the day's distractions and marked on the grid.
+/// Daily, Weekly, Goals, Your day so far and daytrace-mcp's focus minutes all use these numbers.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FocusSplit {
     pub captured: i64,
@@ -541,19 +535,15 @@ pub fn focus_split(normalized: &[Seg]) -> FocusSplit {
         f.captured += d;
         match s.cat.kind {
             Kind::Focus => {
-                let inside = embedded_secs(s).min(d);
-                f.focus += d - inside;
-                f.distracted += inside;
+                f.focus += d;
                 match f.focus_by_category.iter_mut().find(|c| c.0 == s.cat.key) {
-                    Some(c) => c.3 += d - inside,
-                    None => f.focus_by_category.push((s.cat.key.clone(), s.cat.name.clone(), s.cat.color.clone(), d - inside)),
+                    Some(c) => c.3 += d,
+                    None => f.focus_by_category.push((s.cat.key.clone(), s.cat.name.clone(), s.cat.color.clone(), d)),
                 }
             }
             Kind::Distraction => f.distracted += d,
-            // Noted distractions inside a card that counts as neither are distracted time too.
-            Kind::Neither => f.distracted += embedded_secs(s).min(d),
+            Kind::Neither | Kind::System => {}
             Kind::Idle => f.idle += d,
-            Kind::System => {}
         }
     }
     f
@@ -707,9 +697,10 @@ pub(crate) mod tests {
         assert_eq!(names, vec![("Work", 128), ("Personal", 60), ("Idle", 40), ("Distraction", 20)]);
         assert_eq!(st.captured_secs / 60, 248);
         assert_eq!(st.idle_secs / 60, 40);
-        // 5 minutes noted inside the Work card move from focus to distracted
-        assert_eq!(st.distracted_secs / 60, 25);
-        assert_eq!(st.focus_secs / 60, 128 + 60 - 5);
+        // The 5 minutes noted inside the Work card stay focus time (Dayflow DaySummaryStats); they
+        // make the card an interruption.
+        assert_eq!(st.distracted_secs / 60, 20);
+        assert_eq!(st.focus_secs / 60, 128 + 60);
         assert_eq!(st.interruptions, 1);
         // Work → Distraction → Idle → Personal → Work
         assert_eq!(st.context_switches, 4);
@@ -718,7 +709,7 @@ pub(crate) mod tests {
         assert_eq!(st.card_count, 6);
         // Percentages use active time: 248 recorded minus 40 idle.
         assert_eq!(st.active_secs / 60, 208);
-        assert!((st.distracted_ratio - 25.0 / 208.0).abs() < 1e-9);
+        assert!((st.distracted_ratio - 20.0 / 208.0).abs() < 1e-9);
     }
 
     #[test]
@@ -731,9 +722,9 @@ pub(crate) mod tests {
         let mut cards = sample();
         cards[2].category = "Scrolling".into();
         let st = compute_day("2026-10-14", &cards, &cats, s, e);
-        // Focus: Work 128 minus the 5 noted minutes; Personal (60) is neither.
-        assert_eq!(st.focus_secs / 60, 123);
-        assert_eq!(st.distracted_secs / 60, 25);
+        // Focus: Work 128 (the 5 noted minutes included); Personal (60) is neither.
+        assert_eq!(st.focus_secs / 60, 128);
+        assert_eq!(st.distracted_secs / 60, 20);
         // Active time still counts Personal: only idle is left out.
         assert_eq!(st.active_secs / 60, 208);
         let personal = st.totals.iter().find(|t| t.name == "Personal").unwrap();
@@ -758,7 +749,10 @@ pub(crate) mod tests {
         // 9:00-11:00 (2-minute gap merged), 13:00-14:10 (Personal + Work)
         let blocks: Vec<(i64, i64)> = st.focus_blocks.iter().map(|b| (b.start_ts, b.end_ts)).collect();
         assert_eq!(blocks, vec![(at(D, 9, 0), at(D, 11, 0)), (at(D, 13, 0), at(D, 14, 10))]);
-        assert_eq!(st.longest_focus.unwrap().secs, 120 * 60);
+        // A block's duration is its focus time: the 2-minute gap is not focus, so the longest block
+        // stays within the day's focus total.
+        assert_eq!(st.longest_focus.unwrap().secs, 118 * 60);
+        assert!(st.focus_blocks.iter().all(|b| b.secs <= st.focus_secs));
     }
 
     #[test]

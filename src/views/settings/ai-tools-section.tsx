@@ -58,18 +58,32 @@ export function AiToolsSection() {
               It was not found next to Daytrace ({setup.exePath}). The Daytrace installer puts it there; install Daytrace again to get it.
             </Banner>
           )}
-          <Group title="Claude Code">
-            <Row label="Run this in a terminal" stack>
+          {/* The manual setup under one heading, so it does not read as a second list of the
+              one-click rows above (U6). One-click rows for more tools go above this group. */}
+          <Group
+            title="Set it up yourself"
+            description="The same setup as the buttons above, to copy into a tool yourself, and what any other MCP client needs."
+          >
+            <Row label="Claude Code: run this in a terminal" stack>
               <CopyBlock label="Command for Claude Code" text={setup.claudeCodeCommand} />
             </Row>
-          </Group>
-          <Group title="Claude Desktop">
             <Row
-              label={<>Add this to {<span className="font-mono text-meta font-normal [overflow-wrap:anywhere]">{setup.desktopConfigPath}</span>}</>}
+              label={
+                <>
+                  Claude Desktop: add this to <span className="font-mono text-meta font-normal [overflow-wrap:anywhere]">{setup.desktopConfigPath}</span>
+                </>
+              }
               description="If the file already has “mcpServers”, add only the “daytrace” entry to it. Then restart Claude Desktop."
               stack
             >
               <CopyBlock label="Configuration for Claude Desktop" text={setup.desktopConfig} multiline />
+            </Row>
+            <Row
+              label="Other MCP clients"
+              description="Add a local (stdio) server named daytrace that runs this program, with no arguments."
+              stack
+            >
+              <CopyBlock label="Program for other MCP clients" text={setup.exePath} />
             </Row>
           </Group>
           <Group title="In a terminal">
