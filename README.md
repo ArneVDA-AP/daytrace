@@ -15,7 +15,7 @@ Daytrace is an unofficial port of [Dayflow](https://github.com/JerryZLiu/Dayflow
   When a batch fails, the rail and a banner say why (a refused key, no credits, a usage limit, a signed-out CLI, a busy server) with the fix; Daytrace tries again with the next batch.
 - **Timeline.** A day view (days start at 4 AM) with a strip of the whole day, cards with summaries and the screenshots they were written from, and a Week view of seven days. Cards can be renamed, recategorized, deleted, rated and reprocessed; a timelapse plays a card's screenshots, and a review mode walks through the cards you have not rated yet.
 - **Daily, Weekly, Goals.** Daily has a standup recap (done, next, blockers), time per category and distractions; the recap can be written each morning and saved as Markdown to a folder. Weekly has charts of the week and a focus heat map by hour, each savable as PNG. Goals sets a focus target and a distraction limit per day, with a checklist. Each category counts as focus, distraction or neither.
-- **Chat.** Questions about your days, answered from the timeline with links to the cards, through your model provider: the Claude API, a local model, an OpenAI-compatible endpoint or the Claude Code CLI. Chat does not work with the Codex CLI yet.
+- **Chat.** Questions about your days, answered from the timeline with links to the cards, through your model provider: the Claude API, a local model, an OpenAI-compatible endpoint, the Claude Code CLI or the Codex CLI.
 - **Agents.** Starts [AgentPlayback](https://github.com/JerryZLiu/AgentPlayback) (Dayflow's Agents tab, run with `npx`, a pinned version) and shows its dashboard of your Claude Code and Codex sessions in the window. Needs Node.js 20 or newer.
 - **AI tools.** `daytrace-mcp` gives Claude Code and other MCP clients your timeline, also as a command line, and a Claude Code plugin adds skills (see [AI tools](#ai-tools)).
 - **Pause from outside.** Pause and resume from the tray, a script, Task Scheduler or a `daytrace://pause` link (see [Pause from a script](#pause-from-a-script)).
@@ -42,7 +42,7 @@ After that Daytrace looks for new versions by itself (see [Updates](#updates)). 
 | LM Studio | `http://localhost:1234` | Same as Ollama. |
 | Other | Any OpenAI-compatible endpoint | OpenAI, OpenRouter, or Gemini's `/v1beta/openai` endpoint. |
 | Claude Code CLI | `claude -p`, default `haiku` | Uses your Claude subscription. Screenshots go to the CLI as files in a temporary folder; it writes the cards in one step. Chat runs through it too, with Daytrace's read tools only. Needs Claude Code signed in (and Git for Windows). |
-| Codex CLI | `codex exec`, default `gpt-6-luna` | Uses your ChatGPT subscription. Like the Claude Code CLI, it gets a batch's screenshots and writes the cards in one request. Chat does not work through it yet. |
+| Codex CLI | `codex exec`, default `gpt-6-luna` | Uses your ChatGPT subscription. Like the Claude Code CLI, it gets a batch's screenshots and writes the cards in one request. Chat runs through it too, with Daytrace's read tools only (Codex 0.122 or newer). |
 
 A fallback provider (Settings → Model provider) takes over a step when the main provider fails, for example when the CLI is signed out or out of usage. The title and summary instructions of the Detailed and Lightweight prompts can be edited in Settings.
 
@@ -55,7 +55,7 @@ A fallback provider (Settings → Model provider) takes over a step when the mai
   /plugin marketplace add ArneVDA-AP/daytrace
   /plugin install daytrace@daytrace
   ```
-- **One click** in Settings → AI tools adds `daytrace-mcp` to Claude Code (`claude mcp add --scope user`) or Claude Desktop (its config file, after a backup copy). Under "Set it up yourself" the same page has the command and the configuration to copy, and what any other MCP client needs: a local (stdio) server that runs `daytrace-mcp.exe` without arguments.
+- **One click** in Settings → AI tools adds `daytrace-mcp` to Claude Code (`claude mcp add --scope user`), Claude Desktop, Codex (`~/.codex/config.toml`), Cursor (`~/.cursor/mcp.json`) or VS Code (the default profile's `mcp.json`), each time after a backup copy of the file. Under "Set it up yourself" the same page has the command and the configuration to copy, and what any other MCP client needs: a local (stdio) server that runs `daytrace-mcp.exe` without arguments.
 - **Terminal:** `daytrace-mcp cli today`, `daytrace-mcp help` for every command.
 - **Allow edits** (Settings → AI tools, off by default) lets these tools rename, recategorize and delete activities, change categories and set day goals. Changes go through the running app over a named pipe that only your Windows account can open, and each one is logged in `agent-writes.log` in the data folder. Category names can be up to 60 characters and descriptions up to 500; `agent-writes.log` keeps entries for the retention period and at most 1 MB.
 

@@ -32,7 +32,8 @@ Need a token, a component variant or a shell change? Write it in your notes file
   `?chat=empty`, `?chat=charts` (chats with inline charts: `#/chat?c=91`, and blocks that can't be
   drawn: `#/chat?c=92`), `?fail=apikey|credits|limit|busy|flaky|login|cli|slow|model|unknown` (the last
   batch failed for that cause), `?badge=recap` (a new recap: dot on Daily), `?gen=off` (cards
-  without `generatedBy`), `?icons=off|sites|letters|slow` (app and site icons, `src/dev/w5-r3.ts`).
+  without `generatedBy`), `?icons=off|sites|letters|slow` (app and site icons, `src/dev/w5-r3.ts`), `?clients=mixed|none|fail|error`
+  (one-click rows for Codex, Cursor and VS Code, `src/dev/w6-x3.ts`).
   Example: `/?status=offline,away#/daily?day=2026-10-16`.
 - Fixture days are relative to today: today a workday (with a failed card, an idle card, a
   40-minute gap, interruptions), yesterday a night-owl day (9 PM to 2:40 AM), two days ago empty,

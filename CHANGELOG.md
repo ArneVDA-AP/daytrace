@@ -17,7 +17,7 @@ in "What's new" after an update (from GitHub, or from this file when GitHub can'
 - Weekly: charts of the week, a focus heat map by hour, and "Save as PNG…" on the charts and heat maps.
 - Goals: a focus target and a distraction limit per day, and a checklist that Daytrace checks against what you did. Once a day, the first time you use the window on a new day, Daytrace shows how yesterday went and asks for today's targets; it starts after 3 days with recording, and Settings → Notifications turns it off.
 - Each category can count as focus, as distraction or as neither; Daily, Weekly and Goals follow that choice. Their percentages of the day are shares of active time (recorded time without idle time); Idle shows its time without a share.
-- Chat: ask about your days. Answers cite the cards they come from and can show a chart; a memory of your preferences, which you can edit, carries over between conversations. Chat also runs through the Claude Code CLI.
+- Chat: ask about your days. Answers cite the cards they come from and can show a chart; a memory of your preferences, which you can edit, carries over between conversations. Chat also runs through the Claude Code CLI and the Codex CLI (Codex 0.122 or newer), with Daytrace's read tools only.
 - Agents: start AgentPlayback to see your Claude Code and Codex sessions of the day, with their cost at API prices. It needs Node.js 20 or newer, runs on this PC and stays loaded while you switch sections; its links open in your browser.
 - First-run setup, "What's new" after an update, a dot on Daily (and on the taskbar button) when a new recap is ready.
 
@@ -29,7 +29,7 @@ in "What's new" after an update (from GitHub, or from this file when GitHub can'
 
 ### AI tools
 - `daytrace-mcp` gives Claude Code, Claude Desktop and other MCP clients read access to your timeline, and works as a command line (`daytrace-mcp cli today`). The installer puts it on your PATH.
-- One-click setup for Claude Code and Claude Desktop in Settings → AI tools, and a Claude Code plugin with skills for a standup, a weekly review and questions about your day.
+- One-click setup for Claude Code, Claude Desktop, Codex, Cursor and VS Code in Settings → AI tools, and a Claude Code plugin with skills for a standup, a weekly review and questions about your day.
 - "Allow edits" (off by default) lets these tools rename, recategorize and delete activities, add, change and remove categories, and set day goals, through the running app; every change is logged.
 
 ### Recording and the PC
@@ -42,6 +42,7 @@ in "What's new" after an update (from GitHub, or from this file when GitHub can'
 - Screenshots are still deleted after the retention period, but the text descriptions of the screen and the token counts are kept, so chat and recaps can use older days.
 
 ### Fixed
+- `daytrace-mcp cli` says "1 activity" and "1 match".
 - Keyboard shortcuts work on every keyboard layout (Ctrl+1 on Belgian AZERTY).
 - Menus no longer hide the rest of the window from screen readers while they are open.
 - Requests through the Claude Code and Codex CLIs stay under the 90k input-token ceiling too, with fewer screenshots when needed.
