@@ -587,6 +587,19 @@ mod tests {
         assert_eq!(friendly_error(&e, &t), ("Stopped before the answer was finished.".into(), None));
         let e = anyhow::anyhow!(engine::ROUNDS_EXCEEDED);
         assert_eq!(friendly_error(&e, &t).0, engine::ROUNDS_EXCEEDED);
+        // The Claude Code CLI's own errors.
+        let cli = Target { kind: ProviderKind::ClaudeCli, base_url: String::new(), model: "haiku".into(), key: None };
+        let failed = |m: &str| -> anyhow::Error { crate::llm::cli::CliFailed { tool: crate::llm::cli::CliTool::Claude, message: m.into(), usage: None }.into() };
+        assert!(friendly_error(&failed("Not logged in · Please run /login"), &cli).0.starts_with("Claude Code is signed out."));
+        assert!(friendly_error(&failed("You've hit your limit · resets 3pm"), &cli).0.starts_with("You've used up your Claude plan's usage"));
+        assert_eq!(friendly_error(&failed("boom"), &cli).1.as_deref(), Some("Claude Code CLI: boom"));
+    }
+
+    #[test]
+    fn only_the_codex_cli_is_refused() {
+        let cli = |kind| Target { kind, base_url: String::new(), model: "m".into(), key: None };
+        assert_eq!(cli(ProviderKind::ClaudeCli).problem(), None);
+        assert!(cli(ProviderKind::CodexCli).problem().unwrap().starts_with("Chat does not work with the Codex CLI yet."));
     }
 
     #[test]
