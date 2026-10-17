@@ -73,6 +73,23 @@ mod imp {
         }
     }
 
+    /// True when some app asks Windows to keep the display on (video players, presentations,
+    /// calls). Used so the idle guard keeps recording while someone watches without input.
+    pub fn display_required() -> bool {
+        use windows::Win32::System::Power::{CallNtPowerInformation, SystemExecutionState, ES_DISPLAY_REQUIRED};
+        let mut state: u32 = 0;
+        let status = unsafe {
+            CallNtPowerInformation(
+                SystemExecutionState,
+                None,
+                0,
+                Some(&mut state as *mut u32 as *mut core::ffi::c_void),
+                std::mem::size_of::<u32>() as u32,
+            )
+        };
+        status.is_ok() && state & ES_DISPLAY_REQUIRED.0 != 0
+    }
+
     pub fn cursor_position() -> Option<(i32, i32)> {
         unsafe {
             let mut p = POINT::default();
@@ -216,6 +233,9 @@ mod imp {
         0
     }
     pub fn is_locked() -> bool {
+        false
+    }
+    pub fn display_required() -> bool {
         false
     }
     pub fn cursor_position() -> Option<(i32, i32)> {

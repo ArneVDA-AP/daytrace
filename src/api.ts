@@ -24,6 +24,8 @@ export interface Settings {
   blockedApps: string[];
   outputLanguage: string;
   launchAtLogin: boolean;
+  idlePauseSecs: number;
+  useBatchApi: boolean;
 }
 
 export interface SettingsDto {
@@ -36,6 +38,7 @@ export type RecorderStatus =
   | { state: "off" }
   | { state: "recording" }
   | { state: "pausedLocked" }
+  | { state: "pausedIdle" }
   | { state: "error"; detail: string };
 
 export interface Status {
@@ -78,6 +81,7 @@ export interface Shot {
   appName: string | null;
   windowTitle: string | null;
   hiddenApp: string | null;
+  skipReason: string | null;
 }
 
 export const api = {

@@ -26,15 +26,16 @@ async fn replay_frames() {
     {
         let mut s = state.settings.write().unwrap();
         s.pipeline = if std::env::var("DAYTRACE_PIPELINE").as_deref() == Ok("local") { Pipeline::Local } else { Pipeline::Cloud };
+        s.use_batch_api = std::env::var("DAYTRACE_BATCH").as_deref() == Ok("1");
         if let Ok(m) = std::env::var("DAYTRACE_MODEL") {
             s.model = m;
         }
-        println!("pipeline {:?}, model {}", s.pipeline, s.model);
+        println!("pipeline {:?}, model {}, batch api {}", s.pipeline, s.model, s.use_batch_api);
     }
     let base = now_ts() - 10 * frames.len() as i64;
     for (i, f) in frames.iter().enumerate() {
         let size = std::fs::metadata(f).unwrap().len() as i64;
-        state.db.insert_screenshot(base + i as i64 * 10, &f.to_string_lossy(), size, 1, Some("Code"), None, None).unwrap();
+        state.db.insert_screenshot(base + i as i64 * 10, &f.to_string_lossy(), size, 1, Some("Code"), None, None, None).unwrap();
     }
 
     let started = std::time::Instant::now();
@@ -50,7 +51,7 @@ async fn replay_frames() {
     }
     println!("\nCARDS");
     for c in state.db.cards_in_range(0, i64::MAX, false).unwrap() {
-        println!("{} - {} [{}] {}\n    {}\n    sites={:?} distractions={}", c.start, c.end, c.category, c.title, c.summary, c.app_sites, c.distractions.len());
+        println!("{} - {} [{}] {}\n    {}\n    sites={:?} distractions={}\n    detailed: {}", c.start, c.end, c.category, c.title, c.summary, c.app_sites, c.distractions.len(), c.detailed_summary.lines().count());
     }
     let (i, o) = state.db.token_usage_since(0).unwrap();
     println!("\ntokens in={i} out={o}");

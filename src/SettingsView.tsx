@@ -132,6 +132,12 @@ export function SettingsView({ dto, onSaved, onClose }: { dto: SettingsDto; onSa
               </label>
             </div>
           </fieldset>
+          {s.provider === "anthropic" && (
+            <label className="check">
+              <input type="checkbox" checked={s.useBatchApi} onChange={(e) => set("useBatchApi", e.target.checked)} />
+              Use the Batch API: half the cost, but cards can take from a few minutes up to an hour to appear
+            </label>
+          )}
           <div className="row">
             <button className="ghost" onClick={runTest} disabled={busy !== null}>{busy === "test" ? "Testing…" : "Test connection"}</button>
             {test && <span className={test.ok ? "ok" : "bad"}>{test.text}</span>}
@@ -146,6 +152,17 @@ export function SettingsView({ dto, onSaved, onClose }: { dto: SettingsDto; onSa
               {[5, 10, 20, 30, 60].map((n) => <option key={n} value={n}>{n} seconds</option>)}
             </select>
           </label>
+          <label className="field">
+            <span>Stop screenshots when I’m away for</span>
+            <select value={s.idlePauseSecs} onChange={(e) => set("idlePauseSecs", Number(e.target.value))}>
+              <option value={60}>1 minute</option>
+              <option value={120}>2 minutes</option>
+              <option value={300}>5 minutes</option>
+              <option value={600}>10 minutes</option>
+              <option value={0}>Never stop</option>
+            </select>
+          </label>
+          <p className="hint">“Away” means no keyboard or mouse input. While a video or call keeps the screen on, Daytrace keeps recording. Time away still shows on the timeline as Idle, without screenshots or model calls.</p>
           <label className="field">
             <span>Screenshot size</span>
             <select value={s.captureHeight} onChange={(e) => set("captureHeight", Number(e.target.value))}>

@@ -6,11 +6,25 @@ use tauri::{AppHandle, Manager};
 
 const TRAY_ID: &str = "main";
 
+/// Show the main window, creating it if needed. The window (and its WebView2 processes) is
+/// destroyed when closed, so nothing of the UI runs while Daytrace sits in the tray.
 pub fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
+        return;
+    }
+    let built = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
+        .title("Daytrace")
+        .inner_size(1180.0, 780.0)
+        .min_inner_size(760.0, 520.0)
+        .build();
+    match built {
+        Ok(w) => {
+            let _ = w.set_focus();
+        }
+        Err(e) => log::error!("could not open the window: {e}"),
     }
 }
 

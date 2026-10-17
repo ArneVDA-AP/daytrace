@@ -7,6 +7,7 @@ mod commands;
 pub mod config;
 pub mod db;
 mod export;
+pub mod imaging;
 pub mod llm;
 pub mod platform;
 pub mod state;
@@ -56,13 +57,6 @@ pub fn run() {
             }
             Ok(())
         })
-        .on_window_event(|window, event| {
-            // Closing the window keeps recording in the tray.
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
-            }
-        })
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,
             commands::save_settings,
@@ -79,6 +73,15 @@ pub fn run() {
             commands::export_markdown,
             commands::open_data_dir,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Daytrace");
+        .build(tauri::generate_context!())
+        .expect("error while building Daytrace")
+        .run(|_app, event| {
+            // Closing the window destroys it; keep running in the tray. Quit from the tray menu
+            // calls exit(0), which carries an exit code and is allowed through.
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                if code.is_none() {
+                    api.prevent_exit();
+                }
+            }
+        });
 }

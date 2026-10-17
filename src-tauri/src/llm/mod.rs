@@ -26,24 +26,28 @@ pub struct Ctx<'a> {
     pub capture_interval: i64,
 }
 
-/// Load a stored JPEG, downscale to ≤720 px high, re-encode at quality 85, base64.
-pub fn frame_b64(path: &str) -> Result<String> {
-    let img = image::open(path)?;
-    let img = if img.height() > 720 {
-        let w = (img.width() as f64 * 720.0 / img.height() as f64).round() as u32;
-        img.resize_exact(w.max(1), 720, image::imageops::FilterType::Triangle)
-    } else {
-        img
-    };
-    let rgb = img.to_rgb8();
-    let mut buf = Vec::new();
-    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 85);
-    enc.encode_image(&rgb)?;
-    Ok(base64::engine::general_purpose::STANDARD.encode(buf))
+/// A stored screenshot ready to send: frames already ≤720 px high are sent as stored; larger
+/// ones (1080p setting) are downscaled and re-encoded at quality 85.
+pub fn load_frame(path: &str) -> Result<Part> {
+    let (w, h) = image::image_dimensions(path)?;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    if h <= 720 {
+        return Ok(Part::Jpeg { b64: b64.encode(std::fs::read(path)?), w, h });
+    }
+    let rgb = crate::imaging::downscale_rgb(image::open(path)?.to_rgb8(), 720);
+    let (w, h) = rgb.dimensions();
+    Ok(Part::Jpeg { b64: b64.encode(crate::imaging::encode_jpeg(&rgb, 85)?), w, h })
 }
 
+/// Text that stands in for a shot without an image.
 fn hidden_note(shot: &Shot) -> Option<String> {
-    shot.hidden_app.as_ref().map(|app| format!("{app} window (hidden by privacy settings; not captured)"))
+    if let Some(app) = &shot.hidden_app {
+        return Some(format!("{app} window (hidden by privacy settings; not captured)"));
+    }
+    if shot.skip_reason.as_deref() == Some(crate::db::SKIP_IDLE) {
+        return Some("screen not captured: no keyboard or mouse input (user away)".into());
+    }
+    None
 }
 
 // =============================================================================================
@@ -88,8 +92,8 @@ pub async fn transcribe_local(ctx: &Ctx<'_>, shots: &[Shot]) -> Result<Vec<Obser
             frames.push((offset, note));
             continue;
         }
-        let b64 = match frame_b64(&shot.file_path) {
-            Ok(b) => b,
+        let frame = match load_frame(&shot.file_path) {
+            Ok(f) => f,
             Err(e) => {
                 log::warn!("skipping unreadable frame {}: {e}", shot.file_path);
                 continue;
@@ -98,7 +102,7 @@ pub async fn transcribe_local(ctx: &Ctx<'_>, shots: &[Shot]) -> Result<Vec<Obser
         let res = ctx
             .client
             .complete(
-                vec![Part::Text(prompts::DESCRIBE_FRAME.into()), Part::Jpeg(b64)],
+                vec![Part::Text(prompts::DESCRIBE_FRAME.into()), frame],
                 CallOpts { op: "describe_frame", batch_id: Some(ctx.batch_id), max_tokens: 4000, system: None, attempts: 1 },
             )
             .await;
@@ -294,29 +298,56 @@ pub async fn transcribe_cloud(ctx: &Ctx<'_>, shots: &[Shot]) -> Result<Vec<Obser
         (Some(f), Some(l)) => (f.captured_at, l.captured_at),
         _ => bail!("No screenshots to transcribe"),
     };
-    let count = shots.len().min(15);
-    let selected: Vec<&Shot> = (0..count)
-        .map(|i| &shots[if count == 1 { 0 } else { i * (shots.len() - 1) / (count - 1) }])
-        .collect();
     let duration = (last - first).max(1);
-    let mut images: Vec<Part> = Vec::new();
-    let mut valid = 0;
-    for s in &selected {
-        let label = format!("Screenshot at {}:", fmt_hhmmss(s.captured_at - first));
-        if let Some(note) = hidden_note(s) {
-            images.push(Part::Text(format!("{label} [{note}]")));
-            valid += 1;
-            continue;
-        }
-        if let Ok(b64) = frame_b64(&s.file_path) {
-            images.push(Part::Text(label));
-            images.push(Part::Jpeg(b64));
-            valid += 1;
+
+    // Up to 15 images, chosen evenly (first and last included) among shots that have one, and
+    // fewer if the frames are so large that the request would approach the token ceiling.
+    let with_image: Vec<&Shot> = shots.iter().filter(|s| s.has_image()).collect();
+    let mut entries: Vec<(i64, Vec<Part>)> = Vec::new();
+    let mut image_budget = client::MAX_INPUT_TOKENS - 10_000;
+    let mut wanted = with_image.len().min(15);
+    if let Some(first_img) = with_image.first() {
+        if let Ok(Part::Jpeg { w, h, .. }) = load_frame(&first_img.file_path) {
+            let per = crate::imaging::image_tokens(w, h).max(1);
+            wanted = wanted.min(image_budget / per).max(1);
         }
     }
+    let picks: Vec<&Shot> = (0..wanted)
+        .map(|i| with_image[if wanted == 1 { 0 } else { i * (with_image.len() - 1) / (wanted - 1) }])
+        .collect();
+    for s in picks {
+        if let Ok(frame) = load_frame(&s.file_path) {
+            if let Part::Jpeg { w, h, .. } = &frame {
+                let t = crate::imaging::image_tokens(*w, *h);
+                if t > image_budget {
+                    continue;
+                }
+                image_budget -= t;
+            }
+            entries.push((s.captured_at, vec![Part::Text(format!("Screenshot at {}:", fmt_hhmmss(s.captured_at - first))), frame]));
+        }
+    }
+    // Stretches without images (away, private app) become one line each.
+    let mut i = 0;
+    while i < shots.len() {
+        let Some(note) = hidden_note(&shots[i]) else {
+            i += 1;
+            continue;
+        };
+        let mut j = i;
+        while j + 1 < shots.len() && hidden_note(&shots[j + 1]).as_deref() == Some(note.as_str()) {
+            j += 1;
+        }
+        let (a, b) = (shots[i].captured_at - first, shots[j].captured_at - first);
+        entries.push((shots[i].captured_at, vec![Part::Text(format!("From {} to {}: [{note}]", fmt_hhmmss(a), fmt_hhmmss(b)))]));
+        i = j + 1;
+    }
+    entries.sort_by_key(|(t, _)| *t);
+    let valid = entries.len();
     if valid == 0 {
         bail!("No readable screenshots to transcribe.");
     }
+    let images: Vec<Part> = entries.into_iter().flat_map(|(_, p)| p).collect();
     let base = prompts::screenshot_transcription(
         valid,
         &fmt_hhmmss(duration),
@@ -642,7 +673,18 @@ pub fn validate_durations(cards: &[ActivityCard]) -> Option<String> {
 
 /// Cloud path cards: rewrite the whole 45-minute window from all window observations.
 pub async fn cards_cloud(ctx: &Ctx<'_>, window_obs: &[Observation], existing: &[ActivityCard]) -> Result<Vec<ActivityCard>> {
-    let previous = serde_json::to_string_pretty(existing)?;
+    // Previous cards go in without detailedSummary: the model does not write it any more.
+    let slim: Vec<serde_json::Value> = existing
+        .iter()
+        .map(|c| {
+            let mut v = serde_json::to_value(c).unwrap_or_default();
+            if let Some(o) = v.as_object_mut() {
+                o.remove("detailedSummary");
+            }
+            v
+        })
+        .collect();
+    let previous = serde_json::to_string_pretty(&slim)?;
     let transcript = obs_lines(window_obs).join("\n");
     let base = prompts::cloud_cards(&previous, &transcript, ctx.categories, ctx.language);
     with_cloud_retries(&base, |prompt| async move {
@@ -671,6 +713,15 @@ pub async fn cards_cloud(ctx: &Ctx<'_>, window_obs: &[Observation], existing: &[
         Ok(cards)
     })
     .await
+}
+
+/// The step-by-step log for a card, built from the transcription lines inside its span.
+pub fn detailed_from_observations(start_ts: i64, end_ts: i64, obs: &[Observation]) -> String {
+    obs.iter()
+        .filter(|o| o.start_ts < end_ts && o.end_ts > start_ts)
+        .map(|o| format!("{} {}", fmt_clock(o.start_ts.max(start_ts)), o.text.trim()))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[allow(dead_code)]

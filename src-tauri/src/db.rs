@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS screenshots (
     app_name TEXT,
     window_title TEXT,
     hidden_app TEXT,
+    skip_reason TEXT,
     is_deleted INTEGER NOT NULL DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -90,7 +91,14 @@ CREATE TABLE IF NOT EXISTS llm_calls (
     output_tokens INTEGER,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX IF NOT EXISTS idx_llm_calls_created ON llm_calls(created_at, input_tokens, output_tokens);
 "#;
+
+/// Columns added after the first release; applied to existing databases, errors ignored.
+const MIGRATIONS: &[&str] = &["ALTER TABLE screenshots ADD COLUMN skip_reason TEXT"];
+
+/// `skip_reason` value for rows written while the user was away (no image).
+pub const SKIP_IDLE: &str = "idle";
 
 pub const SYSTEM_CATEGORY: &str = "System";
 pub const ERROR_TITLE: &str = "Processing failed";
@@ -105,6 +113,14 @@ pub struct Shot {
     pub app_name: Option<String>,
     pub window_title: Option<String>,
     pub hidden_app: Option<String>,
+    /// Set when no image was stored (e.g. "idle").
+    pub skip_reason: Option<String>,
+}
+
+impl Shot {
+    pub fn has_image(&self) -> bool {
+        !self.file_path.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -214,10 +230,11 @@ fn shot_from_row(r: &rusqlite::Row) -> rusqlite::Result<Shot> {
         app_name: r.get(4)?,
         window_title: r.get(5)?,
         hidden_app: r.get(6)?,
+        skip_reason: r.get(7)?,
     })
 }
 
-const SHOT_COLS: &str = "s.id, s.captured_at, s.file_path, s.idle_seconds_at_capture, s.app_name, s.window_title, s.hidden_app";
+const SHOT_COLS: &str = "s.id, s.captured_at, s.file_path, s.idle_seconds_at_capture, s.app_name, s.window_title, s.hidden_app, s.skip_reason";
 
 fn batch_from_row(r: &rusqlite::Row) -> rusqlite::Result<Batch> {
     Ok(Batch {
@@ -235,6 +252,9 @@ impl Db {
     pub fn open(path: &Path) -> Result<Db> {
         let conn = Connection::open(path)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        for m in MIGRATIONS {
+            let _ = conn.execute_batch(m);
+        }
         conn.execute_batch(SCHEMA)?;
         Ok(Db { conn: Arc::new(Mutex::new(conn)) })
     }
@@ -261,11 +281,12 @@ impl Db {
         app: Option<&str>,
         title: Option<&str>,
         hidden_app: Option<&str>,
+        skip_reason: Option<&str>,
     ) -> Result<i64> {
         let c = self.c();
         c.execute(
-            "INSERT INTO screenshots (captured_at, file_path, file_size, idle_seconds_at_capture, app_name, window_title, hidden_app) VALUES (?,?,?,?,?,?,?)",
-            params![captured_at, file_path, file_size, idle, app, title, hidden_app],
+            "INSERT INTO screenshots (captured_at, file_path, file_size, idle_seconds_at_capture, app_name, window_title, hidden_app, skip_reason) VALUES (?,?,?,?,?,?,?,?)",
+            params![captured_at, file_path, file_size, idle, app, title, hidden_app, skip_reason],
         )?;
         Ok(c.last_insert_rowid())
     }
@@ -485,14 +506,16 @@ impl Db {
 
     /// Dayflow's replaceTimelineCardsInRange: soft-delete every live card overlapping [from, to)
     /// except System cards owned by other batches, then insert `cards` under `batch_id`.
-    pub fn replace_cards_in_range(&self, from: i64, to: i64, cards: &[ResolvedCard], batch_id: i64) -> Result<usize> {
+    /// With `keep_idle`, idle-shortcut cards (never shown to the model) are left in place.
+    pub fn replace_cards_in_range(&self, from: i64, to: i64, cards: &[ResolvedCard], batch_id: i64, keep_idle: bool) -> Result<usize> {
         let mut c = self.c();
         let tx = c.transaction()?;
         tx.execute(
             "UPDATE timeline_cards SET is_deleted = 1 WHERE is_deleted = 0
              AND ((start_ts < ?1 AND end_ts > ?2) OR (start_ts >= ?2 AND start_ts < ?1))
-             AND (category != 'System' OR batch_id = ?3)",
-            params![to, from, batch_id],
+             AND (category != 'System' OR batch_id = ?3)
+             AND (?4 = 0 OR instr(coalesce(metadata, ''), '\"idle\":') = 0)",
+            params![to, from, batch_id, keep_idle as i64],
         )?;
         let mut n = 0;
         {

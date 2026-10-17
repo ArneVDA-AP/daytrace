@@ -10,6 +10,9 @@ export function StatusPill({ status, enabled, onToggle }: { status: Status; enab
   } else if (r.state === "pausedLocked") {
     label = "Paused while locked";
     tone = "off";
+  } else if (r.state === "pausedIdle") {
+    label = "Paused, you’re away";
+    tone = "off";
   } else if (r.state === "error") {
     label = "Can’t capture the screen";
     tone = "bad";

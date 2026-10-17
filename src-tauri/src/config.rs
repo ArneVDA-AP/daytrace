@@ -42,6 +42,12 @@ pub struct Settings {
     /// Output language for summaries; empty means the model's default (English).
     pub output_language: String,
     pub launch_at_login: bool,
+    /// Stop storing screenshots after this many seconds without keyboard or mouse input, unless
+    /// an app keeps the display on (video). 0 disables the guard.
+    pub idle_pause_secs: u64,
+    /// Send Claude requests through the Message Batches API (50% cheaper, results can take
+    /// minutes to an hour). Anthropic provider only.
+    pub use_batch_api: bool,
 }
 
 impl Default for Settings {
@@ -60,6 +66,8 @@ impl Default for Settings {
             blocked_apps: crate::platform::DEFAULT_BLOCKED_APPS.iter().map(|s| s.to_string()).collect(),
             output_language: String::new(),
             launch_at_login: false,
+            idle_pause_secs: 120,
+            use_batch_api: false,
         }
     }
 }
@@ -122,6 +130,9 @@ impl Settings {
         self.capture_height = if self.capture_height <= 720 { 720 } else { 1080 };
         self.jpeg_quality = self.jpeg_quality.clamp(30, 95);
         self.retention_days = self.retention_days.clamp(1, 365);
+        if self.idle_pause_secs != 0 {
+            self.idle_pause_secs = self.idle_pause_secs.clamp(30, 3600);
+        }
         if self.categories.iter().all(|c| c.name.trim().is_empty()) {
             self.categories = default_categories();
         }

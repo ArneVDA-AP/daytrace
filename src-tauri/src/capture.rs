@@ -6,7 +6,6 @@ use crate::config::Settings;
 use crate::platform;
 use crate::state::AppState;
 use anyhow::{anyhow, Result};
-use image::imageops::FilterType;
 use serde::Serialize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -17,7 +16,17 @@ pub enum RecorderStatus {
     Off,
     Recording,
     PausedLocked,
+    /// No input for longer than the idle guard allows; rows are kept, images are not.
+    PausedIdle,
     Error(String),
+}
+
+/// What one tick stored.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Outcome {
+    Captured,
+    PrivateApp,
+    Idle,
 }
 
 const BACKOFF: [u64; 4] = [60, 120, 300, 600];
@@ -67,10 +76,12 @@ fn run(state: Arc<AppState>) {
         }
 
         let started = Instant::now();
+        let mut was_idle = false;
         let wait = match capture_once(&state, &settings) {
-            Ok(()) => {
+            Ok(outcome) => {
                 failures = 0;
-                set_status(&state, RecorderStatus::Recording);
+                was_idle = outcome == Outcome::Idle;
+                set_status(&state, if was_idle { RecorderStatus::PausedIdle } else { RecorderStatus::Recording });
                 Duration::from_secs(settings.capture_interval_secs)
             }
             Err(e) => {
@@ -81,13 +92,17 @@ fn run(state: Arc<AppState>) {
                 Duration::from_secs(backoff)
             }
         };
-        // Sleep in small steps so toggling recording or locking takes effect quickly.
+        // Sleep in small steps so toggling recording, locking or coming back to the PC takes
+        // effect quickly.
         let deadline = started + wait;
         let enabled_now = || state.settings.read().unwrap().recording_enabled;
         while Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(250));
             if !enabled_now() || state.capture_now.swap(false, std::sync::atomic::Ordering::SeqCst) {
                 break;
+            }
+            if was_idle && platform::idle_seconds() < 2 {
+                break; // the user is back: capture right away
             }
         }
     }
@@ -119,49 +134,55 @@ fn mask_blocked_windows(img: &mut image::RgbaImage, monitor: &xcap::Monitor, blo
         let y0 = (((t - my) as f64) * sy).floor().max(0.0) as u32;
         let x1 = ((((r - mx) as f64) * sx).ceil().max(0.0) as u32).min(img.width());
         let y1 = ((((b - my) as f64) * sy).ceil().max(0.0) as u32).min(img.height());
+        if x1 <= x0 {
+            continue;
+        }
+        let stride = img.width() as usize * 4;
+        let buf: &mut [u8] = &mut *img;
         for y in y0..y1 {
-            for x in x0..x1 {
-                img.put_pixel(x, y, image::Rgba([40, 44, 43, 255]));
+            let row = &mut buf[y as usize * stride + x0 as usize * 4..y as usize * stride + x1 as usize * 4];
+            for px in row.chunks_exact_mut(4) {
+                px.copy_from_slice(&[40, 44, 43, 255]);
             }
         }
     }
 }
 
-pub fn capture_once(state: &AppState, settings: &Settings) -> Result<()> {
+pub fn capture_once(state: &AppState, settings: &Settings) -> Result<Outcome> {
     let now = chrono::Local::now();
     let ts = now.timestamp();
     let idle = platform::idle_seconds() as i64;
+
+    // Idle guard: nobody is using the PC and no app keeps the display on (video), so store a
+    // row without an image. Rows keep batching and Idle cards working; no image means nothing
+    // to encode, store or send to a model.
+    if settings.idle_pause_secs > 0 && idle as u64 >= settings.idle_pause_secs && !platform::display_required() {
+        state.db.insert_screenshot(ts, "", 0, idle, None, None, None, Some(crate::db::SKIP_IDLE))?;
+        return Ok(Outcome::Idle);
+    }
+
     let fg = platform::foreground_app().unwrap_or_default();
     let app = (!fg.app.is_empty()).then_some(fg.app.as_str());
     let title = (!fg.title.is_empty()).then_some(fg.title.as_str());
 
     if let Some(blocked) = platform::blocked_match(&fg.app, &settings.blocked_apps) {
         log::debug!("foreground app {} is blocked ({blocked}); not capturing", fg.app);
-        state.db.insert_screenshot(ts, "", 0, idle, app, None, Some(&fg.app))?;
-        return Ok(());
+        state.db.insert_screenshot(ts, "", 0, idle, app, None, Some(&fg.app), None)?;
+        return Ok(Outcome::PrivateApp);
     }
 
     let monitor = pick_monitor()?;
     let mut img = monitor.capture_image().map_err(|e| anyhow!("capture: {e}"))?;
     mask_blocked_windows(&mut img, &monitor, &settings.blocked_apps);
-    let target_h = settings.capture_height;
-    let img = image::DynamicImage::ImageRgba8(img);
-    let img = if img.height() > target_h {
-        let w = ((img.width() as f64 * target_h as f64 / img.height() as f64).round() as u32).max(1);
-        img.resize_exact(w + (w % 2), target_h, FilterType::Triangle)
-    } else {
-        img
-    };
-    let rgb = img.to_rgb8();
+    let rgb = crate::imaging::downscale_rgba(img, settings.capture_height);
 
     let dir = state.paths.screenshots.join(now.format("%Y-%m-%d").to_string());
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{}.jpg", now.format("%H%M%S_%3f")));
-    let mut buf = Vec::with_capacity(300_000);
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, settings.jpeg_quality).encode_image(&rgb)?;
+    let buf = crate::imaging::encode_jpeg(&rgb, settings.jpeg_quality)?;
     std::fs::write(&path, &buf)?;
     state
         .db
-        .insert_screenshot(ts, &path.to_string_lossy(), buf.len() as i64, idle, app, title, None)?;
-    Ok(())
+        .insert_screenshot(ts, &path.to_string_lossy(), buf.len() as i64, idle, app, title, None, None)?;
+    Ok(Outcome::Captured)
 }

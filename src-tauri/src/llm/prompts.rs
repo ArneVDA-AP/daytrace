@@ -1,4 +1,5 @@
 //! Prompt texts copied verbatim from Dayflow (MIT, © Jerry Liu), with indentation normalized.
+//! One deliberate change: the cloud card prompt no longer asks for detailedSummary.
 //! Sources: OllamaProvider+Transcription.swift, OllamaProvider+Summaries.swift,
 //! OllamaPromptPreferences.swift, CodexProvider+Prompts.swift, CodexPromptPreferences.swift,
 //! TimelineOutputSupport.swift, LLMOutputLanguagePreferences.swift, OpenAICompatibleProvider.swift.
@@ -413,7 +414,7 @@ Invented examples of the desired level of abstraction:
 <example>Evidence: read advice on insulating an attic; no installation observed. Title: Researching attic insulation.</example>
 </examples>
 
-For EVERY card, after its detailedSummary and before its title, output a titleEvidence object with activities (an array of {activity, minutes}), selectedActivity, and familiarSubject. Account for the entire interval, with approximate minutes summing to the card duration. Combine recurring visits to the same actual task; different subjects remain separate even when they share an assistant, browser, or broad project. Count foreground interaction, not background windows. Select the activity with the most supported time. Name that activity alone when it represents at least half of the interval. Put side activities only in the summaries. Name the selected activity and familiar subject; preserve a central approach or comparison when it helps distinguish the work. Omit incidental tools and brief detours.
+For EVERY card, after its summary and before its title, output a titleEvidence object with activities (an array of {activity, minutes}), selectedActivity, and familiarSubject. Account for the entire interval, with approximate minutes summing to the card duration. Combine recurring visits to the same actual task; different subjects remain separate even when they share an assistant, browser, or broad project. Count foreground interaction, not background windows. Select the activity with the most supported time. Name that activity alone when it represents at least half of the interval. Put side activities only in the summaries. Name the selected activity and familiar subject; preserve a central approach or comparison when it helps distinguish the work. Omit incidental tools and brief detours.
 
 Invented example: titleEvidence: {"activities":[{"activity":"Reading about attic insulation","minutes":18},{"activity":"Checking a parcel","minutes":2}],"selectedActivity":"Reading about attic insulation","familiarSubject":"attic insulation"}; title: "Researching attic insulation".
 
@@ -430,6 +431,9 @@ titleEvidence is intermediate working data; the title is the short user-facing l
 pub const CLOUD_SUMMARY_BLOCK: &str = r#"SUMMARIES
 Write 2–3 factual sentences in first person without "I". State the main activity and meaningful secondary details. Preserve what happened without adding claims of completion."#;
 
+/// Not sent: Daytrace builds the detailed log from the transcription itself (half of the card
+/// output tokens went to this field). Kept for reference.
+#[allow(dead_code)]
 pub const CLOUD_DETAILED_BLOCK: &str = r#"DETAILED SUMMARIES
 Write a chronological log of timestamped activity lines. Each line states the concrete action, subject, and relevant application or site. Include substantive secondary activities and specific details here that the title omits. Encode line breaks with valid JSON escapes."#;
 
@@ -456,9 +460,7 @@ Return cards covering all the time represented by the supplied previous cards an
 
 {CLOUD_SUMMARY_BLOCK}
 
-{CLOUD_DETAILED_BLOCK}
-
-Return only a valid JSON array. Each card has startTime and endTime in h:mm AM/PM format, category and subcategory strings, summary, detailedSummary, title, distractions (array of brief unrelated interruptions with startTime, endTime, title, summary), and appSites (an object with primary and secondary, each a single string or null, never an array; use website domains or recognizable application names). Choose consistent categories. Write summaries before the title. Check coverage, duration, and factual accuracy before returning the array."#,
+Return only a valid JSON array. Each card has startTime and endTime in h:mm AM/PM format, category and subcategory strings, summary, title, distractions (array of brief unrelated interruptions with startTime, endTime, title, summary), and appSites (an object with primary and secondary, each a single string or null, never an array; use website domains or recognizable application names). Choose consistent categories. Write summaries before the title. Check coverage, duration, and factual accuracy before returning the array."#,
         cats = categories_section(categories),
     )
 }

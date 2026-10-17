@@ -111,19 +111,26 @@ pub struct ShotDto {
     app_name: Option<String>,
     window_title: Option<String>,
     hidden_app: Option<String>,
+    skip_reason: Option<String>,
 }
 
 #[tauri::command]
 pub fn get_card_screenshots(state: S, card_id: i64, max: Option<usize>) -> CmdResult<Vec<ShotDto>> {
     let card = state.db.card(card_id).map_err(err)?.ok_or("card not found")?;
-    let shots = state.db.screenshots_in_range(card.start_ts, card.end_ts + 60).map_err(err)?;
+    let shots: Vec<_> = state
+        .db
+        .screenshots_in_range(card.start_ts, card.end_ts + 60)
+        .map_err(err)?
+        .into_iter()
+        .filter(|s| s.has_image() || s.hidden_app.is_some())
+        .collect();
     let max = max.unwrap_or(24).max(1);
     let step = (shots.len() / max).max(1);
     Ok(shots
         .into_iter()
         .step_by(step)
         .take(max)
-        .map(|s| ShotDto { id: s.id, captured_at: s.captured_at, app_name: s.app_name, window_title: s.window_title, hidden_app: s.hidden_app })
+        .map(|s| ShotDto { id: s.id, captured_at: s.captured_at, app_name: s.app_name, window_title: s.window_title, hidden_app: s.hidden_app, skip_reason: s.skip_reason })
         .collect())
 }
 
@@ -140,11 +147,9 @@ pub async fn get_screenshot(state: S<'_>, id: i64, thumb: bool) -> CmdResult<Opt
         if !thumb {
             return Ok(raw);
         }
-        let img = image::load_from_memory(&raw)?;
-        let small = img.resize(10_000, 360, image::imageops::FilterType::Triangle).to_rgb8();
-        let mut out = Vec::new();
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 75).encode_image(&small)?;
-        Ok(out)
+        let img = image::load_from_memory(&raw)?.to_rgb8();
+        let small = crate::imaging::downscale_rgb(img, 360);
+        crate::imaging::encode_jpeg(&small, 75)
     })
     .await
     .map_err(err)?;
@@ -182,14 +187,13 @@ pub async fn list_models(provider: ProviderKind, base_url: String, api_key: Opti
 #[tauri::command]
 pub async fn test_provider(provider: ProviderKind, base_url: String, model: String, api_key: Option<String>) -> CmdResult<String> {
     let client = client_for(provider, &base_url, &model, api_key)?;
-    let mut png = Vec::new();
     let img = image::RgbImage::from_pixel(32, 32, image::Rgb([30, 120, 220]));
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut png, 90).encode_image(&img).map_err(err)?;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(png);
+    let jpg = crate::imaging::encode_jpeg(&img, 90).map_err(err)?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(jpg);
     let started = std::time::Instant::now();
     let out = client
         .complete(
-            vec![Part::Text("What is the main color of this image? Answer in one word.".into()), Part::Jpeg(b64)],
+            vec![Part::Text("What is the main color of this image? Answer in one word.".into()), Part::Jpeg { b64, w: 32, h: 32 }],
             CallOpts { op: "test", batch_id: None, max_tokens: 50, system: None, attempts: 1 },
         )
         .await

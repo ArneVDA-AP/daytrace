@@ -10,8 +10,26 @@ use std::time::{Duration, Instant};
 #[derive(Debug, Clone)]
 pub enum Part {
     Text(String),
-    /// Base64-encoded JPEG.
-    Jpeg(String),
+    /// Base64-encoded JPEG with its pixel size (for token estimates).
+    Jpeg { b64: String, w: u32, h: u32 },
+}
+
+/// Hard ceiling per request. Haiku bills 5× once a prompt passes 100k input tokens; 90k leaves
+/// room for estimate error.
+pub const MAX_INPUT_TOKENS: usize = 90_000;
+
+/// Rough input-token estimate: images by 28 px patches, text at ~3.5 characters per token.
+pub fn estimate_tokens(parts: &[Part], system: Option<&str>) -> usize {
+    let text_chars: usize = parts
+        .iter()
+        .map(|p| if let Part::Text(t) = p { t.chars().count() } else { 0 })
+        .sum::<usize>()
+        + system.map(|s| s.chars().count()).unwrap_or(0);
+    let images: usize = parts
+        .iter()
+        .map(|p| if let Part::Jpeg { w, h, .. } = p { crate::imaging::image_tokens(*w, *h) } else { 0 })
+        .sum();
+    images + text_chars * 2 / 7 + 50
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +50,8 @@ pub struct LlmClient {
     pub model: String,
     api_key: Option<String>,
     db: Option<Db>,
+    /// Route Anthropic requests through the Message Batches API.
+    pub use_batch: bool,
 }
 
 #[derive(Debug)]
@@ -67,6 +87,7 @@ impl LlmClient {
             model: model.trim().to_string(),
             api_key: api_key.filter(|k| !k.trim().is_empty()),
             db,
+            use_batch: false,
         })
     }
 
@@ -112,7 +133,7 @@ impl LlmClient {
                     .iter()
                     .map(|p| match p {
                         Part::Text(t) => json!({"type": "text", "text": t}),
-                        Part::Jpeg(b) => json!({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b}}),
+                        Part::Jpeg { b64, .. } => json!({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}}),
                     })
                     .collect();
                 let mut body = json!({
@@ -130,7 +151,7 @@ impl LlmClient {
                     .iter()
                     .map(|p| match p {
                         Part::Text(t) => json!({"type": "text", "text": t}),
-                        Part::Jpeg(b) => json!({"type": "image_url", "image_url": {"url": format!("data:image/jpeg;base64,{b}")}}),
+                        Part::Jpeg { b64, .. } => json!({"type": "image_url", "image_url": {"url": format!("data:image/jpeg;base64,{b64}")}}),
                     })
                     .collect();
                 let mut messages = Vec::new();
@@ -177,7 +198,85 @@ impl LlmClient {
         v.to_string()
     }
 
+    fn anthropic_headers(&self, req: reqwest::RequestBuilder) -> Result<reqwest::RequestBuilder> {
+        let key = self.api_key.clone().ok_or_else(|| anyhow!("No Anthropic API key configured"))?;
+        Ok(req.header("x-api-key", key).header("anthropic-version", "2023-06-01"))
+    }
+
+    /// One request through the Message Batches API: submit, poll until it ends, read the result.
+    async fn send_via_batch(&self, body: &Value) -> Result<(String, (Option<i64>, Option<i64>))> {
+        let base = self.messages_url();
+        let batches = format!("{base}/batches");
+        let submit = json!({"requests": [{"custom_id": "daytrace", "params": body}]});
+        let resp = self.anthropic_headers(self.http.post(&batches).json(&submit))?.send().await?;
+        let status = resp.status();
+        let text = resp.text().await?;
+        if !status.is_success() {
+            return Err(HttpError { status: status.as_u16(), body: text }.into());
+        }
+        let v: Value = serde_json::from_str(&text)?;
+        let id = v["id"].as_str().ok_or_else(|| anyhow!("Batch API returned no id"))?.to_string();
+        log::info!("submitted batch request {id}");
+
+        let started = Instant::now();
+        let mut delay = 15u64;
+        let results_url = loop {
+            tokio::time::sleep(Duration::from_secs(delay)).await;
+            delay = (delay + 15).min(60);
+            if started.elapsed() > Duration::from_secs(6 * 3600) {
+                let _ = self.anthropic_headers(self.http.post(format!("{batches}/{id}/cancel")))?.send().await;
+                bail!("Batch request {id} did not finish within 6 hours");
+            }
+            let r = self.anthropic_headers(self.http.get(format!("{batches}/{id}")))?.send().await;
+            let Ok(r) = r else { continue }; // transient network error: keep polling
+            if !r.status().is_success() {
+                continue;
+            }
+            let s: Value = r.json().await.unwrap_or_default();
+            if s["processing_status"] == "ended" {
+                break s["results_url"].as_str().map(String::from).unwrap_or_else(|| format!("{batches}/{id}/results"));
+            }
+        };
+        let r = self.anthropic_headers(self.http.get(&results_url))?.send().await?;
+        let status = r.status();
+        let jsonl = r.text().await?;
+        if !status.is_success() {
+            return Err(HttpError { status: status.as_u16(), body: jsonl }.into());
+        }
+        let line: Value = jsonl
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .find(|l| l["custom_id"] == "daytrace")
+            .ok_or_else(|| anyhow!("Batch {id} returned no result"))?;
+        let result = &line["result"];
+        match result["type"].as_str() {
+            Some("succeeded") => Self::parse_anthropic(&result["message"]),
+            Some("errored") => {
+                let err = &result["error"];
+                let kind = err["error"]["type"].as_str().or(err["type"].as_str()).unwrap_or("error");
+                // invalid_request_error needs a different request; others may be retried as-is.
+                let status = if kind == "invalid_request_error" { 400 } else { 500 };
+                Err(HttpError { status, body: err.to_string() }.into())
+            }
+            other => Err(HttpError { status: 503, body: format!("batch request {}", other.unwrap_or("unknown")) }.into()),
+        }
+    }
+
+    fn parse_anthropic(v: &Value) -> Result<(String, (Option<i64>, Option<i64>))> {
+        let out: String = v["content"]
+            .as_array()
+            .map(|blocks| blocks.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join(""))
+            .unwrap_or_default();
+        if v["stop_reason"] == "max_tokens" {
+            bail!("Response was cut off at max_tokens");
+        }
+        Ok((out, (v["usage"]["input_tokens"].as_i64(), v["usage"]["output_tokens"].as_i64())))
+    }
+
     async fn send_once(&self, url: &str, body: &Value) -> Result<(String, (Option<i64>, Option<i64>))> {
+        if self.use_batch && self.kind == ProviderKind::Anthropic {
+            return self.send_via_batch(body).await;
+        }
         let mut req = self.http.post(url).json(body);
         match self.kind {
             ProviderKind::Anthropic => {
@@ -201,17 +300,7 @@ impl LlmClient {
         }
         let v: Value = serde_json::from_str(&text).map_err(|e| anyhow!("Invalid JSON from provider: {e}: {}", truncate(&text, 300)))?;
         match self.kind {
-            ProviderKind::Anthropic => {
-                let out: String = v["content"]
-                    .as_array()
-                    .map(|blocks| blocks.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join(""))
-                    .unwrap_or_default();
-                if v["stop_reason"] == "max_tokens" {
-                    bail!("Response was cut off at max_tokens");
-                }
-                let usage = (v["usage"]["input_tokens"].as_i64(), v["usage"]["output_tokens"].as_i64());
-                Ok((out, usage))
-            }
+            ProviderKind::Anthropic => Self::parse_anthropic(&v),
             _ => {
                 let msg = &v["choices"][0]["message"]["content"];
                 let out = match msg {
@@ -236,6 +325,10 @@ impl LlmClient {
     }
 
     pub async fn complete(&self, parts: Vec<Part>, opts: CallOpts) -> Result<String> {
+        let estimate = estimate_tokens(&parts, opts.system.as_deref());
+        if estimate > MAX_INPUT_TOKENS {
+            bail!("Request would be about {estimate} input tokens, over the {MAX_INPUT_TOKENS} limit; not sent");
+        }
         let (url, body) = self.build_request(&parts, &opts);
         let mut last_err = anyhow!("no attempts made");
         for attempt in 0..opts.attempts.max(1) {
@@ -342,5 +435,16 @@ mod tests {
         assert_eq!(parse_json::<S>("Sure! {\"a\":2} done").unwrap().a, 2);
         assert_eq!(parse_json::<Vec<S>>("Here: [{\"a\":3}] ok").unwrap()[0].a, 3);
         assert!(parse_json::<S>("nothing").is_err());
+    }
+}
+
+#[cfg(test)]
+mod estimate_tests {
+    use super::*;
+    #[test]
+    fn estimates_images_and_text() {
+        let parts = vec![Part::Text("x".repeat(3500)), Part::Jpeg { b64: String::new(), w: 1720, h: 720 }];
+        let e = estimate_tokens(&parts, None);
+        assert!(e > 1612 + 900 && e < 1612 + 1200, "{e}");
     }
 }
