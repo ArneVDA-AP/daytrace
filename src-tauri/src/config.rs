@@ -139,6 +139,20 @@ pub struct Settings {
     pub fallback_model: String,
     /// Edited instruction blocks of the card prompts.
     pub prompt_overrides: PromptOverrides,
+    // ---- platform_extras ----
+    /// First-run setup was finished or skipped. Recording waits for it.
+    pub onboarding_completed: bool,
+    /// End of a timed pause (Unix seconds). Set only while `recording_enabled` is false; recording
+    /// resumes at this time. None with recording off means paused until resumed.
+    pub pause_until: Option<i64>,
+    /// The three timed pause lengths in minutes (Dayflow's PausePresets, default 15, 30, 60).
+    pub pause_presets: Vec<u32>,
+    /// Light/dark override for the window.
+    pub appearance: crate::features::platform_extras::Appearance,
+    /// Which notifications Daytrace may show.
+    pub notifications: crate::features::platform_extras::NotificationPrefs,
+    /// Look for a new release on GitHub once a day.
+    pub check_updates: bool,
 }
 
 impl Default for Settings {
@@ -168,6 +182,12 @@ impl Default for Settings {
             fallback_base_url: String::new(),
             fallback_model: String::new(),
             prompt_overrides: PromptOverrides::default(),
+            onboarding_completed: false,
+            pause_until: None,
+            pause_presets: crate::features::platform_extras::pause::DEFAULT_PRESETS.to_vec(),
+            appearance: Default::default(),
+            notifications: Default::default(),
+            check_updates: true,
         }
     }
 }

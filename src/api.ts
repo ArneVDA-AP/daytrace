@@ -48,6 +48,23 @@ export interface Settings {
   fallbackBaseUrl: string;
   fallbackModel: string;
   promptOverrides: PromptOverrides;
+  // platform_extras
+  onboardingCompleted: boolean;
+  /** End of a timed pause (Unix seconds); null with recording off means paused until resumed. */
+  pauseUntil: number | null;
+  pausePresets: number[];
+  appearance: "system" | "light" | "dark";
+  notifications: NotificationPrefs;
+  checkUpdates: boolean;
+}
+
+export interface NotificationPrefs {
+  recapReady: boolean;
+  firstCards: boolean;
+  recordingProblems: boolean;
+  analysisProblems: boolean;
+  missingApiKey: boolean;
+  updates: boolean;
 }
 
 export interface SettingsDto {
