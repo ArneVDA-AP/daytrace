@@ -200,10 +200,116 @@ pub fn codex_args(a: &CodexArgs) -> Vec<String> {
     v
 }
 
+/// A TOML string for a `-c key=value` override: a literal string ('...', no escapes) unless the
+/// text has a single quote, then a basic string with `\` and `"` escaped.
+pub fn toml_str(s: &str) -> String {
+    if !s.contains('\'') && !s.chars().any(char::is_control) {
+        return format!("'{s}'");
+    }
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// A chat question through `codex exec` (Dayflow's ChatCLIProcessRunner Codex branch, which
+/// lets Codex run sqlite3 in a shell; Daytrace gives it no shell). Every flag and key is in the
+/// Codex docs (learn.chatgpt.com: developer-commands, config-file/config-reference, extend/mcp,
+/// non-interactive-mode):
+/// - `exec --json`: one JSON event per line (item.started / item.completed with mcp_tool_call and
+///   agent_message items, turn.completed with usage, turn.failed, error).
+/// - `--ephemeral`: no session files; `--ignore-user-config`: the user's config.toml is not
+///   loaded, so none of their MCP servers, plugins, profiles or settings join (auth still comes
+///   from CODEX_HOME). The flag came with Codex 0.122.0 (April 2026); an older Codex stops with
+///   "unexpected argument", which the chat reports as "update Codex". Every key below already
+///   works in 0.122.0 (checked in its source); unknown feature keys are ignored with a warning.
+/// - `--sandbox read-only` and `approval_policy=never`: nothing can be written (an edit would
+///   need an approval that is never given).
+/// - `features.shell_tool=false`: no command execution tools at all. `web_search=disabled`,
+///   `features.apps=false` (ChatGPT connectors), `features.multi_agent=false` (sub-agents),
+///   `features.hooks=false` (the user's lifecycle hooks), `features.memories=false`.
+/// - `mcp_servers.daytrace.*`: daytrace-mcp `--chat` as the only MCP server, `enabled_tools` its
+///   read tools, `required=true` so Codex stops when it can't start. The read tools are marked
+///   read-only, so Codex calls them without asking.
+/// - `--skip-git-repo-check`: the working folder is not a repository; `-` reads the prompt from stdin.
+pub struct CodexChatArgs<'a> {
+    pub model: &'a str,
+    pub effort: &'a str,
+    pub mcp_exe: &'a Path,
+    pub data_dir: &'a Path,
+    /// Tool names on the server (`get_timeline`, ...).
+    pub enabled_tools: &'a [&'a str],
+}
+
+/// `codex exec` arguments for a chat question. The prompt goes to stdin.
+pub fn codex_chat_args(a: &CodexChatArgs) -> Vec<String> {
+    let mut v: Vec<String> = ["exec", "--json", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only"].iter().map(|s| s.to_string()).collect();
+    if !a.model.trim().is_empty() {
+        v.extend(["-m".into(), a.model.trim().into()]);
+    }
+    let tools = a.enabled_tools.iter().map(|t| toml_str(t)).collect::<Vec<_>>().join(",");
+    let overrides = [
+        "approval_policy=never".to_string(),
+        "features.shell_tool=false".into(),
+        "web_search=disabled".into(),
+        "features.apps=false".into(),
+        "features.multi_agent=false".into(),
+        "features.hooks=false".into(),
+        "features.memories=false".into(),
+        format!("model_reasoning_effort={}", a.effort),
+        format!("mcp_servers.daytrace.command={}", toml_str(&a.mcp_exe.display().to_string())),
+        "mcp_servers.daytrace.args=['--chat']".into(),
+        format!("mcp_servers.daytrace.env.DAYTRACE_DATA_DIR={}", toml_str(&a.data_dir.display().to_string())),
+        format!("mcp_servers.daytrace.enabled_tools=[{tools}]"),
+        "mcp_servers.daytrace.required=true".into(),
+    ];
+    for o in overrides {
+        v.extend(["-c".into(), o]);
+    }
+    v.extend(["--".into(), "-".into()]);
+    v
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn codex_chat_args_and_toml_strings() {
+        let exe = PathBuf::from(r"C:\Users\me\AppData\Local\Daytrace\daytrace-mcp.exe");
+        let data = PathBuf::from(r"C:\Users\me\AppData\Roaming\dev.daytrace.app");
+        let args = codex_chat_args(&CodexChatArgs { model: "gpt-6-luna", effort: "low", mcp_exe: &exe, data_dir: &data, enabled_tools: &["get_timeline", "get_status"] });
+        assert_eq!(
+            args,
+            [
+                "exec", "--json", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only", "-m", "gpt-6-luna",
+                "-c", "approval_policy=never", "-c", "features.shell_tool=false", "-c", "web_search=disabled", "-c", "features.apps=false",
+                "-c", "features.multi_agent=false", "-c", "features.hooks=false", "-c", "features.memories=false", "-c", "model_reasoning_effort=low",
+                "-c", r"mcp_servers.daytrace.command='C:\Users\me\AppData\Local\Daytrace\daytrace-mcp.exe'",
+                "-c", "mcp_servers.daytrace.args=['--chat']",
+                "-c", r"mcp_servers.daytrace.env.DAYTRACE_DATA_DIR='C:\Users\me\AppData\Roaming\dev.daytrace.app'",
+                "-c", "mcp_servers.daytrace.enabled_tools=['get_timeline','get_status']",
+                "-c", "mcp_servers.daytrace.required=true", "--", "-",
+            ]
+        );
+        // No model: Codex's default.
+        assert!(!codex_chat_args(&CodexChatArgs { model: " ", effort: "low", mcp_exe: &exe, data_dir: &data, enabled_tools: &[] }).contains(&"-m".to_string()));
+        // Every value reads back as the same string in TOML.
+        for s in [r"C:\Users\O'Brien\AppData\Local\Daytrace\daytrace-mcp.exe", r"D:\plain\x", "a\"b'c"] {
+            let doc: toml_edit::DocumentMut = format!("v = {}", toml_str(s)).parse().unwrap();
+            assert_eq!(doc["v"].as_str(), Some(s));
+        }
+        assert_eq!(toml_str(r"C:\x"), r"'C:\x'");
+        assert_eq!(toml_str("O'B"), "\"O'B\"");
+    }
 
     #[test]
     fn timeline_args_match_dayflow_profile() {

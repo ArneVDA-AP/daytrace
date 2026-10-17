@@ -2,10 +2,11 @@
 //! with read-only tools over the stored cards, observations and screenshot metadata. Answers
 //! link the cards they rely on. Ports Dayflow's dashboard chat (ChatService.swift and the Gemini
 //! function-calling path, MIT, © Jerry Liu); see the submodules for what comes from where.
-//! With the Claude Code CLI as provider, the CLI answers with daytrace-mcp's read tools
-//! (cli_chat.rs); the Codex CLI is not supported.
+//! With the Claude Code CLI or the Codex CLI as provider, the CLI answers with daytrace-mcp's
+//! read tools (cli_chat.rs, codex_chat.rs).
 
 mod cli_chat;
+mod codex_chat;
 mod engine;
 mod metadata;
 mod prompt;
@@ -129,9 +130,6 @@ impl Target {
         if self.model.is_empty() {
             return Some("No model is set. Choose one in Settings.".into());
         }
-        if self.kind == ProviderKind::CodexCli {
-            return Some(format!("Chat does not work with the {} yet. Choose the Claude Code CLI, an API or a local model provider in Settings to chat.", self.kind.label()));
-        }
         if crate::llm::chat_api::key_required(self.kind, &self.base_url) && self.key.is_none() {
             return Some(format!("Chat needs an API key for {}. Add one in Settings.", self.provider_label()));
         }
@@ -162,19 +160,27 @@ fn friendly_error(e: &anyhow::Error, t: &Target) -> (String, Option<String>) {
         return (msg, detail);
     }
     if let Some(c) = e.chain().find_map(|c| c.downcast_ref::<crate::llm::cli::CliFailed>()) {
+        use crate::llm::cli::CliTool;
         use crate::llm::failure::{classify, FailureKind};
+        let codex = c.tool == CliTool::Codex;
         let msg = match classify(&c.message).kind {
+            FailureKind::ProviderLoginExpired if codex => "The Codex CLI is signed out. Open PowerShell, run codex login, then try again.".to_string(),
             FailureKind::ProviderLoginExpired => "Claude Code is signed out. Open PowerShell, run claude, then type /login to sign back in.".to_string(),
+            FailureKind::UsageLimitHit if codex => "You've used up your ChatGPT plan's Codex usage for now. Try again when the limit resets, or switch the chat to an API provider in Settings.".to_string(),
             FailureKind::UsageLimitHit => "You've used up your Claude plan's usage for now. Try again when the limit resets, or switch the chat to an API provider in Settings.".to_string(),
+            FailureKind::OutOfCredits if codex => "Your OpenAI account is out of credits.".to_string(),
             FailureKind::OutOfCredits => "Your Claude account is out of credits.".to_string(),
+            FailureKind::ModelMisconfigured if codex => format!("The model \"{}\" isn't available in the Codex CLI. Choose another chat model.", t.model),
             FailureKind::ModelMisconfigured => format!("The model \"{}\" isn't available in Claude Code. Choose another chat model.", t.model),
+            FailureKind::CliOutdated => "Chat needs a newer Codex CLI. Run “npm install -g @openai/codex@latest” in PowerShell, then try again.".to_string(),
             FailureKind::CliNotInstalled => c.message.clone(),
-            _ => "The Claude Code CLI couldn't answer. Try again in a moment.".to_string(),
+            _ => format!("The {} couldn't answer. Try again in a moment.", c.tool.display_name()),
         };
         return (msg, detail);
     }
     if crate::llm::cli::is_timeout(e) {
-        return ("The Claude Code CLI took too long to answer. Try a narrower question.".into(), detail);
+        let cli = if t.kind == ProviderKind::CodexCli { "Codex CLI" } else { "Claude Code CLI" };
+        return (format!("The {cli} took too long to answer. Try a narrower question."), detail);
     }
     if let Some(r) = e.downcast_ref::<reqwest::Error>() {
         if r.is_timeout() {
@@ -491,6 +497,32 @@ pub async fn chat_send(app: tauri::AppHandle, state: S<'_>, conversation_id: Opt
         };
         db.log_llm_call(None, "chat", &format!("claude_cli:{}", target.model), started.elapsed().as_millis() as i64, &question, answer, error.as_deref(), usage);
         r
+    } else if target.kind == ProviderKind::CodexCli {
+        // The same prompt and read tools as the Claude Code CLI (codex_chat.rs).
+        let system = prompt::build(
+            chrono::Local::now(),
+            &logical_day(now_ts()),
+            &settings.output_language,
+            &memory,
+            &recent,
+            &settings.categories,
+            prompt::ToolSet::Mcp,
+        );
+        let backend = crate::llm::cli::CliBackend::new(crate::llm::cli::CliTool::Codex, &target.base_url, &target.model);
+        let chat = codex_chat::CodexChat {
+            backend: &backend,
+            mcp_exe: crate::features::agent_bridge::register::mcp_exe(),
+            data_dir: state.paths.root.clone(),
+            timeout: crate::llm::cli::DEFAULT_TIMEOUT,
+        };
+        let started = std::time::Instant::now();
+        let r = codex_chat::run(&chat, &system, &cli_history(&prior), &question, &CANCEL, &mut emit).await;
+        let (answer, error, usage) = match &r {
+            Ok(o) => (Some(o.text.as_str()), None, (Some(o.input_tokens), Some(o.output_tokens))),
+            Err(e) => (None, Some(format!("{e:#}")), (None, None)),
+        };
+        db.log_llm_call(None, "chat", &format!("codex_cli:{}", target.model), started.elapsed().as_millis() as i64, &question, answer, error.as_deref(), usage);
+        r
     } else {
         let mut client = LlmClient::new(target.kind, &target.base_url, &target.model, target.key.clone(), Some(db.clone())).map_err(err)?;
         client.reasoning = settings.reasoning;
@@ -604,10 +636,20 @@ mod tests {
     }
 
     #[test]
-    fn only_the_codex_cli_is_refused() {
+    fn both_clis_can_chat() {
         let cli = |kind| Target { kind, base_url: String::new(), model: "m".into(), key: None };
         assert_eq!(cli(ProviderKind::ClaudeCli).problem(), None);
-        assert!(cli(ProviderKind::CodexCli).problem().unwrap().starts_with("Chat does not work with the Codex CLI yet."));
+        assert_eq!(cli(ProviderKind::CodexCli).problem(), None);
+    }
+
+    #[test]
+    fn codex_errors_in_plain_words() {
+        let codex = Target { kind: ProviderKind::CodexCli, base_url: String::new(), model: "gpt-6-luna".into(), key: None };
+        let failed = |m: &str| -> anyhow::Error { crate::llm::cli::CliFailed { tool: crate::llm::cli::CliTool::Codex, message: m.into(), usage: None }.into() };
+        assert!(friendly_error(&failed("Your access token could not be refreshed. Please log out and sign in again."), &codex).0.starts_with("The Codex CLI is signed out."));
+        assert!(friendly_error(&failed("You've hit your usage limit. Try again at 3pm."), &codex).0.starts_with("You've used up your ChatGPT plan's Codex usage"));
+        assert!(friendly_error(&failed("This chat needs a newer version of codex (error: unexpected argument)"), &codex).0.starts_with("Chat needs a newer Codex CLI."));
+        assert_eq!(friendly_error(&failed("boom"), &codex).0, "The Codex CLI couldn't answer. Try again in a moment.");
     }
 
     #[test]
