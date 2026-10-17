@@ -3,13 +3,8 @@ import { api, Category, Pipeline, ProviderKind, Settings, SettingsDto } from "./
 import { ProviderAdvanced } from "./settings/ProviderAdvanced";
 import { RecapSection } from "./settings/RecapSection";
 import { PlatformSection } from "./settings/PlatformSection";
-
-const PROVIDERS: { id: ProviderKind; label: string; needsKey: boolean }[] = [
-  { id: "anthropic", label: "Claude (Anthropic API)", needsKey: true },
-  { id: "ollama", label: "Ollama (on this PC)", needsKey: false },
-  { id: "lm_studio", label: "LM Studio (on this PC)", needsKey: false },
-  { id: "openai_compatible", label: "Other OpenAI-compatible API", needsKey: true },
-];
+import { CliPathField } from "./settings/CliPathField";
+import { cliCommand, cliSignIn, PROVIDERS, providerInfo } from "./settings/providerInfo";
 
 export function SettingsView({ dto, onSaved, onClose }: { dto: SettingsDto; onSaved: (d: SettingsDto) => void; onClose: () => void }) {
   const [s, setS] = useState<Settings>(structuredClone(dto.settings));
@@ -24,10 +19,11 @@ export function SettingsView({ dto, onSaved, onClose }: { dto: SettingsDto; onSa
     setS((p) => ({ ...p, [k]: v }));
     setSaved(false);
   };
-  const provider = PROVIDERS.find((p) => p.id === s.provider)!;
+  const provider = providerInfo(s.provider);
 
   async function changeProvider(id: ProviderKind) {
     const [baseUrl, model] = await api.providerDefaults(id);
+    // The CLIs write cards in one step; when that fails they fall back to the Detailed mode.
     const pipeline: Pipeline = id === "ollama" || id === "lm_studio" ? "local" : "cloud";
     setS((p) => ({ ...p, provider: id, baseUrl, model, pipeline }));
     setModels([]);
@@ -84,36 +80,51 @@ export function SettingsView({ dto, onSaved, onClose }: { dto: SettingsDto; onSa
       <div className="settings-inner">
         <section>
           <h2>Model</h2>
-          <p className="hint">Screenshots are sent to this model every 15 minutes. With Ollama or LM Studio nothing leaves your PC.</p>
-          <label className="field">
+          <p className="hint">
+            {provider.cli
+              ? `Every 15 minutes Daytrace runs ${cliCommand(s.provider)} on this PC with that batch’s screenshots. It uses the account you signed in with in the CLI, so screenshots go to ${s.provider === "codex_cli" ? "OpenAI" : "Anthropic"} under that account. The screenshots are copied to a temporary folder for the CLI and deleted right after.`
+              : "Screenshots are sent to this model every 15 minutes. With Ollama or LM Studio nothing leaves your PC."}
+          </p>
+          <label className="field" htmlFor="provider-select">
             <span>Provider</span>
-            <select value={s.provider} onChange={(e) => changeProvider(e.target.value as ProviderKind)}>
+            <select id="provider-select" value={s.provider} onChange={(e) => changeProvider(e.target.value as ProviderKind)}>
               {PROVIDERS.map((p) => (
                 <option key={p.id} value={p.id}>{p.label}</option>
               ))}
             </select>
           </label>
-          <label className="field">
-            <span>Server address</span>
-            <input value={s.baseUrl} onChange={(e) => set("baseUrl", e.target.value)} spellCheck={false} />
-          </label>
-          <label className="field">
+          {provider.cli ? (
+            <>
+              <CliPathField id="provider-cli-path" provider={s.provider} path={s.baseUrl} onChange={(v) => set("baseUrl", v)} />
+              <p className="hint">
+                Install {s.provider === "codex_cli" ? "the Codex CLI" : "Claude Code"}, then sign in once: {cliSignIn(s.provider)}. Leave the path empty
+                unless Daytrace can’t find it.{s.provider === "claude_cli" ? " On Windows, Claude Code also needs Git for Windows." : ""}
+              </p>
+            </>
+          ) : (
+            <label className="field" htmlFor="provider-url">
+              <span>Server address</span>
+              <input id="provider-url" value={s.baseUrl} onChange={(e) => set("baseUrl", e.target.value)} spellCheck={false} />
+            </label>
+          )}
+          <label className="field" htmlFor="provider-model">
             <span>Model</span>
             <div className="row">
-              <input value={s.model} list="models" onChange={(e) => set("model", e.target.value)} spellCheck={false} />
+              <input id="provider-model" value={s.model} list="models" onChange={(e) => set("model", e.target.value)} spellCheck={false} />
               <datalist id="models">{models.map((m) => <option key={m} value={m} />)}</datalist>
-              <button className="ghost" onClick={loadModels} disabled={busy !== null}>
-                {busy === "models" ? "Loading…" : "Show available models"}
+              <button className="ghost" type="button" onClick={loadModels} disabled={busy !== null}>
+                {busy === "models" ? "Loading…" : provider.cli ? "Show suggested models" : "Show available models"}
               </button>
             </div>
           </label>
-          {(provider.needsKey || s.provider === "lm_studio") && (
-            <label className="field">
+          {provider.key !== "none" && (
+            <label className="field" htmlFor="provider-key">
               <span>API key</span>
               <input
+                id="provider-key"
                 type="password"
                 value={apiKey}
-                placeholder={hasKey ? "Saved in Windows Credential Manager. Type to replace." : "Paste your API key"}
+                placeholder={hasKey ? "Saved in Windows Credential Manager. Type to replace." : provider.key === "optional" ? "Optional" : "Paste your API key"}
                 onChange={(e) => {
                   setApiKey(e.target.value);
                   setSaved(false);
@@ -122,23 +133,30 @@ export function SettingsView({ dto, onSaved, onClose }: { dto: SettingsDto; onSa
               />
             </label>
           )}
-          <fieldset className="field">
-            <span>Analysis</span>
-            <div className="choices">
-              <label>
-                <input type="radio" checked={s.pipeline === "cloud"} onChange={() => set("pipeline", "cloud")} />
-                <b>Detailed</b> One request with 15 screenshots, then the last 45 minutes are rewritten as a whole. Best with Claude or other large models.
-              </label>
-              <label>
-                <input type="radio" checked={s.pipeline === "local"} onChange={() => set("pipeline", "local")} />
-                <b>Lightweight</b> Each screenshot is described on its own, then combined into one card. Suited to small local vision models such as qwen3-vl:4b.
-              </label>
-            </div>
-          </fieldset>
+          {provider.cli ? (
+            <p className="hint">
+              The CLI reads the screenshots and writes the cards in one step. If that step fails, Daytrace tries again in the Detailed mode with the same
+              CLI, or with the fallback provider below when the CLI is signed out or out of usage.
+            </p>
+          ) : (
+            <fieldset className="field">
+              <span>Analysis</span>
+              <div className="choices">
+                <label>
+                  <input type="radio" checked={s.pipeline === "cloud"} onChange={() => set("pipeline", "cloud")} />
+                  <b>Detailed</b> One request with 15 screenshots, then the last 45 minutes are rewritten as a whole. Best with Claude or other large models.
+                </label>
+                <label>
+                  <input type="radio" checked={s.pipeline === "local"} onChange={() => set("pipeline", "local")} />
+                  <b>Lightweight</b> Each screenshot is described on its own, then combined into one card. Suited to small local vision models such as qwen3-vl:4b.
+                </label>
+              </div>
+            </fieldset>
+          )}
           {s.provider === "anthropic" && (
-            <label className="field">
+            <label className="field" htmlFor="provider-reasoning">
               <span>Model reasoning</span>
-              <select value={s.reasoning} onChange={(e) => set("reasoning", e.target.value as Settings["reasoning"])}>
+              <select id="provider-reasoning" value={s.reasoning} onChange={(e) => set("reasoning", e.target.value as Settings["reasoning"])}>
                 <option value="low">Low (recommended)</option>
                 <option value="off">Off (cheapest, breaks Dayflow’s card rules more often)</option>
                 <option value="default">Model default (about 1.5× the output cost of Low)</option>
@@ -152,8 +170,10 @@ export function SettingsView({ dto, onSaved, onClose }: { dto: SettingsDto; onSa
             </label>
           )}
           <div className="row">
-            <button className="ghost" onClick={runTest} disabled={busy !== null}>{busy === "test" ? "Testing…" : "Test connection"}</button>
-            {test && <span className={test.ok ? "ok" : "bad"}>{test.text}</span>}
+            <button className="ghost" type="button" onClick={runTest} disabled={busy !== null}>
+              {busy === "test" ? (provider.cli ? "Testing… (the CLI can take up to a minute)" : "Testing…") : "Test connection"}
+            </button>
+            {test && <span className={test.ok ? "ok" : "bad"} role="status">{test.text}</span>}
           </div>
           <ProviderAdvanced s={s} set={set} />
         </section>
