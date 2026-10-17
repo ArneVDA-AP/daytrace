@@ -25,13 +25,16 @@ const COUNTS_AS: { value: CountsAs; label: string }[] = [
 /**
  * Stable row keys for the category list. Names are unique but change on a rename, and the index
  * changes on a move or remove; a key by either would hand a row's unsaved typing to another
- * category. Renames made here move the key along with the name.
+ * category. A rename made here gives the new name the row's key while it is saved, so the row
+ * (and the focus in it) stays; names that are gone lose their key afterwards.
  */
-function useRowKeys() {
+function useRowKeys(names: string[]) {
   const ids = React.useRef(new Map<string, number>());
+  const pending = React.useRef(new Set<string>());
   const next = React.useRef(0);
+  const norm = (n: string) => n.trim().toLowerCase();
   const keyOf = (name: string) => {
-    const k = name.trim().toLowerCase();
+    const k = norm(name);
     let id = ids.current.get(k);
     if (id === undefined) {
       id = next.current++;
@@ -39,15 +42,19 @@ function useRowKeys() {
     }
     return id;
   };
-  const rename = (from: string, to: string) => {
-    const a = from.trim().toLowerCase();
-    const b = to.trim().toLowerCase();
-    const id = ids.current.get(a);
-    if (id === undefined || a === b) return;
-    ids.current.delete(a);
-    ids.current.set(b, id);
+  const renaming = (from: string, to: string) => {
+    const id = ids.current.get(norm(from));
+    if (id === undefined || norm(from) === norm(to)) return;
+    ids.current.set(norm(to), id);
+    pending.current.add(norm(to));
   };
-  return { keyOf, rename };
+  const renamed = (to: string) => pending.current.delete(norm(to));
+  const present = names.map(norm).join("\n");
+  React.useEffect(() => {
+    const keep = new Set(present.split("\n"));
+    for (const k of [...ids.current.keys()]) if (!keep.has(k) && !pending.current.has(k)) ids.current.delete(k);
+  }, [present]);
+  return { keyOf, renaming, renamed };
 }
 
 /** Settings > Categories: color, name, what it counts as, description for the model, order, add and remove. */
@@ -55,7 +62,7 @@ export function CategoriesSection() {
   const app = useAppState();
   const cats = app.settings.settings.categories;
   const save = useSave();
-  const keys = useRowKeys();
+  const keys = useRowKeys(cats.map((c) => c.name));
   const [error, setError] = React.useState<string | null>(null);
   const listRef = React.useRef<HTMLOListElement>(null);
   const focusLater = (selector: string) => requestAnimationFrame(() => listRef.current?.querySelector<HTMLElement>(selector)?.focus());
@@ -168,7 +175,7 @@ export function CategoriesSection() {
               last={i === movable - 1}
               onMove={(d, b) => void move(i, d, b)}
               onRemove={() => void remove(i)}
-              onRename={keys.rename}
+              onRename={keys}
               canRemove={movable > 1}
             />
           ))}
@@ -206,7 +213,7 @@ function CategoryRow({
   last: boolean;
   onMove: (d: -1 | 1, button: "up" | "down") => void;
   onRemove: () => void;
-  onRename: (from: string, to: string) => void;
+  onRename: { renaming: (from: string, to: string) => void; renamed: (to: string) => void };
   canRemove: boolean;
 }) {
   const save = useSave();
@@ -221,14 +228,13 @@ function CategoryRow({
   const name = useCommitField(
     c.name,
     async (v) => {
-      // The row keeps its key (and focus) through the rename; a refused rename gives it back.
+      // The row keeps its key (and focus) through the rename.
       const to = v.trim();
-      onRename(c.name, to);
+      onRename.renaming(c.name, to);
       try {
         await update({ name: to });
-      } catch (e) {
-        onRename(to, c.name);
-        throw e;
+      } finally {
+        onRename.renamed(to);
       }
     },
     {

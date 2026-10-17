@@ -120,7 +120,7 @@ export function TimePerDayChart({ rows, categories, colorFor }: { rows: DayRow[]
                 day={r.day}
                 future={r.future}
                 to={href("daily", { day: r.day })}
-                label={`${dayShortLabel(r.day)}: ${r.secs ? `${formatDuration(r.secs)} recorded, ${summary}` : "no recording"}. Open this day in Daily`}
+                label={`${dayShortLabel(r.day)}: ${r.secs ? `${formatDuration(r.secs)} recorded, ${summary}` : "not recorded"}. Open this day in Daily`}
               />
               <div ref={r === rows[0] ? ref : undefined} className="relative h-[30px] min-w-0">
                 {w > 0 && (
@@ -149,7 +149,7 @@ export function TimePerDayChart({ rows, categories, colorFor }: { rows: DayRow[]
                     })}
                     {r.secs === 0 && (
                       <text x={4} y={ROW_H / 2 + 4} className="text-caption" style={{ fill: "var(--subtle-foreground)" }}>
-                        {r.future ? "Not yet" : "No recording"}
+                        {r.future ? "Not yet" : "Not recorded"}
                       </text>
                     )}
                   </svg>
@@ -368,7 +368,7 @@ export interface Lane {
 
 function laneSummary(l: Lane): string {
   const real = l.cards.filter((c) => c.category.trim().toLowerCase() !== "system");
-  if (!l.cards.length) return l.future ? "not yet" : "no recording";
+  if (!l.cards.length) return l.future ? "not yet" : "not recorded";
   const first = Math.min(...l.cards.map((c) => c.startTs));
   const last = Math.max(...l.cards.map((c) => c.endTs));
   return `${clock(first)} to ${clock(last)}, ${real.length} ${real.length === 1 ? "card" : "cards"}`;
@@ -525,7 +525,7 @@ export function WeekLanes({
                   ))}
                   {!l.cards.length && (
                     <text x={8} y={LANE_H / 2 + 4} className="text-caption" style={{ fill: "var(--subtle-foreground)" }}>
-                      {l.future ? "Not yet" : "No recording"}
+                      {l.future ? "Not yet" : "Not recorded"}
                     </text>
                   )}
                 </svg>
@@ -587,7 +587,7 @@ export function LanesTable({ lanes }: { lanes: Lane[] }) {
               <th scope="row" className="py-1.5 text-left font-normal">
                 <DayLabel day={l.day} future={l.future} to={href("timeline", { day: l.day })} className="rounded-sm underline-offset-2 hover:underline" />
               </th>
-              <td className="py-1.5 font-mono tnum">{has ? clock(Math.min(...l.cards.map((c) => c.startTs))) : <span className="font-sans text-subtle-foreground">{l.future ? "Not yet" : "No recording"}</span>}</td>
+              <td className="py-1.5 font-mono tnum">{has ? clock(Math.min(...l.cards.map((c) => c.startTs))) : <span className="font-sans text-subtle-foreground">{l.future ? "Not yet" : "Not recorded"}</span>}</td>
               <td className="py-1.5 font-mono tnum">{has ? clock(Math.max(...l.cards.map((c) => c.endTs))) : ""}</td>
               <td className="py-1.5 text-right tnum">{has ? l.cards.length : ""}</td>
             </tr>

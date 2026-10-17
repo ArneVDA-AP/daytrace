@@ -121,7 +121,7 @@ export default function WeeklySection() {
               <EmptyMedia variant="icon">
                 <CalendarX2 aria-hidden="true" />
               </EmptyMedia>
-              <EmptyTitle>{isCurrent ? "No cards this week yet" : `No recording in the week of ${formatWeekRange(start)}`}</EmptyTitle>
+              <EmptyTitle>{isCurrent ? "No cards this week yet" : `Nothing recorded in the week of ${formatWeekRange(start)}`}</EmptyTitle>
               <EmptyDescription>
                 {isCurrent
                   ? "The weekly review fills in as soon as one day of this week has cards. Daytrace writes a card about every 15 minutes while it records."

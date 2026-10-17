@@ -160,7 +160,7 @@ export default function DailySection() {
           <Empty className="min-h-full">
             <EmptyHeader>
               <EmptyMedia variant="icon">{isToday ? <Clock3 aria-hidden="true" /> : <Moon aria-hidden="true" />}</EmptyMedia>
-              <EmptyTitle>{isToday ? "No cards yet today" : `No recording on ${formatDayTitle(day)}`}</EmptyTitle>
+              <EmptyTitle>{isToday ? "No cards yet today" : `Nothing recorded on ${formatDayTitle(day)}`}</EmptyTitle>
               <EmptyDescription>
                 {isToday
                   ? "Daytrace writes a card about every 15 minutes while it records. The standup and the day’s numbers are made from those cards."
@@ -214,7 +214,7 @@ export default function DailySection() {
                 <Empty className="border py-10">
                   <EmptyHeader>
                     <EmptyMedia variant="icon">{isToday ? <Clock3 aria-hidden="true" /> : <Moon aria-hidden="true" />}</EmptyMedia>
-                    <EmptyTitle>{isToday ? "No cards yet today" : `No recording on ${formatDayTitle(day)}`}</EmptyTitle>
+                    <EmptyTitle>{isToday ? "No cards yet today" : `Nothing recorded on ${formatDayTitle(day)}`}</EmptyTitle>
                     <EmptyDescription>
                       {isToday ? "The day’s numbers fill in as Daytrace writes cards, about every 15 minutes while it records." : "This day has no cards, so there are no numbers to show."}
                     </EmptyDescription>
