@@ -558,6 +558,8 @@ mod tests {
         assert_eq!(p("cli search").command, Command::Search(None));
         assert_eq!(p("cli card 12").command, Command::Card(Some("12".into())));
         assert_eq!(p("cli days --limit 5").limit, Some(5));
+        assert_eq!(p("cli pause 30").command, Command::Pause(Some("30".into())));
+        assert_eq!(p("cli resume --json").command, Command::Resume);
         assert_eq!(p("cli --version").command, Command::Version);
         assert!(parse(&args("cli frobnicate")).unwrap_err().contains("Unknown command"));
         assert!(parse(&args("cli today --bogus")).unwrap_err().contains("Unknown option --bogus"));

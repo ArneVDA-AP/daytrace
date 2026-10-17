@@ -67,7 +67,7 @@ export function AutoInstallRows() {
         />
       </Row>
       {install && install.stage !== "idle" && (
-        <Row label="Update" description={<span aria-live="polite">{installText(install, on)}</span>}>
+        <Row label="New version" description={<span aria-live="polite">{installText(install, on)}</span>}>
           {install.stage === "ready" && (
             <Button variant="outline" onClick={() => void installNow()} disabled={starting}>
               {starting ? <Spinner {...SPINNER} /> : <Download aria-hidden />}

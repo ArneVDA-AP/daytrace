@@ -9,6 +9,7 @@
  *   ready          an update is downloaded and waits for the PC to be idle
  *   installfail    the download failed (no signed update in the release)
  *   debugfail      Copy debug info fails
+ *   batchapi       the reprocess dialog says the requests skip the Batch API
  * Example: http://localhost:1420/?f4=ready&settings=update#/settings?section=about
  */
 import type { InstallStatus, WhatsNew } from "@/views/platform-api";
@@ -51,6 +52,12 @@ export function applyF4Mock(base: Record<string, (a: Args) => unknown>, ctx: { q
       ? { version: "0.3.0", notes: NOTES, source: "changelog", releaseUrl: null }
       : null;
   const info = base.platform_info;
+  const plan = base.te_reprocess_day_plan;
+  if (plan && v.has("batchapi"))
+    base.te_reprocess_day_plan = (a: Args) => ({
+      ...(plan(a) as object),
+      costNote: "With the Batch API on, these requests are sent directly so the day is done in minutes instead of hours. They cost the regular price, twice the Batch API price.",
+    });
   Object.assign(base, {
     platform_info: (a: Args) => ({ ...(info(a) as object), install: install() }),
     platform_install_update: () => {

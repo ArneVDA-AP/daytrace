@@ -72,9 +72,17 @@ pub fn may_install(m: &Moment) -> bool {
     m.locked || (m.idle_secs >= IDLE_BEFORE_INSTALL && !m.display_required)
 }
 
+/// Whether two version strings name the same version ("v0.3.0" and "0.3.0" do).
+pub fn same_version(a: &str, b: &str) -> bool {
+    match (super::update::Version::parse(a), super::update::Version::parse(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => a.trim() == b.trim(),
+    }
+}
+
 /// Whether to start downloading `latest` now.
 pub fn should_prepare(status: &InstallStatus, latest: &str, now: i64) -> bool {
-    let same = status.version.as_deref() == Some(latest);
+    let same = status.version.as_deref().is_some_and(|v| same_version(v, latest));
     match status.stage {
         Stage::Idle => true,
         Stage::Downloading | Stage::Installing => false,
@@ -86,7 +94,7 @@ pub fn should_prepare(status: &InstallStatus, latest: &str, now: i64) -> bool {
 
 /// Whether Daytrace installs `version` by itself, so the "new version" notification is left out.
 pub fn installs_itself(status: &InstallStatus, version: &str) -> bool {
-    matches!(status.stage, Stage::Downloading | Stage::Ready | Stage::Installing) && status.version.as_deref() == Some(version)
+    matches!(status.stage, Stage::Downloading | Stage::Ready | Stage::Installing) && status.version.as_deref().is_some_and(|v| same_version(v, version))
 }
 
 /// Arguments for the NSIS installer after the passive switch the plugin adds: `/R` starts
@@ -166,6 +174,7 @@ mod tests {
         s.stage = Stage::Ready;
         assert!(!should_prepare(&s, "0.3.0", 1000));
         assert!(should_prepare(&s, "0.3.1", 1000), "a newer release replaces the download");
+        assert!(!should_prepare(&s, "v0.3.0", 1000) && installs_itself(&s, "v0.3.0"), "same version, other spelling");
         assert!(installs_itself(&s, "0.3.0") && !installs_itself(&s, "0.3.1"));
         s = InstallStatus { stage: Stage::Failed, version: Some("0.3.0".into()), failed_at: Some(1000), error: Some("x".into()), ..InstallStatus::idle() };
         assert!(!installs_itself(&s, "0.3.0"), "a failed download keeps the notification");

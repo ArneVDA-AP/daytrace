@@ -546,13 +546,22 @@ pub fn start_download(app: &AppHandle, latest: &str) {
     let latest = latest.to_string();
     tauri::async_runtime::spawn(async move {
         match download(&app).await {
+            // latest.json belongs to the same release as the check; a mismatch means the release
+            // was changed meanwhile: no install, the next try is in six hours.
+            Ok((update, _)) if !autoupdate::same_version(&update.version, &latest) => {
+                let msg = format!("The signed update is version {}, not {latest}. Use the release page.", update.version);
+                log::warn!("update: {msg}");
+                set_install(&app, |s| {
+                    s.stage = autoupdate::Stage::Failed;
+                    s.error = Some(msg);
+                    s.failed_at = Some(now_ts());
+                });
+            }
             Ok((update, bytes)) => {
                 log::info!("update {} downloaded and verified ({} bytes); installs when the PC is idle or locked", update.version, bytes.len());
-                let version = update.version.clone();
                 *PENDING.lock().unwrap() = Some((update, bytes));
                 set_install(&app, |s| {
                     s.stage = autoupdate::Stage::Ready;
-                    s.version = Some(version);
                     s.error = None;
                 });
             }
@@ -1147,7 +1156,12 @@ mod tests {
     #[test]
     fn admits_within_limits() {
         let (_d, st) = state();
-        let now = 1_800_000_000;
+        // Local noon, so the hours added below stay inside one logical day (4 AM to 4 AM) in
+        // every time zone.
+        let now = {
+            use chrono::TimeZone;
+            chrono::Local.with_ymd_and_hms(2027, 1, 15, 12, 0, 0).earliest().unwrap().timestamp()
+        };
         assert_eq!(admit(&st, Kind::MissingKey, "", now, false), Outcome::Shown);
         assert_eq!(admit(&st, Kind::MissingKey, "", now + 3600, false), Outcome::Skipped, "once a day");
         assert_eq!(admit(&st, Kind::RecordingProblem, "", now + 10, false), Outcome::Later, "minimum gap");

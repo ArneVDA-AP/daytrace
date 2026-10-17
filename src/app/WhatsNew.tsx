@@ -13,6 +13,7 @@ import { platformApi, type WhatsNew as Notes } from "@/views/platform-api";
 export function WhatsNew() {
   const [notes, setNotes] = React.useState<{ info: Notes; nodes: React.ReactNode[] } | null>(null);
   const [open, setOpen] = React.useState(false);
+  const closeRef = React.useRef<HTMLButtonElement>(null);
 
   React.useEffect(() => {
     let alive = true;
@@ -43,7 +44,14 @@ export function WhatsNew() {
   const { info, nodes } = notes;
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent className="gap-5 sm:max-w-[34rem]">
+      <DialogContent
+        className="gap-5 sm:max-w-[34rem]"
+        onOpenAutoFocus={(e) => {
+          // Start on Close rather than on the notes (the first focusable element).
+          e.preventDefault();
+          closeRef.current?.focus();
+        }}
+      >
         <DialogHeader>
           <DialogTitle className="font-display text-title font-semibold">What’s new in Daytrace {info.version}</DialogTitle>
           <DialogDescription className="text-meta">
@@ -64,7 +72,7 @@ export function WhatsNew() {
             </Button>
           )}
           <DialogClose asChild>
-            <Button>Close</Button>
+            <Button ref={closeRef}>Close</Button>
           </DialogClose>
         </DialogFooter>
       </DialogContent>
