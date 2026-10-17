@@ -1,0 +1,20 @@
+/* Settings → Storage and AI tools (StorageSection.tsx). */
+.storage-usage { display: grid; grid-template-columns: 190px 1fr; gap: 6px 12px; margin: 10px 0 12px; }
+.storage-usage dt { color: var(--muted); }
+.storage-usage dd { margin: 0; }
+.storage-notice { border-left: 3px solid var(--danger); background: var(--surface); padding: 8px 12px; margin: 0 0 12px; max-width: 64ch; }
+.storage-warn { color: var(--danger); margin: 0 0 12px; max-width: 64ch; }
+.storage-danger { background: var(--danger); color: var(--paper); border: none; border-radius: 6px; padding: 5px 12px; font-weight: 600; }
+.storage-older input { flex: 0 0 84px; min-width: 0; width: 84px; }
+.storage-days { width: 100%; border-collapse: collapse; margin: 14px 0 8px; }
+.storage-days caption { text-align: left; font-weight: 600; padding-bottom: 6px; }
+.storage-days th, .storage-days td { text-align: left; padding: 5px 10px 5px 0; border-bottom: 1px solid var(--soft); font-weight: normal; }
+.storage-days thead th { color: var(--muted); font-size: 12.5px; }
+.storage-days td:last-child { text-align: right; white-space: nowrap; }
+.storage-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.storage-actions { margin-top: 8px; }
+.storage-copy { margin: 12px 0; max-width: 720px; }
+.storage-code {
+  display: block; margin: 4px 0 0; padding: 8px 10px; background: var(--soft); border: 1px solid var(--rule); border-radius: 6px;
+  font-family: "Cascadia Mono", Consolas, monospace; font-size: 12.5px; white-space: pre-wrap; word-break: break-all; user-select: text;
+}

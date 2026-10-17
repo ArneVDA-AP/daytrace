@@ -56,6 +56,8 @@ export interface Settings {
   appearance: "system" | "light" | "dark";
   notifications: NotificationPrefs;
   checkUpdates: boolean;
+  /** Maximum disk space for screenshots in GB (10^9 bytes); 0 turns the limit off. */
+  storageLimitGb: number;
 }
 
 export interface NotificationPrefs {

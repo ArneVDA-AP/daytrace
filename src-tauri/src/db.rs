@@ -113,6 +113,11 @@ pub const ERROR_TITLE: &str = "Processing failed";
 pub const USER_EDITED_KEY: &str = "userEdited";
 /// SQL condition that is true for cards without the user-edited mark.
 const NOT_USER_EDITED: &str = "instr(coalesce(metadata, ''), '\"userEdited\":') = 0";
+/// Screenshot images a storage purge may delete (`?1` = keep images captured at or after this):
+/// live, with a file, and not part of a batch that still waits for analysis.
+const PURGEABLE: &str = "s.is_deleted = 0 AND s.file_path != '' AND s.captured_at < ?1
+    AND NOT EXISTS (SELECT 1 FROM batch_screenshots bs JOIN analysis_batches b ON b.id = bs.batch_id
+                    WHERE bs.screenshot_id = s.id AND b.status IN ('pending', 'processing'))";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -388,6 +393,79 @@ impl Db {
              WHERE created_at < datetime(?, 'unixepoch') AND (request IS NOT NULL OR response IS NOT NULL)",
             [before],
         )?)
+    }
+
+    // ---- storage accounting and purges (features/storage) ----
+
+    /// `(captured_at, file_size)` of live screenshots with an image file captured since `since`.
+    pub fn live_screenshot_sizes_since(&self, since: i64) -> Result<Vec<(i64, i64)>> {
+        let c = self.c();
+        let mut st = c.prepare("SELECT captured_at, COALESCE(file_size, 0) FROM screenshots WHERE is_deleted = 0 AND file_path != '' AND captured_at >= ?")?;
+        let rows = st.query_map([since], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// Live screenshot images grouped in `bucket_secs` slices of time:
+    /// `(slice start, count, bytes)`, oldest first.
+    pub fn live_screenshot_buckets(&self, bucket_secs: i64) -> Result<Vec<(i64, i64, i64)>> {
+        let c = self.c();
+        let mut st = c.prepare(
+            "SELECT (captured_at / ?1) * ?1 AS b, COUNT(*), COALESCE(SUM(file_size), 0) FROM screenshots
+             WHERE is_deleted = 0 AND file_path != '' GROUP BY b ORDER BY b",
+        )?;
+        let rows = st.query_map([bucket_secs.max(1)], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// Bytes of live screenshot images, by the sizes recorded at capture.
+    pub fn live_screenshot_bytes(&self) -> Result<i64> {
+        Ok(self.c().query_row("SELECT COALESCE(SUM(file_size), 0) FROM screenshots WHERE is_deleted = 0 AND file_path != ''", [], |r| r.get(0))?)
+    }
+
+    /// Soft-deletes live screenshot images captured in [from, to) and returns `(path, size)` of
+    /// each. Kept: images captured at or after `keep_after` and images of batches still waiting
+    /// for analysis. Rows stay (soft delete), so batches and cards are untouched.
+    pub fn expire_screenshots_between(&self, from: i64, to: i64, keep_after: i64) -> Result<Vec<(String, i64)>> {
+        self.expire_screenshots_with(
+            &format!("SELECT s.id, s.file_path, COALESCE(s.file_size, 0) FROM screenshots s WHERE {PURGEABLE} AND s.captured_at >= ?2 AND s.captured_at < ?3 ORDER BY s.captured_at"),
+            rusqlite::params![keep_after, from, to],
+            i64::MAX,
+        )
+    }
+
+    /// Soft-deletes the oldest live screenshot images until at least `bytes` are freed, with the
+    /// same exceptions as `expire_screenshots_between`.
+    pub fn expire_oldest_screenshots(&self, bytes: i64, keep_after: i64) -> Result<Vec<(String, i64)>> {
+        self.expire_screenshots_with(
+            &format!("SELECT s.id, s.file_path, COALESCE(s.file_size, 0) FROM screenshots s WHERE {PURGEABLE} ORDER BY s.captured_at, s.id"),
+            rusqlite::params![keep_after],
+            bytes,
+        )
+    }
+
+    fn expire_screenshots_with(&self, select: &str, params: impl rusqlite::Params, bytes: i64) -> Result<Vec<(String, i64)>> {
+        let mut c = self.c();
+        let tx = c.transaction()?;
+        let mut picked = vec![];
+        {
+            let mut st = tx.prepare(select)?;
+            let mut rows = st.query(params)?;
+            let mut freed = 0i64;
+            while freed < bytes {
+                let Some(r) = rows.next()? else { break };
+                let size: i64 = r.get(2)?;
+                freed += size.max(0);
+                picked.push((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, size));
+            }
+        }
+        {
+            let mut st = tx.prepare("UPDATE screenshots SET is_deleted = 1 WHERE id = ?")?;
+            for (id, _, _) in &picked {
+                st.execute([id])?;
+            }
+        }
+        tx.commit()?;
+        Ok(picked.into_iter().map(|(_, p, s)| (p, s)).collect())
     }
 
     // ---- batches ----

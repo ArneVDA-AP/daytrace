@@ -7,6 +7,7 @@ import { CliPathField } from "./settings/CliPathField";
 import { cliCommand, cliSignIn, PROVIDERS, providerInfo } from "./settings/providerInfo";
 import { PrivateAppPicker, addPrivateApp } from "./settings/PrivateAppPicker";
 import { withLiveRecordingState } from "./views/platform-api";
+import { StorageSection } from "./settings/StorageSection";
 
 export function SettingsView({ dto, onSaved, onClose }: { dto: SettingsDto; onSaved: (d: SettingsDto) => void; onClose: () => void }) {
   const [s, setS] = useState<Settings>(structuredClone(dto.settings));
@@ -296,6 +297,7 @@ export function SettingsView({ dto, onSaved, onClose }: { dto: SettingsDto; onSa
           <p className="hint">Screenshots, the timeline database and logs are stored in {dto.dataDir}</p>
           <button className="ghost" onClick={() => api.openDataDir()}>Open folder</button>
         </section>
+        <StorageSection s={s} set={set} />
       </div>
 
       <footer className="settings-foot">

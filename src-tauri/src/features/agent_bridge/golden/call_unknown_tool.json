@@ -1,0 +1,17 @@
+{
+  "id": 5,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"error\":\"Unknown tool: delete_activity\",\"schema_version\":1}",
+        "type": "text"
+      }
+    ],
+    "isError": true,
+    "structuredContent": {
+      "error": "Unknown tool: delete_activity",
+      "schema_version": 1
+    }
+  }
+}

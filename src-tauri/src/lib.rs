@@ -56,6 +56,7 @@ pub fn run() {
             features::platform_extras::spawn(app.handle().clone());
             capture::spawn(state.clone());
             features::insights::spawn(state.clone());
+            features::storage::spawn(state.clone());
             analysis::spawn(state);
             if !start_minimized {
                 tray::show_main(app.handle());
@@ -95,6 +96,13 @@ pub fn run() {
             features::chat::chat_get_memory,
             features::chat::chat_save_memory,
             features::chat::chat_open_link,
+            // storage commands
+            features::storage::storage_usage,
+            features::storage::storage_delete_older_than,
+            features::storage::storage_delete_day,
+            features::storage::storage_backup_now,
+            features::storage::storage_health,
+            features::storage::storage_agent_setup,
             // journal commands
             features::journal::journal_get,
             features::journal::journal_save_plan,

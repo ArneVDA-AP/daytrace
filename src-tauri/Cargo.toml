@@ -4,6 +4,9 @@ version = "0.2.1"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2024"
+# Two binaries: the app and daytrace-mcp. Tauri bundles the default-run binary as the app and
+# installs the other next to it (tauri build runs `cargo build --bins`).
+default-run = "daytrace"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -13,6 +16,15 @@ edition = "2024"
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "daytrace_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "daytrace"
+path = "src/main.rs"
+
+# MCP server (stdio) and command line for AI tools; console program, read-only database access.
+[[bin]]
+name = "daytrace-mcp"
+path = "src/bin/daytrace-mcp.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -26,7 +38,7 @@ tauri-plugin-autostart = "2.7.0"
 tauri-plugin-single-instance = "2.5.4"
 tauri-plugin-dialog = "2.8.3"
 tauri-plugin-notification = "2.7.0"
-rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled", "backup"] }
 xcap = { version = "0.9.8", default-features = false }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "time", "sync"] }
@@ -38,6 +50,7 @@ env_logger = "0.11.11"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
 jpeg-encoder = { version = "0.7.1", features = ["simd"] }
 regex = { version = "1.13.1", default-features = false, features = ["std", "unicode-perl"] }
+iana-time-zone = "0.1.65"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
