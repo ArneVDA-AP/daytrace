@@ -165,6 +165,11 @@ impl CliBackend {
         &self.work_root
     }
 
+    /// The process runner (a fake in tests).
+    pub fn runner(&self) -> &Arc<dyn ProcessRunner> {
+        &self.runner
+    }
+
     pub fn is_windows(&self) -> bool {
         self.windows
     }

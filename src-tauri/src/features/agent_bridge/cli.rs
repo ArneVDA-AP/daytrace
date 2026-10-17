@@ -2,11 +2,12 @@
 //! closed; they go straight to the database, read-only.
 //!
 //! Ported from Dayflow's tools/dayflow-cli (MIT, (c) 2025 Jerry Liu): main.swift (commands, flags,
-//! help, exit codes) and Render.swift (text output, without terminal colors). Dayflow's write
-//! commands (`timeline update/delete`, `categories add/...`, `goal set`) and `link`/`unlink` are
-//! not ported.
+//! help, exit codes) and Render.swift (text output, without terminal colors). The write commands
+//! (`timeline update/delete`, `categories add/...`, `goal set`) and `link`/`unlink` are in
+//! cli_write.rs.
 //!
-//! Exit codes: 0 success · 1 unexpected · 2 bad arguments · 3 not found · 5 no Daytrace data.
+//! Exit codes: 0 success · 1 unexpected · 2 bad arguments · 3 not found · 4 edits off · 5 no
+//! Daytrace data · 6 Daytrace not running (writes).
 
 use super::mcp::weekly_json;
 use super::queries::{self as q, Activity, QueryError, Source};
@@ -29,6 +30,22 @@ pub enum Command {
     Search(Option<String>),
     Days,
     Observations(Option<String>),
+    /// A change sent to the running app.
+    Write(WriteCmd),
+    /// Add the daytrace-mcp folder to the user's PATH (`unlink`: remove it).
+    Link,
+    Unlink,
+}
+
+/// The write commands (cli_write.rs).
+#[derive(Debug, Clone, PartialEq)]
+pub enum WriteCmd {
+    /// `timeline update|delete <id>`
+    Activity { sub: String, id: Option<String> },
+    /// `categories add|rename|color|describe|remove ...`
+    Category { sub: String, rest: Vec<String> },
+    /// `goal set [date]`
+    Goal { date: Option<String> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -49,10 +66,18 @@ pub struct Invocation {
     pub force: bool,
     pub db: Option<String>,
     pub limit: Option<usize>,
+    /// The MCP server for Daytrace's chat (read tools only).
+    pub chat: bool,
+    /// Confirms a destructive write without asking.
+    pub yes: bool,
+    pub title: Option<String>,
+    pub color: Option<String>,
+    pub focus_minutes: Option<String>,
+    pub distraction_limit: Option<String>,
 }
 
-const VALUE_FLAGS: &[&str] = &["--category", "--from", "--to", "--db", "--limit"];
-const BOOL_FLAGS: &[&str] = &["--json", "--summary", "--detailed", "--force", "--help", "--version"];
+const VALUE_FLAGS: &[&str] = &["--category", "--from", "--to", "--db", "--limit", "--title", "--color", "--focus-minutes", "--distraction-limit-minutes"];
+const BOOL_FLAGS: &[&str] = &["--json", "--summary", "--detailed", "--force", "--help", "--version", "--yes", "--chat"];
 
 pub const HELP: &str = "daytrace-mcp — your Daytrace timeline for AI tools and the terminal
 
@@ -77,12 +102,28 @@ Reading (works even when Daytrace is closed)
   days                       Days with activities, newest first
     --limit <n>              How many (default 30)
 
+Editing (needs Daytrace running, with \"Allow edits\" on in Settings > AI tools)
+  timeline update <id> --title <text> | --category <name>
+  timeline delete <id>       Asks first; also removes its observations
+  categories add <name> [--color <hex>]
+  categories rename <old> <new>
+  categories color <name> <hex>
+  categories describe <name> <text>
+  categories remove <name>   Asks first; past activities keep the name
+  goal set [YYYY-MM-DD] --focus-minutes <n> [--distraction-limit-minutes <n>]
+    --yes                    Confirm a delete without asking
+
+Setup
+  link                       Add the daytrace-mcp folder to your PATH
+  unlink                     Remove it
+
 Options
   --db <path>                The database (daytrace.sqlite) or its folder. Default:
                              %APPDATA%\\dev.daytrace.app, or DAYTRACE_DATA_DIR when set.
   --json                     Stable, scriptable output
 
-Days run from 4 AM to 4 AM. Exit codes: 0 ok, 1 error, 2 bad arguments, 3 not found, 5 no data.";
+Days run from 4 AM to 4 AM. Exit codes: 0 ok, 1 error, 2 bad arguments, 3 not found, 4 edits
+off, 5 no data, 6 Daytrace not running.";
 
 /// Parses the arguments after the program name.
 pub fn parse(args: &[String]) -> Result<Invocation, String> {
@@ -96,6 +137,12 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
         force: false,
         db: None,
         limit: None,
+        chat: false,
+        yes: false,
+        title: None,
+        color: None,
+        focus_minutes: None,
+        distraction_limit: None,
     };
     let mut positional: Vec<String> = vec![];
     let mut flags: Vec<&str> = vec![];
@@ -122,6 +169,10 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
                     "--from" => inv.from = Some(value),
                     "--to" => inv.to = Some(value),
                     "--db" => inv.db = Some(value),
+                    "--title" => inv.title = Some(value),
+                    "--color" => inv.color = Some(value),
+                    "--focus-minutes" => inv.focus_minutes = Some(value),
+                    "--distraction-limit-minutes" => inv.distraction_limit = Some(value),
                     _ => inv.limit = Some(value.trim().parse().map_err(|_| format!("--limit needs a number, not \"{value}\"."))?),
                 }
             } else if let Some(f) = BOOL_FLAGS.iter().find(|f| **f == name) {
@@ -136,6 +187,8 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
     }
     inv.json = flags.contains(&"--json");
     inv.force = flags.contains(&"--force");
+    inv.yes = flags.contains(&"--yes");
+    inv.chat = flags.contains(&"--chat");
     inv.detail = if flags.contains(&"--detailed") {
         Detail::Detailed
     } else if flags.contains(&"--summary") {
@@ -166,6 +219,9 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
         Some("help") => Command::Help,
         Some("version") => Command::Version,
         Some("status") => Command::Status,
+        Some("timeline") if matches!(arg(1).as_deref(), Some("update" | "delete")) => {
+            Command::Write(WriteCmd::Activity { sub: arg(1).unwrap_or_default(), id: arg(2) })
+        }
         Some("timeline") => Command::Timeline(arg(1)),
         Some("today") => Command::Timeline(None),
         Some("yesterday") => Command::Timeline(Some("yesterday".into())),
@@ -173,7 +229,12 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
         Some("observations") => Command::Observations(arg(1)),
         Some("daily") => Command::Daily(arg(1)),
         Some("weekly") => Command::Weekly(arg(1)),
+        Some("categories") if positional.len() > 1 => Command::Write(WriteCmd::Category { sub: positional[1].clone(), rest: positional[2..].to_vec() }),
         Some("categories") => Command::Categories,
+        Some("goal") if arg(1).as_deref() == Some("set") => Command::Write(WriteCmd::Goal { date: arg(2) }),
+        Some("goal") => return Err("Usage: daytrace-mcp cli goal set [YYYY-MM-DD] --focus-minutes <n> ...".into()),
+        Some("link") => Command::Link,
+        Some("unlink") => Command::Unlink,
         Some("search") => Command::Search((positional.len() > 1).then(|| positional[1..].join(" "))),
         Some("days") => Command::Days,
         Some(other) => return Err(format!("Unknown command \"{other}\". Run `daytrace-mcp help`.")),
@@ -329,7 +390,7 @@ fn day_or_today(arg: &Option<String>) -> Result<q::DayWindow, QueryError> {
 
 fn execute(inv: &Invocation, source: &Source) -> Result<Done, QueryError> {
     match &inv.command {
-        Command::Serve | Command::Help => Ok(Done { json: None, text: HELP.lines().map(String::from).collect() }),
+        Command::Serve | Command::Help | Command::Write(_) | Command::Link | Command::Unlink => Ok(Done { json: None, text: HELP.lines().map(String::from).collect() }),
         Command::Version => both(json!({"version": env!("CARGO_PKG_VERSION")}), vec![format!("daytrace-mcp {}", env!("CARGO_PKG_VERSION"))]),
         Command::Status => {
             let s = q::fetch_status(&source.open()?)?;
@@ -340,11 +401,18 @@ fn execute(inv: &Invocation, source: &Source) -> Result<Done, QueryError> {
                     if minutes < 2 { "last capture just now".into() } else { format!("last capture {} ago", fmt_duration(minutes)) }
                 }
             };
+            let mut s = s;
+            s.edits_enabled = source.edits_enabled();
+            s.app_running = Some(super::bridge::app_running(&source.data_dir));
             let mut text = vec![format!("  Daytrace · {capture}"), format!("  Today: {} (day starts 4:00 AM, {})", s.today, q::time_zone())];
             if s.pending_batches > 0 {
                 text.push(format!("  Analysis backlog: {} batch{}", s.pending_batches, if s.pending_batches == 1 { "" } else { "es" }));
             }
-            text.push("  Edits: off (reads only)".into());
+            text.push(match (s.edits_enabled, s.app_running) {
+                (false, _) => "  Edits: off (reads only)".to_string(),
+                (true, Some(true)) => "  Edits: on".to_string(),
+                (true, _) => "  Edits: on, but Daytrace isn't running".to_string(),
+            });
             both(q::status_json(&s), text)
         }
         Command::Timeline(day) => {
@@ -483,8 +551,29 @@ fn timeline_range(inv: &Invocation, source: &Source) -> Result<Done, QueryError>
     both(json!({"from": f.day, "to": t.day, "cards": acts.iter().map(|a| q::activity_json(a, detailed)).collect::<Vec<_>>()}), text)
 }
 
+/// Asks on the terminal; None when stdin is not one.
+fn ask_terminal(question: &str) -> Option<bool> {
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal() {
+        return None;
+    }
+    eprint!("{question} [y/N] ");
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer).ok()?;
+    Some(matches!(answer.trim().to_lowercase().as_str(), "y" | "yes"))
+}
+
 /// Runs one CLI command; returns the exit code. Data goes to `out`, diagnostics to `err`.
 pub fn run(inv: &Invocation, source: &Source, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    match &inv.command {
+        Command::Write(cmd) => {
+            let send = |op: &str, args: &Value| super::bridge::send(&source.data_dir, op, args);
+            return super::cli_write::run(inv, cmd, source, &send, &mut ask_terminal, out, err);
+        }
+        Command::Link => return super::cli_write::run_link(true, out, err),
+        Command::Unlink => return super::cli_write::run_link(false, out, err),
+        _ => {}
+    }
     match execute(inv, source) {
         Ok(done) => {
             let written = match (inv.json, done.json) {
@@ -544,6 +633,21 @@ mod tests {
         assert!(parse(&args("cli today --bogus")).unwrap_err().contains("Unknown option --bogus"));
         assert!(parse(&args("cli timeline --from")).unwrap_err().contains("needs a value"));
         assert!(parse(&args("cli days --limit x")).is_err());
+        // Writes and setup.
+        let u = p("cli timeline update 12 --title Parser --category Work");
+        assert_eq!(u.command, Command::Write(WriteCmd::Activity { sub: "update".into(), id: Some("12".into()) }));
+        assert_eq!((u.title.as_deref(), u.category.as_deref()), (Some("Parser"), Some("Work")));
+        assert_eq!(p("cli timeline delete 3 --yes").yes, true);
+        assert_eq!(p("cli categories rename Work Day job").command, Command::Write(WriteCmd::Category { sub: "rename".into(), rest: vec!["Work".into(), "Day".into(), "job".into()] }));
+        assert_eq!(p("cli categories").command, Command::Categories);
+        let g = p("cli goal set 2026-03-11 --focus-minutes 240 --distraction-limit-minutes 30");
+        assert_eq!(g.command, Command::Write(WriteCmd::Goal { date: Some("2026-03-11".into()) }));
+        assert_eq!((g.focus_minutes.as_deref(), g.distraction_limit.as_deref()), (Some("240"), Some("30")));
+        assert!(parse(&args("cli goal")).is_err());
+        assert_eq!(p("cli link").command, Command::Link);
+        assert_eq!(p("unlink").command, Command::Unlink);
+        let chat = p("--chat");
+        assert_eq!((chat.command, chat.chat), (Command::Serve, true));
     }
 
     fn run_str(f: &Fixture, line: &str) -> (i32, String, String) {

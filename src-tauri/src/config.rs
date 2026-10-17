@@ -156,6 +156,10 @@ pub struct Settings {
     /// Maximum disk space for screenshots in GB (10^9 bytes); the oldest are deleted first when
     /// they take more. 0 turns the limit off (retention_days still applies).
     pub storage_limit_gb: u32,
+    // ---- agent_bridge ----
+    /// Let AI tools (daytrace-mcp's write tools and CLI commands) change categories, activities
+    /// and day goals through the running app. Off by default; reads never need it.
+    pub allow_agent_edits: bool,
 }
 
 impl Default for Settings {
@@ -192,6 +196,7 @@ impl Default for Settings {
             notifications: Default::default(),
             check_updates: true,
             storage_limit_gb: 0,
+            allow_agent_edits: false,
         }
     }
 }
