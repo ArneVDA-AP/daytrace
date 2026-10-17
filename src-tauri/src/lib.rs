@@ -40,6 +40,7 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
             let root = std::env::var_os("DAYTRACE_DATA_DIR")
                 .map(std::path::PathBuf::from)
@@ -49,8 +50,10 @@ pub fn run() {
             log::info!("Daytrace {} starting; data dir {}", env!("CARGO_PKG_VERSION"), root.display());
             let paths = config::Paths::new(root)?;
             let state = Arc::new(state::AppState::new(paths)?);
+            features::platform_extras::init(&state);
             app.manage(state.clone());
             tray::create(app.handle())?;
+            features::platform_extras::spawn(app.handle().clone());
             capture::spawn(state.clone());
             features::insights::spawn(state.clone());
             analysis::spawn(state);
@@ -94,6 +97,17 @@ pub fn run() {
             features::chat::chat_open_link,
             // journal commands
             // platform_extras commands
+            features::platform_extras::platform_info,
+            features::platform_extras::platform_pause,
+            features::platform_extras::platform_resume,
+            features::platform_extras::platform_finish_onboarding,
+            features::platform_extras::platform_take_navigation,
+            features::platform_extras::platform_set_window_theme,
+            features::platform_extras::platform_app_candidates,
+            features::platform_extras::platform_check_updates,
+            features::platform_extras::platform_open_release,
+            features::platform_extras::platform_open_screenshots,
+            features::platform_extras::platform_test_notification,
             // provider commands
         ])
         .build(tauri::generate_context!())

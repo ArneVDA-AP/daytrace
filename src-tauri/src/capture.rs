@@ -52,7 +52,8 @@ fn run(state: Arc<AppState>) {
     let mut unlocked_at: Option<Instant> = None;
     loop {
         let settings = state.settings.read().unwrap().clone();
-        if !settings.recording_enabled {
+        // Off when paused (also during a timed pause) or before first-run setup is finished.
+        if !crate::features::platform_extras::pause::recording_allowed(&settings) {
             set_status(&state, RecorderStatus::Off);
             std::thread::sleep(Duration::from_millis(500));
             continue;
@@ -95,7 +96,7 @@ fn run(state: Arc<AppState>) {
         // Sleep in small steps so toggling recording, locking or coming back to the PC takes
         // effect quickly.
         let deadline = started + wait;
-        let enabled_now = || state.settings.read().unwrap().recording_enabled;
+        let enabled_now = || crate::features::platform_extras::pause::recording_allowed(&state.settings.read().unwrap());
         while Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(250));
             if !enabled_now() || state.capture_now.swap(false, std::sync::atomic::Ordering::SeqCst) {

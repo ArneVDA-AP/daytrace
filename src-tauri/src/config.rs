@@ -73,6 +73,20 @@ pub struct Settings {
     pub recap_time: String,
     /// Model for chat, on the same provider; empty uses `model`.
     pub chat_model: String,
+    // ---- platform_extras ----
+    /// First-run setup was finished or skipped. Recording waits for it.
+    pub onboarding_completed: bool,
+    /// End of a timed pause (Unix seconds). Set only while `recording_enabled` is false; recording
+    /// resumes at this time. None with recording off means paused until resumed.
+    pub pause_until: Option<i64>,
+    /// The three timed pause lengths in minutes (Dayflow's PausePresets, default 15, 30, 60).
+    pub pause_presets: Vec<u32>,
+    /// Light/dark override for the window.
+    pub appearance: crate::features::platform_extras::Appearance,
+    /// Which notifications Daytrace may show.
+    pub notifications: crate::features::platform_extras::NotificationPrefs,
+    /// Look for a new release on GitHub once a day.
+    pub check_updates: bool,
 }
 
 impl Default for Settings {
@@ -98,6 +112,12 @@ impl Default for Settings {
             recap_auto: true,
             recap_time: "08:00".into(),
             chat_model: String::new(),
+            onboarding_completed: false,
+            pause_until: None,
+            pause_presets: crate::features::platform_extras::pause::DEFAULT_PRESETS.to_vec(),
+            appearance: Default::default(),
+            notifications: Default::default(),
+            check_updates: true,
         }
     }
 }
