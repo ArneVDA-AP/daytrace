@@ -25,13 +25,14 @@ import type { Card, ProviderKind, Settings, SettingsDto, Shot, Status } from "@/
 import type { ChatInfo, ChatMessage, Conversation, ConversationDetail } from "@/views/chat-api";
 import type { GoalItem, GoalsView } from "@/views/journal-api";
 import type { DayExtras } from "@/timeline-extras-api";
-import type { StorageUsage } from "@/settings/storage-api";
+import type { StorageUsage } from "@/views/settings/storage-api";
 import { at, shiftDay } from "@/lib/time";
 import { allCards, DEFAULT_CATEGORIES, fmtClock, makeDataset } from "@/dev/fixtures";
 import { computeDay, computeWeek, makeRecapMock } from "@/dev/insights";
 import { screenSvg } from "@/dev/screens";
 import { goalsChatHandlers } from "@/dev/goalschat";
 import { timelineMock } from "@/dev/timeline";
+import { applySettingsMock } from "@/dev/settings";
 
 export const DEV_MOCK_MARKER = "DAYTRACE_DEV_MOCK_IPC";
 
@@ -500,6 +501,7 @@ export function installMockIpc() {
   // Goals and Chat: richer fixtures and variants (?goals=…, ?chat=…) from src/dev/goalschat.ts.
   Object.assign(handlers, goalsChatHandlers({ ds, settings, provider, q, now, cardsOf, hasApiKey: () => hasApiKey }));
   Object.assign(handlers, timelineMock(ds, now)); // Timeline fixtures and handlers (src/dev/timeline.ts)
+  applySettingsMock(handlers, { q, flags, settings, now, dataDir: dto().dataDir });
 
   mockWindows("main");
   mockIPC(
