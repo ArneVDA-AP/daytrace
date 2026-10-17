@@ -177,6 +177,8 @@ pub fn run() {
             llm::provider_cmds::provider_key_status,
             llm::provider_cmds::provider_save_key,
             llm::provider_cmds::provider_check_cli,
+            // icons commands
+            features::icons::icons_lookup,
             // agents commands
             features::agents::agents_status,
             features::agents::agents_recheck,

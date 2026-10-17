@@ -20,6 +20,6 @@ export const SETTINGS_SECTION_META: SettingsSectionMeta[] = [
   { id: "storage", label: "Storage", icon: HardDrive, keywords: "disk space delete screenshots backup data folder" },
   { id: "ai-tools", label: "AI tools", icon: Bot, keywords: "mcp claude code desktop" },
   { id: "notifications", label: "Notifications", icon: Bell, keywords: "toast alerts daily goal prompt" },
-  { id: "appearance", label: "Appearance", icon: Palette, keywords: "theme light dark" },
+  { id: "appearance", label: "Appearance", icon: Palette, keywords: "theme light dark icons favicon app site" },
   { id: "about", label: "Updates and about", icon: RefreshCw, keywords: "version update licence license credits" },
 ];

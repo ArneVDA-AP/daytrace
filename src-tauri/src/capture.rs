@@ -189,8 +189,10 @@ pub fn capture_once(state: &AppState, settings: &Settings) -> Result<Outcome> {
     let path = dir.join(format!("{}.jpg", now.format("%H%M%S_%3f")));
     let buf = crate::imaging::encode_jpeg(&rgb, settings.jpeg_quality)?;
     std::fs::write(&path, &buf)?;
+    let exe = (!fg.path.is_empty()).then_some(fg.path.as_str());
     state
         .db
-        .insert_screenshot(ts, &path.to_string_lossy(), buf.len() as i64, idle, app, title, None, None)?;
+        .insert_screenshot_with_path(ts, &path.to_string_lossy(), buf.len() as i64, idle, app, title, None, None, exe)?;
+    crate::features::icons::note_foreground(state, settings, &fg.app, &fg.path);
     Ok(Outcome::Captured)
 }
