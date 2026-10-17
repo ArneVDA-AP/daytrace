@@ -75,6 +75,16 @@ pub fn run() {
             commands::open_data_dir,
             // insights commands
             // chat commands
+            features::chat::chat_info,
+            features::chat::chat_set_model,
+            features::chat::chat_list_conversations,
+            features::chat::chat_get_conversation,
+            features::chat::chat_send,
+            features::chat::chat_cancel,
+            features::chat::chat_delete_conversation,
+            features::chat::chat_get_memory,
+            features::chat::chat_save_memory,
+            features::chat::chat_open_link,
             // journal commands
             // platform_extras commands
             // provider commands

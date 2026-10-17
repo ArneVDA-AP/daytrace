@@ -464,3 +464,32 @@ mod estimate_tests {
         assert!(e > 1612 + 900 && e < 1612 + 1200, "{e}");
     }
 }
+
+/// Access for `llm::chat_api` (multi-turn tool use), which shares this client's transport,
+/// endpoints, key and call log.
+impl LlmClient {
+    pub(crate) fn http_client(&self) -> &reqwest::Client {
+        &self.http
+    }
+    pub(crate) fn key(&self) -> Option<&str> {
+        self.api_key.as_deref()
+    }
+    pub(crate) fn call_log(&self) -> Option<&Db> {
+        self.db.as_ref()
+    }
+    pub(crate) fn chat_completions_url(&self) -> String {
+        self.chat_url()
+    }
+    pub(crate) fn anthropic_messages_url(&self) -> String {
+        self.messages_url()
+    }
+    pub(crate) fn host_name(&self) -> String {
+        self.host()
+    }
+    pub(crate) fn is_retryable(err: &anyhow::Error) -> bool {
+        Self::retryable(err)
+    }
+    pub(crate) fn redacted(body: &Value) -> String {
+        Self::redact(body)
+    }
+}

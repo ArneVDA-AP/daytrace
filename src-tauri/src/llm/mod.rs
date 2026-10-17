@@ -6,6 +6,7 @@
 //! Cloud (capable models): one request with up to 15 frames → segments → rewrite all cards in the
 //! last 45 minutes, validated for coverage and the 10-minute minimum.
 
+pub mod chat_api;
 pub mod client;
 pub mod prompts;
 

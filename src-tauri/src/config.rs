@@ -64,6 +64,8 @@ pub struct Settings {
     pub use_batch_api: bool,
     /// Hidden reasoning for Claude models (Anthropic provider only).
     pub reasoning: Reasoning,
+    /// Model for chat, on the same provider; empty uses `model`.
+    pub chat_model: String,
 }
 
 impl Default for Settings {
@@ -85,6 +87,7 @@ impl Default for Settings {
             idle_pause_secs: 120,
             use_batch_api: false,
             reasoning: Reasoning::Low,
+            chat_model: String::new(),
         }
     }
 }
