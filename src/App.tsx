@@ -12,6 +12,9 @@ import { WeeklyView } from "./views/WeeklyView";
 import { ChatView } from "./views/ChatView";
 import { JournalView } from "./views/JournalView";
 import type { ViewProps } from "./views/types";
+import { Onboarding } from "./views/Onboarding";
+import { OPEN_ONBOARDING_EVENT } from "./views/platform-api";
+import { useAppearance, useDayRollover, useNotificationNavigation } from "./views/platform-hooks";
 
 type View = "timeline" | "daily" | "weekly" | "journal" | "chat" | "settings";
 
@@ -31,6 +34,7 @@ export default function App() {
   const [cards, setCards] = useState<Card[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
+  const [setupOpen, setSetupOpen] = useState(false);
 
   const loadSettings = useCallback(() => api.getSettings().then(setSettings), []);
   const loadStatus = useCallback(() => api.getStatus().then((s) => {
@@ -61,6 +65,20 @@ export default function App() {
     return () => clearInterval(t);
   }, [loadCards]);
 
+  // platform_extras: first-run setup reopened from Settings, light/dark override, 4 AM rollover
+  // and idle reset, and clicks on notifications.
+  useEffect(() => {
+    const open = () => setSetupOpen(true);
+    window.addEventListener(OPEN_ONBOARDING_EVENT, open);
+    return () => window.removeEventListener(OPEN_ONBOARDING_EVENT, open);
+  }, []);
+  useAppearance(settings?.settings.appearance);
+  useDayRollover({ day, today: status?.today ?? null, inSettings: view === "settings", setDay, onReset: () => setSelected(null) });
+  useNotificationNavigation((target) => {
+    if (target === "daily" && status) setDay(status.today);
+    if (target === "daily" || target === "settings" || target === "timeline") setView(target);
+  });
+
   // Select the newest card when nothing is selected, and keep the selection valid when cards are
   // rewritten by a new batch.
   useEffect(() => {
@@ -80,6 +98,22 @@ export default function App() {
 
   if (!settings || !status || !day) {
     return <div className="boot">Starting Daytrace</div>;
+  }
+
+  if (!settings.settings.onboardingCompleted || setupOpen) {
+    return (
+      <div className="app">
+        <Onboarding
+          dto={settings}
+          firstRun={!settings.settings.onboardingCompleted}
+          onDone={async () => {
+            setSetupOpen(false);
+            await loadSettings();
+            await loadStatus();
+          }}
+        />
+      </div>
+    );
   }
 
   const selectedCard = cards.find((c) => c.id === selected) ?? null;
@@ -105,9 +139,8 @@ export default function App() {
         <div className="actions">
           <StatusPill
             status={status}
-            enabled={settings.settings.recordingEnabled}
-            onToggle={async () => {
-              await api.setRecording(!settings.settings.recordingEnabled);
+            settings={settings.settings}
+            onChanged={async () => {
               await loadSettings();
               await loadStatus();
             }}

@@ -3,6 +3,8 @@ import { api, Category, Pipeline, ProviderKind, Settings, SettingsDto } from "./
 import { ProviderAdvanced } from "./settings/ProviderAdvanced";
 import { RecapSection } from "./settings/RecapSection";
 import { PlatformSection } from "./settings/PlatformSection";
+import { PrivateAppPicker, addPrivateApp } from "./settings/PrivateAppPicker";
+import { withLiveRecordingState } from "./views/platform-api";
 
 const PROVIDERS: { id: ProviderKind; label: string; needsKey: boolean }[] = [
   { id: "anthropic", label: "Claude (Anthropic API)", needsKey: true },
@@ -62,7 +64,7 @@ export function SettingsView({ dto, onSaved, onClose }: { dto: SettingsDto; onSa
   async function save() {
     setBusy("save");
     try {
-      const d = await api.saveSettings(s, apiKey ? apiKey : undefined);
+      const d = await api.saveSettings(await withLiveRecordingState(s), apiKey ? apiKey : undefined);
       setHasKey(d.hasApiKey);
       setApiKey("");
       setS(structuredClone(d.settings));
@@ -206,6 +208,7 @@ export function SettingsView({ dto, onSaved, onClose }: { dto: SettingsDto; onSa
             onChange={(e) => set("blockedApps", e.target.value.split("\n").map((l) => l.trim()).filter((l, i, a) => l || i === a.length - 1))}
             spellCheck={false}
           />
+          <PrivateAppPicker blocked={s.blockedApps} onAdd={(name) => set("blockedApps", addPrivateApp(s.blockedApps, name))} />
         </section>
 
         <section>

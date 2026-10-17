@@ -36,6 +36,36 @@
   }
 }
 
+/* Appearance override (Settings → Appearance): mirrors the light defaults and the dark block above. */
+:root[data-theme="light"] {
+  --paper: #f6f7f5;
+  --surface: #ffffff;
+  --ink: #1b2220;
+  --muted: #67716d;
+  --rule: #dce1de;
+  --soft: #eceeec;
+  --accent: #2e6b5e;
+  --accent-ink: #ffffff;
+  --danger: #b4443a;
+  --ok: #2e6b5e;
+  --shadow: 0 1px 2px rgba(27, 34, 32, 0.06);
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  --paper: #151918;
+  --surface: #1c2120;
+  --ink: #e4e9e7;
+  --muted: #97a29d;
+  --rule: #2b3230;
+  --soft: #232927;
+  --accent: #72b5a4;
+  --accent-ink: #0f1513;
+  --danger: #e0786d;
+  --ok: #72b5a4;
+  --shadow: none;
+  color-scheme: dark;
+}
+
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
 body { background: var(--paper); overflow: hidden; }
