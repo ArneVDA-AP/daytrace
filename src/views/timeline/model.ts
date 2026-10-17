@@ -1,10 +1,12 @@
 import type { Card, Category } from "@/api";
-import { DAY_START_HOUR, dateOf } from "@/lib/time";
+// Relative import, so `node --test` can load this file (model.test.mjs).
+import { DAY_START_HOUR, dateOf } from "../../lib/time.ts";
 import type { FailedGroup } from "./api";
 
 /*
  * Pure helpers for the Timeline: lanes and category totals, the axis of the day trace (whole day
- * or fitted to the recorded hours), and the rows of the card list. No React here.
+ * or fitted to the recorded hours), and the rows of the card list. No React here. The week grid
+ * and the review mode have theirs in week-model.ts.
  */
 
 /** Gaps of this length or more show as "Not recorded" (list rows, hatched spans on the trace). */
@@ -139,6 +141,21 @@ export function fitAxis(cards: Card[], from: number, to: number, now: number | n
     .map((c) => [Math.max(c.startTs, from), Math.min(c.endTs, to)] as [number, number])
     .filter(([s, e]) => e > s);
   if (now !== null && now > from && now < to) spans.push([now, now]);
+  return fitSpans(spans, from, to, floorHour, ceilHour);
+}
+
+/**
+ * The fitting itself, for any time line: `floor` and `ceil` round to whole hours (wall-clock hours
+ * for timestamps, multiples of 3600 for the week grid's seconds since 4 AM).
+ */
+export function fitSpans(
+  input: [number, number][],
+  from: number,
+  to: number,
+  floor: (t: number) => number,
+  ceil: (t: number) => number,
+): Axis {
+  const spans = input.filter(([s, e]) => e >= s && e >= from && s <= to);
   if (spans.length === 0) return wholeDayAxis(from, to);
   spans.sort((a, b) => a[0] - b[0]);
   const merged: [number, number][] = [];
@@ -149,8 +166,8 @@ export function fitAxis(cards: Card[], from: number, to: number, now: number | n
   }
   const windows: AxisWindow[] = [];
   for (const [s, e] of merged) {
-    const start = Math.max(from, floorHour(s));
-    const end = Math.min(to, Math.max(ceilHour(e), start + 3600));
+    const start = Math.max(from, floor(s));
+    const end = Math.min(to, Math.max(ceil(e), start + 3600));
     const last = windows[windows.length - 1];
     if (last && start - last.end < BREAK_MIN_SECS) last.end = Math.max(last.end, end);
     else windows.push({ start, end });
@@ -298,6 +315,17 @@ export const RATED_COVERAGE = 0.8;
  * The next card to rate after `fromId` (by start time, wrapping round), or null when every card is
  * rated. Failed cards are left out, like the backend's count of unrated cards.
  */
+/**
+ * The cards review mode walks through (Dayflow TimelineReviewOverlay.loadActivities and
+ * filterUnreviewedActivities): every card that is not failed and less than 80 % rated, by start
+ * time. Idle cards are in it, as in the backend's count of cards to rate.
+ */
+export function reviewQueue(cards: Card[], coverage: Map<number, number>): Card[] {
+  return cards
+    .filter((c) => !isFailed(c) && (coverage.get(c.id) ?? 0) < RATED_COVERAGE)
+    .sort((a, b) => a.startTs - b.startTs || a.id - b.id);
+}
+
 export function nextUnrated(cards: Card[], coverage: Map<number, number>, fromId: number | null): number | null {
   const list = [...cards].filter((c) => !isFailed(c)).sort((a, b) => a.startTs - b.startTs);
   const unrated = list.filter((c) => (coverage.get(c.id) ?? 0) < RATED_COVERAGE);
