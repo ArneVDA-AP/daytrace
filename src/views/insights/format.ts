@@ -71,7 +71,7 @@ export function nameList(names: string[]): string {
 
 /**
  * Sort key for category names: settings order first, unknown names after them, Idle and failed
- * cards last. Stacks, legends and tables all use it, so colours line up in the same order.
+ * cards last. Stacks, legends and tables all use it, so colors line up in the same order.
  */
 export function categoryRank(categories: Category[]): (name: string) => number {
   const order = new Map<string, number>();

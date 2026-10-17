@@ -12,7 +12,7 @@ import { CategoryMark, Legend, SvgPatterns, useWidth, type LegendItem } from "@/
  * diverging bars for focus and distraction, one lane per day for the week by hour, and a one-hue
  * heat map for distraction by hour. Each has a table with the same numbers (the page's Tables
  * switch, ?view=table). Rows that open a day are HTML links next to the SVG, so focus and
- * keyboard behave like every other link. Text stays in text colours; colour is only on marks.
+ * keyboard behave like every other link. Text stays in text colors; color is only on marks.
  */
 
 const AXIS_TEXT = "font-mono text-axis";

@@ -21,7 +21,7 @@ import { href } from "@/lib/router";
 import { useDelayedLoading } from "@/lib/use-delayed";
 import { errorText } from "@/lib/utils";
 import { Choice, ErrorBanner, FieldError, Group, OutcomeLine, Row, type Outcome } from "./fields";
-import { useSave } from "./save";
+import { useFieldSaves } from "./save";
 import { formatBytes, formatWhen, GB, storageApi, type DbHealth, type PurgeResult, type StorageUsage } from "./storage-api";
 
 /** Size limits offered, in GB (Dayflow offers 1, 2, 3, 5, 10, 20 GB or unlimited). */
@@ -41,7 +41,7 @@ type Confirm =
 export function StorageSection() {
   const app = useAppState();
   const s = app.settings.settings;
-  const save = useSave();
+  const fields = useFieldSaves();
   const id = React.useId();
   const [usage, setUsage] = React.useState<StorageUsage | null>(null);
   const [loadError, setLoadError] = React.useState<string | null>(null);
@@ -50,7 +50,7 @@ export function StorageSection() {
   const [olderDays, setOlderDays] = React.useState(String(s.retentionDays));
   const [outcome, setOutcome] = React.useState<Outcome | null>(null);
   const [backupOutcome, setBackupOutcome] = React.useState<Outcome | null>(null);
-  const [limitError, setLimitError] = React.useState<string | null>(null);
+  const [folderError, setFolderError] = React.useState<string | null>(null);
 
   const load = React.useCallback(async () => {
     setLoadError(null);
@@ -93,20 +93,19 @@ export function StorageSection() {
   const overLimit = s.storageLimitGb > 0 && recordedBytes > s.storageLimitGb * GB;
 
   function changeLimit(gb: number) {
-    setLimitError(null);
     const over = recordedBytes - gb * GB;
     if (gb > 0 && over > 0 && (s.storageLimitGb === 0 || gb < s.storageLimitGb)) {
       setConfirm({ kind: "limit", gb, over });
       return;
     }
-    save({ storageLimitGb: gb }).catch((e) => setLimitError(`Couldn’t save: ${errorText(e)}`));
+    void fields.apply("limit", gb, { storageLimitGb: gb });
   }
 
   function confirmed(c: Confirm) {
     setConfirm(null);
     if (c.kind === "older") void run("older", async () => purged(await storageApi.deleteOlderThan(c.days)));
     else if (c.kind === "day") void run(`day:${c.day}`, async () => purged(await storageApi.deleteDay(c.day)));
-    else save({ storageLimitGb: c.gb }).catch((e) => setLimitError(`Couldn’t save: ${errorText(e)}`));
+    else void fields.apply("limit", c.gb, { storageLimitGb: c.gb });
   }
 
   const total = usage ? usage.screenshotsBytes + usage.databaseBytes + usage.backupsBytes + usage.logsBytes : 0;
@@ -213,8 +212,8 @@ export function StorageSection() {
           htmlFor={`${id}-limit`}
           description={`When screenshots take more space than this, the oldest are deleted first, in addition to the ${s.retentionDays}-day limit. Screenshots from the last hour and those still waiting for analysis are kept.`}
         >
-          <Choice id={`${id}-limit`} value={s.storageLimitGb} className="w-40" onChange={changeLimit} options={limitOptions} />
-          <FieldError>{limitError}</FieldError>
+          <Choice id={`${id}-limit`} value={fields.shown("limit", s.storageLimitGb)} className="w-40" onChange={changeLimit} options={limitOptions} />
+          <FieldError>{fields.error("limit")}</FieldError>
         </Row>
         {overLimit && (
           <p className="px-4 py-3 text-meta text-warn-foreground" role="status">
@@ -336,9 +335,16 @@ export function StorageSection() {
 
       <Group title="Data folder" description="Screenshots, the timeline database, backups and logs are stored here.">
         <Row label={<span className="font-mono text-meta font-normal [overflow-wrap:anywhere]" translate="no">{app.settings.dataDir}</span>}>
-          <Button variant="outline" onClick={() => void api.openDataDir().catch(() => undefined)}>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setFolderError(null);
+              api.openDataDir().catch((e) => setFolderError(`Couldn’t open the folder: ${errorText(e)}`));
+            }}
+          >
             <FolderOpen aria-hidden /> Open folder
           </Button>
+          <FieldError>{folderError}</FieldError>
         </Row>
       </Group>
 

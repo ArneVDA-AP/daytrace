@@ -13,10 +13,9 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Switch } from "@/components/ui/switch";
 import { formatDayTitle } from "@/api";
-import { errorText } from "@/lib/utils";
 import { DEFAULT_PRESETS, minutesLabel } from "@/views/platform-api";
 import { Choice, FieldError, Group, Row } from "./fields";
-import { useSave } from "./save";
+import { useFieldSaves, type Patch } from "./save";
 import { formatBytes, storageApi } from "./storage-api";
 
 /** Dayflow's PausePresets.minuteOptions. */
@@ -35,20 +34,17 @@ interface RetentionConfirm {
 export function RecordingSection() {
   const app = useAppState();
   const s = app.settings.settings;
-  const save = useSave();
+  const fields = useFieldSaves();
   const id = React.useId();
-  const [error, setError] = React.useState<{ field: string; text: string } | null>(null);
   const [confirm, setConfirm] = React.useState<RetentionConfirm | null>(null);
 
-  const apply = (field: string, patch: Parameters<typeof save>[0]) => {
-    setError(null);
-    save(patch).catch((e) => setError({ field, text: `Couldn’t save: ${errorText(e)}` }));
-  };
-  const err = (field: string) => (error?.field === field ? error.text : null);
+  const apply = (field: string, value: unknown, patch: Patch) => void fields.apply(field, value, patch);
+  const err = fields.error;
+  const shown = fields.shown;
 
   /** Lowering retention deletes screenshots within minutes: say how much first. */
   async function changeRetention(n: number) {
-    if (n >= s.retentionDays) return apply("retention", { retentionDays: n });
+    if (n >= s.retentionDays) return apply("retention", n, { retentionDays: n });
     const before = shiftDay(app.today, -n);
     let bytes: number | null = null;
     try {
@@ -57,7 +53,7 @@ export function RecordingSection() {
     } catch {
       // Unknown: the dialog says it without a number.
     }
-    if (bytes === 0) return apply("retention", { retentionDays: n });
+    if (bytes === 0) return apply("retention", n, { retentionDays: n });
     setConfirm({ days: n, bytes, before });
   }
 
@@ -70,10 +66,10 @@ export function RecordingSection() {
         <Row label="Take a screenshot every" htmlFor={`${id}-interval`}>
           <Choice
             id={`${id}-interval`}
-            value={s.captureIntervalSecs}
+            value={shown("interval", s.captureIntervalSecs)}
             className="w-40"
             fallbackLabel={(v) => `${v} seconds`}
-            onChange={(v) => apply("interval", { captureIntervalSecs: v })}
+            onChange={(v) => apply("interval", v, { captureIntervalSecs: v })}
             options={[5, 10, 20, 30, 60].map((n) => ({ value: n, label: `${n} seconds` }))}
           />
           <FieldError>{err("interval")}</FieldError>
@@ -81,9 +77,9 @@ export function RecordingSection() {
         <Row label="Screenshot size" htmlFor={`${id}-size`} description="Larger screenshots are easier for the model to read and take more disk space.">
           <Choice
             id={`${id}-size`}
-            value={s.captureHeight}
+            value={shown("size", s.captureHeight)}
             className="w-52"
-            onChange={(v) => apply("size", { captureHeight: v })}
+            onChange={(v) => apply("size", v, { captureHeight: v })}
             options={[
               { value: 720, label: "720p (smaller files)" },
               { value: 1080, label: "1080p (easier to read)" },
@@ -98,10 +94,10 @@ export function RecordingSection() {
         >
           <Choice
             id={`${id}-away`}
-            value={s.idlePauseSecs}
+            value={shown("away", s.idlePauseSecs)}
             className="w-40"
             fallbackLabel={(v) => (v % 60 === 0 ? minutesLabel(v / 60) : `${v} seconds`)}
-            onChange={(v) => apply("away", { idlePauseSecs: v })}
+            onChange={(v) => apply("away", v, { idlePauseSecs: v })}
             options={[
               { value: 60, label: "1 minute" },
               { value: 120, label: "2 minutes" },
@@ -113,7 +109,7 @@ export function RecordingSection() {
           <FieldError>{err("away")}</FieldError>
         </Row>
         <Row label="Start Daytrace when I sign in to Windows" htmlFor={`${id}-login`} description="Daytrace starts in the tray.">
-          <Switch id={`${id}-login`} checked={s.launchAtLogin} onCheckedChange={(v) => apply("login", { launchAtLogin: v })} />
+          <Switch id={`${id}-login`} checked={shown("login", s.launchAtLogin)} onCheckedChange={(v) => apply("login", v, { launchAtLogin: v })} />
           <FieldError>{err("login")}</FieldError>
         </Row>
       </Group>
@@ -126,7 +122,7 @@ export function RecordingSection() {
         >
           <Choice
             id={`${id}-retention`}
-            value={s.retentionDays}
+            value={shown("retention", s.retentionDays)}
             className="w-32"
             fallbackLabel={days}
             onChange={(v) => void changeRetention(v)}
@@ -144,10 +140,12 @@ export function RecordingSection() {
           <Row key={i} label={`Pause length ${i + 1}`} htmlFor={`${id}-preset-${i}`}>
             <Choice
               id={`${id}-preset-${i}`}
-              value={m}
+              value={shown(`preset-${i}`, m)}
               className="w-52"
               fallbackLabel={minutesLabel}
-              onChange={(v) => apply(`preset-${i}`, (cur) => ({ pausePresets: (cur.pausePresets.length === 3 ? cur.pausePresets : DEFAULT_PRESETS).map((x, j) => (j === i ? v : x)) }))}
+              onChange={(v) =>
+                apply(`preset-${i}`, v, (cur) => ({ pausePresets: (cur.pausePresets.length === 3 ? cur.pausePresets : DEFAULT_PRESETS).map((x, j) => (j === i ? v : x)) }))
+              }
               options={minuteOptions}
             />
             <FieldError>{err(`preset-${i}`)}</FieldError>
@@ -173,7 +171,7 @@ export function RecordingSection() {
                 <AlertDialogAction
                   variant="destructive"
                   onClick={() => {
-                    apply("retention", { retentionDays: confirm.days });
+                    apply("retention", confirm.days, { retentionDays: confirm.days });
                     setConfirm(null);
                   }}
                 >

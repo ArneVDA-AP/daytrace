@@ -79,7 +79,7 @@ export function StatTile({
   );
 }
 
-/** A small square in a category's colour: idle is a hatch, failed cards are red stripes. */
+/** A small square in a category's color: idle is a hatch, failed cards are red stripes. */
 export function CategoryMark({ name, kind, colorFor, className }: { name: string; kind: Kind; colorFor: (n: string) => string; className?: string }) {
   if (kind === "idle") return <span aria-hidden="true" data-mark="" className={cn("hatch-idle size-2.5 shrink-0 rounded-[2px] bg-surface-1 ring-1 ring-cat-idle ring-inset", className)} />;
   if (kind === "system") return <span aria-hidden="true" data-mark="" className={cn("stripes-failed size-2.5 shrink-0 rounded-[2px] bg-surface-1", className)} />;
@@ -195,7 +195,7 @@ export interface BarItem {
   key: string;
   name: string;
   secs: number;
-  /** CSS colour of the bar; neutral when absent. */
+  /** CSS color of the bar; neutral when absent. */
   color?: string;
   /** Visible note after the duration ("+20 min on last week"). */
   note?: string;

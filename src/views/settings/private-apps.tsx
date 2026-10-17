@@ -10,7 +10,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { errorText } from "@/lib/utils";
 import { platformApi, type AppCandidate } from "@/views/platform-api";
 import { FieldError, Group, Note } from "./fields";
-import { useSave } from "./save";
+import { reportLeaveFailure, useSave } from "./save";
 
 /** "open now", "seen 2 h ago", "seen yesterday". */
 export function seenText(c: AppCandidate): string {
@@ -74,7 +74,7 @@ export function PrivateAppsSection() {
   React.useEffect(
     () => () => {
       const d = draftRef.current.trim();
-      if (d) void save((cur) => ({ blockedApps: addPrivateApps(cur.blockedApps, d) })).catch(() => undefined);
+      if (d) void save((cur) => ({ blockedApps: addPrivateApps(cur.blockedApps, d) })).catch(reportLeaveFailure(`The private app “${d}”`));
     },
     [save],
   );

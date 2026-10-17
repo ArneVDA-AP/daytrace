@@ -148,7 +148,7 @@ export function ActivityGrid({
                   className={cn(
                     "relative flex aspect-square min-w-0 flex-col-reverse overflow-hidden rounded-[3px] bg-surface-2 p-0",
                     !empty && "hover:ring-2 hover:ring-foreground/70",
-                    // Windows Contrast themes drop the well colour: keep every square's outline.
+                    // Windows Contrast themes drop the well color: keep every square's outline.
                     "forced-colors:border forced-colors:border-[GrayText]",
                   )}
                   onClick={() => s.top && onOpen(s.top.id)}

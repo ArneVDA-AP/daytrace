@@ -58,6 +58,8 @@ function Onboarding({ dto, firstRun, onDone }: { dto: SettingsDto; firstRun: boo
   const [busy, setBusy] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [damagedCopy, setDamagedCopy] = React.useState<string | null>(null);
+  /** "Add another app by name" on the Private apps step; added when you move on, too. */
+  const [appDraft, setAppDraft] = React.useState("");
   const heading = React.useRef<HTMLHeadingElement>(null);
   const scroller = React.useRef<HTMLDivElement>(null);
 
@@ -95,11 +97,16 @@ function Onboarding({ dto, firstRun, onDone }: { dto: SettingsDto; firstRun: boo
   async function save(): Promise<boolean> {
     setBusy("save");
     setError(null);
+    // An app name typed but not added yet still goes on the list: leaving the step must not
+    // capture an app the person meant to keep private.
+    const draft = appDraft.trim();
+    const next = draft ? { ...s, blockedApps: addPrivateApps(s.blockedApps, draft) } : s;
     try {
-      const d = await api.saveSettings(await withLiveRecordingState(s), apiKey ? apiKey : undefined);
+      const d = await api.saveSettings(await withLiveRecordingState(next), apiKey ? apiKey : undefined);
       setS(structuredClone(d.settings));
       setHasKey(d.hasApiKey);
       setApiKey("");
+      if (draft) setAppDraft("");
       return true;
     } catch (e) {
       setError(`Couldn’t save: ${errorText(e)}`);
@@ -252,7 +259,7 @@ function Onboarding({ dto, firstRun, onDone }: { dto: SettingsDto; firstRun: boo
                 busy={busy}
               />
             )}
-            {step === 2 && <PrivacyStep s={s} set={set} />}
+            {step === 2 && <PrivacyStep s={s} set={set} draft={appDraft} setDraft={setAppDraft} />}
             {step === 3 && <StartStep s={s} set={set} keyMissing={keyMissing} hasKey={hasKey} />}
           </div>
 
@@ -478,9 +485,8 @@ function ProviderStep({
   );
 }
 
-function PrivacyStep({ s, set }: { s: Settings; set: SetFn }) {
+function PrivacyStep({ s, set, draft, setDraft }: { s: Settings; set: SetFn; draft: string; setDraft: (v: string) => void }) {
   const id = React.useId();
-  const [draft, setDraft] = React.useState("");
   const { apps, loading, error, load } = useAppCandidates(true);
   // Names shown stay in the list when unticked, so a tick can be put back.
   const [shown, setShown] = React.useState<string[]>(() => [...s.blockedApps]);

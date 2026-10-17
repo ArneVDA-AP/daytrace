@@ -11,9 +11,9 @@ import type { Appearance } from "@/lib/theme";
 import { errorText } from "@/lib/utils";
 import { OPEN_ONBOARDING_EVENT, platformApi, type UpdateStatus } from "@/views/platform-api";
 import { FieldError, Group, OutcomeLine, Row, type Outcome } from "./fields";
-import { useSave } from "./save";
-import mitLicence from "../../../LICENSE?raw";
-import oflLicence from "@/assets/cascadia-mono-OFL.txt?raw";
+import { useFieldSaves } from "./save";
+import mitLicense from "../../../LICENSE?raw";
+import oflLicense from "@/assets/cascadia-mono-OFL.txt?raw";
 
 const SPINNER = { "aria-hidden": true, role: undefined, "aria-label": undefined } as const;
 
@@ -26,13 +26,13 @@ const NOTIFICATIONS: { key: keyof NotificationPrefs; label: string; description?
   { key: "updates", label: "A new version is available" },
 ];
 
-/** Settings > Notifications: one switch per kind, and a test notification. */
+/** Settings > Notifications: one switch per kind, a test notification, and the goal prompt. */
 export function NotificationsSection() {
   const app = useAppState();
-  const prefs = app.settings.settings.notifications;
-  const save = useSave();
+  const s = app.settings.settings;
+  const prefs = s.notifications;
+  const fields = useFieldSaves();
   const id = React.useId();
-  const [error, setError] = React.useState<string | null>(null);
   const [test, setTest] = React.useState<Outcome | null>(null);
   const [sending, setSending] = React.useState(false);
 
@@ -56,19 +56,12 @@ export function NotificationsSection() {
           <Row key={n.key} label={n.label} description={n.description} htmlFor={`${id}-${n.key}`}>
             <Switch
               id={`${id}-${n.key}`}
-              checked={prefs[n.key]}
-              onCheckedChange={(v) => {
-                setError(null);
-                save((cur) => ({ notifications: { ...cur.notifications, [n.key]: v } })).catch((e) => setError(`Couldn’t save: ${errorText(e)}`));
-              }}
+              checked={fields.shown(n.key, prefs[n.key])}
+              onCheckedChange={(v) => void fields.apply(n.key, v, (cur) => ({ notifications: { ...cur.notifications, [n.key]: v } }))}
             />
+            <FieldError>{fields.error(n.key)}</FieldError>
           </Row>
         ))}
-        {error && (
-          <div className="px-4 py-3">
-            <FieldError>{error}</FieldError>
-          </div>
-        )}
       </Group>
       <Group title="Test">
         <Row label="Check that notifications get through" description="Shows one notification now. Windows can hide them under Do not disturb or per-app settings.">
@@ -80,6 +73,20 @@ export function NotificationsSection() {
         <div aria-live="polite" className="empty:hidden">
           {test && <OutcomeLine outcome={test} className="mx-4 my-3" />}
         </div>
+      </Group>
+      <Group title="In the Daytrace window">
+        <Row
+          label="Show daily goal prompt"
+          htmlFor={`${id}-goals`}
+          description="The first time you use the window on a new day, Daytrace shows how yesterday went and asks for today’s focus target and distraction limit. It starts after 3 days with recording and stops asking after you skip 5 days in a row."
+        >
+          <Switch
+            id={`${id}-goals`}
+            checked={fields.shown("goals", s.showGoalPrompt)}
+            onCheckedChange={(v) => void fields.apply("goals", v, { showGoalPrompt: v })}
+          />
+          <FieldError>{fields.error("goals")}</FieldError>
+        </Row>
       </Group>
     </>
   );
@@ -141,7 +148,7 @@ function updateText(u: UpdateStatus): Outcome & { tone: "ok" | "bad" | "muted" }
 export function AboutSection() {
   const app = useAppState();
   const s = app.settings.settings;
-  const save = useSave();
+  const fields = useFieldSaves();
   const id = React.useId();
   const [update, setUpdate] = React.useState<UpdateStatus | null>(null);
   const [version, setVersion] = React.useState<string | null>(null);
@@ -189,14 +196,8 @@ export function AboutSection() {
           )}
         </Row>
         <Row label="Check for updates once a day" htmlFor={`${id}-check`}>
-          <Switch
-            id={`${id}-check`}
-            checked={s.checkUpdates}
-            onCheckedChange={(v) => {
-              setError(null);
-              save({ checkUpdates: v }).catch((e) => setError(`Couldn’t save: ${errorText(e)}`));
-            }}
-          />
+          <Switch id={`${id}-check`} checked={fields.shown("check", s.checkUpdates)} onCheckedChange={(v) => void fields.apply("check", v, { checkUpdates: v })} />
+          <FieldError>{fields.error("check")}</FieldError>
         </Row>
         {error && (
           <div className="px-4 py-3">
@@ -223,7 +224,7 @@ export function AboutSection() {
                 them is a new implementation. Not affiliated with or endorsed by the Dayflow project.
               </p>
               <p>Daytrace is open source under the MIT License.</p>
-              <LicenceText label="MIT License text" text={mitLicence} />
+              <LicenseText label="MIT License text" text={mitLicense} />
             </>
           }
         />
@@ -233,10 +234,10 @@ export function AboutSection() {
             <>
               <p>
                 Clock times use a subset of Cascadia Mono, © 2019 – present Microsoft Corporation, with Reserved Font Name Cascadia Code,
-                licensed under the SIL Open Font License 1.1. As the licence asks for a modified font, the subset carries its own name,
+                licensed under the SIL Open Font License 1.1. As the license asks for a modified font, the subset carries its own name,
                 Daytrace Mono. A Cascadia Mono installed on this PC is used instead when present.
               </p>
-              <LicenceText label="SIL Open Font License text" text={oflLicence} />
+              <LicenseText label="SIL Open Font License text" text={oflLicense} />
             </>
           }
         />
@@ -245,8 +246,8 @@ export function AboutSection() {
   );
 }
 
-/** A licence text, collapsed until asked for. */
-function LicenceText({ label, text }: { label: string; text: string }) {
+/** A license text, collapsed until asked for. */
+function LicenseText({ label, text }: { label: string; text: string }) {
   return (
     <details className="mt-1.5 text-caption">
       <summary className="w-fit cursor-default rounded-sm select-none hover:text-foreground">{label}</summary>

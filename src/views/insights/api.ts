@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 /*
  * Daily and Weekly: the insights commands. Types mirror src-tauri/src/features/insights/*.rs
  * (serde camelCase). The backend also sends a `color` hex on categories (the stored settings hex
- * or an old fallback palette); it is left out of these types on purpose: views colour every
+ * or an old fallback palette); it is left out of these types on purpose: views color every
  * category mark with colorFor(name), which follows the theme and Windows Contrast themes.
  */
 

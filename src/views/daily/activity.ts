@@ -5,7 +5,7 @@ import { categoryRank, kindOf } from "@/views/insights/format";
 
 /*
  * The Daily activity grid: 96 quarter hours from 4 AM to 4 AM. Each quarter hour keeps the
- * seconds of every category that filled it (its per-category share), not one dominant colour,
+ * seconds of every category that filled it (its per-category share), not one dominant color,
  * so a quarter hour that was 10 minutes of Work and 5 of Distraction shows both. Failed cards
  * ("System") are a share too, drawn as "Not analyzed"; what is left is not recorded.
  */

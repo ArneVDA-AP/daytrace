@@ -8,7 +8,7 @@ import { Panel, Swatch } from "@/views/journal/parts";
 /*
  * Dayflow's timeline review summary: how much of the day was rated Focused, Neutral or Distracted
  * in the card details on the Timeline. Ratings are statuses, not categories: focused takes the
- * first chart colour, neutral the neutral one, distracted the second, always with the words.
+ * first chart color, neutral the neutral one, distracted the second, always with the words.
  */
 const KINDS = [
   { key: "focusedSecs", label: "Focused", color: "var(--chart-1)" },

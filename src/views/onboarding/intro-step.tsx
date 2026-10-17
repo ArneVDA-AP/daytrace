@@ -4,8 +4,8 @@ import { cn } from "@/lib/utils";
 
 /**
  * The data-flow row (designer-bespoke): what is captured, where it goes, what comes back. The
- * middle step is the only one that leaves the PC; its line is dashed in the warning colour, and
- * the words say it, so the colour is never the only cue.
+ * middle step is the only one that leaves the PC; its line is dashed in the warning color, and
+ * the words say it, so the color is never the only cue.
  */
 export function DataFlow({ s }: { s: Settings }) {
   const kept = s.retentionDays === 1 ? "1 day" : `${s.retentionDays} days`;

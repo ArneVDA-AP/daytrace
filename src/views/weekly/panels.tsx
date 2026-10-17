@@ -129,7 +129,7 @@ export function TopAppsCard({ week, categories, colorFor }: { week: WeekStats; c
   const used = new Map<string, AppCategory>();
   for (const i of items) if (i.cat && !used.has(i.cat.key)) used.set(i.cat.key, i.cat);
   return (
-    <SectionCard title="Top apps and sites" description="The main app or site of each card, coloured by the category it was mostly used in.">
+    <SectionCard title="Top apps and sites" description="The main app or site of each card, colored by the category it was mostly used in.">
       <div className="flex flex-col gap-3">
         <BarList label="Top apps and sites" items={items} empty="No cards with an app or site this week." />
         {used.size > 0 && (
