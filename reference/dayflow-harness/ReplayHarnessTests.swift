@@ -580,7 +580,7 @@ final class ReplayHarnessTests: XCTestCase {
     let iso = ISO8601DateFormatter()
     // Claude Haiku 5.5 list price, prompts up to 100k tokens: $0.10 / $0.50 per million.
     var costEstimate: Double? = nil
-    if model == "claude-haiku-5-5" {
+    if real && model == "claude-haiku-5-5" {
       costEstimate =
         (Double(recorder.inputTokens) * 0.10 + Double(recorder.outputTokens) * 0.50) / 1_000_000
     }

@@ -11,6 +11,7 @@ side by side.
 | `dayflow-harness/build_fix.py` | Build fix for Xcode 26.3, applied to the CI checkout (see below) |
 | `frames/` | 180 synthetic JPEGs (1280x720) and `manifest.json` |
 | `compare.py` | Side-by-side of a harness run and a Daytrace replay |
+| `fetch_log_output.py` | Rebuilds the output folder from the job log |
 | `../.github/workflows/dayflow-reference.yml` | The macOS workflow |
 
 Dayflow is pinned to commit `e90d25dc633fcaa2f433042e82defe4dfbabc5a4` (v2.7.1 appcast,
@@ -116,11 +117,21 @@ That function writes prompt JSON for Dayflow's Flow feature, which the harness d
 fails if the original text is not there, so a new pin cannot be patched by accident. No analysis
 code is edited.
 
-The API key goes only to live runs. Before the upload, a live run searches the output and the
-build log for the key and uploads nothing if it is found. Artifacts are kept for 3 days:
+The API key goes only to live runs. Before anything is printed or uploaded, a live run searches
+the output and the build log for the key and removes both if it is found. Artifacts are kept for
+3 days:
 
 ```sh
 gh run download <run-id> -R ArneVDA-AP/daytrace -D out/
+```
+
+The JSON files are also printed in the job log between `=====BEGIN` and `=====END` lines. Where
+artifact storage is not reachable (it is served from a separate blob host), rebuild them from the
+log:
+
+```sh
+gh run view <run-id> -R ArneVDA-AP/daytrace --log > run.log
+python3 reference/fetch_log_output.py run.log out/harness-out
 ```
 
 ## Output

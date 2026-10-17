@@ -112,14 +112,7 @@ jobs:
             -skipPackagePluginValidation -skipMacroValidation \
             CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= \
             2>&1 | tee xcodebuild.log \
-            | (grep -E --line-buffered 'error:|ReplayHarness|REPLAY HARNESS|tokens in=|^  [0-9]|Test (Suite|Case)|\*\* (BUILD|TEST)' || true)
-
-      - name: Show harness summary
-        if: always()
-        run: |
-          ls -la harness-out || true
-          if [ -f harness-out/run.json ]; then cat harness-out/run.json; fi
-          tail -n 60 xcodebuild.log || true
+            | (grep -E -i --line-buffered 'error:|Test (suite|case)|\*\* (BUILD|TEST)' || true)
 
       - name: Make sure no secret reached the files
         if: always() && env.HARNESS_MODE == 'live'
@@ -131,6 +124,25 @@ jobs:
             rm -rf harness-out xcodebuild.log
             exit 1
           fi
+
+      - name: Show harness summary
+        if: always()
+        run: |
+          ls -la harness-out || true
+          if [ -f harness-out/run.json ]; then cat harness-out/run.json; fi
+          tail -n 60 xcodebuild.log || true
+
+      - name: Print harness output
+        # The JSON also goes into the job log, for readers who cannot download artifacts.
+        if: always()
+        run: |
+          for f in harness-out/*.json; do
+            [ -f "$f" ] || continue
+            echo "=====BEGIN $f"
+            cat "$f"
+            echo
+            echo "=====END $f"
+          done
 
       - name: Upload harness output
         if: always()
