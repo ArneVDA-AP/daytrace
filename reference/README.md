@@ -48,8 +48,10 @@ SQLite store at launch and must not pick up these frames:
 - the error card a failed batch leaves behind
 
 Not covered: Dayflow's HTTP transport (`OllamaProvider.callChatAPI`), provider fallback, the
-automatic catch-up of failed batches, and concurrent batches (the harness runs them one after
-another, which is what happens when Dayflow processes a backlog with nothing else in flight).
+automatic catch-up of failed batches, and concurrency. Dayflow dispatches the batches of one
+analysis tick together (transcriptions may overlap; card requests are serialized). The harness
+runs each batch to the end before starting the next, so the second card request always sees the
+first batch's cards and observations.
 
 ## Modes
 
