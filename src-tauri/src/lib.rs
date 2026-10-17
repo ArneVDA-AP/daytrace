@@ -85,6 +85,7 @@ pub fn run() {
             features::insights::insights_generate_recap,
             features::insights::insights_save_recap,
             features::insights::insights_export_recap,
+            features::insights::insights_save_image,
             // chat commands
             features::chat::chat_info,
             features::chat::chat_set_model,
@@ -110,6 +111,7 @@ pub fn run() {
             features::journal::journal_add_item,
             features::journal::journal_update_item,
             features::journal::journal_delete_item,
+            features::journal::journal_take_prompt,
             // timeline_extras commands
             features::timeline_extras::te_day_extras,
             features::timeline_extras::te_update_card,

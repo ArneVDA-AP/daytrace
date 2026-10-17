@@ -119,7 +119,7 @@ pub fn activity_minutes(conn: &Connection, day: &str, cats: &[Category]) -> Resu
     let mut secs = 0;
     for row in rows {
         let (cat, d) = row?;
-        if matches!(cat_info(&cat, cats).kind, Kind::Focus | Kind::Distraction) {
+        if matches!(cat_info(&cat, cats).kind, Kind::Focus | Kind::Distraction | Kind::Neither) {
             secs += d.max(0);
         }
     }

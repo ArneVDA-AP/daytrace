@@ -3,11 +3,16 @@ import { invoke } from "@tauri-apps/api/core";
 export type ProviderKind = "anthropic" | "ollama" | "lm_studio" | "openai_compatible" | "claude_cli" | "codex_cli";
 export type Pipeline = "local" | "cloud";
 
+/** What a category's time counts as in the focus and distraction numbers. */
+export type CountsAs = "focus" | "distraction" | "neither";
+
 export interface Category {
   name: string;
   color: string;
   description: string;
   isIdle: boolean;
+  /** Absent in old settings: then it follows the name (views/insights/format.ts countsAsOf). */
+  countsAs?: CountsAs;
 }
 
 /** Edited instruction blocks of the card prompts; an empty string means the default text. */
@@ -58,6 +63,10 @@ export interface Settings {
   checkUpdates: boolean;
   /** Maximum disk space for screenshots in GB (10^9 bytes); 0 turns the limit off. */
   storageLimitGb: number;
+  /** Model for the daily recap on the same provider; empty uses `model`. */
+  recapModel: string;
+  /** Open yesterday's review and today's goal setup by itself once a day. */
+  showGoalPrompt: boolean;
 }
 
 export interface NotificationPrefs {

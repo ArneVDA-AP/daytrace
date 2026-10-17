@@ -559,7 +559,7 @@ pub fn categories_list_json(cats: &[Category]) -> Value {
     json!({
         "categories": cats.iter().map(|c| json!({
             "name": c.name, "color_hex": c.color, "description": c.description,
-            "is_system": c.is_idle, "is_idle": c.is_idle,
+            "is_system": c.is_idle, "is_idle": c.is_idle, "counts_as": c.counts(),
         })).collect::<Vec<_>>(),
     })
 }

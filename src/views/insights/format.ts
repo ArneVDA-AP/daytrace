@@ -1,4 +1,4 @@
-import type { Category } from "@/api";
+import type { Category, CountsAs } from "@/api";
 import { dateOf, formatDuration, hourLabel, shiftDay } from "@/lib/time";
 import type { Kind } from "./api";
 
@@ -41,14 +41,32 @@ export function changeOnLastWeek(secs: number, previous: number): string | undef
   return `${delta > 0 ? "+" : "−"}${formatDuration(Math.abs(delta))} on last week`;
 }
 
+/** What a category counts as: its choice in Settings, else by name (types.rs CountsAs::derived). */
+export function countsAsOf(c: Pick<Category, "name" | "isIdle" | "countsAs">): CountsAs {
+  if (c.isIdle) return "neither";
+  if (c.countsAs) return c.countsAs;
+  const key = c.name.trim().toLowerCase();
+  return key === "distraction" || key === "distractions" ? "distraction" : "focus";
+}
+
 /** Kind of a card's category name, like the backend's cat_info. */
 export function kindOf(name: string, categories: Category[]): Kind {
   const key = name.trim().toLowerCase();
   if (key === "system") return "system";
   const c = categories.find((x) => x.name.trim().toLowerCase() === key);
   if (c?.isIdle || (!c && key === "idle")) return "idle";
-  if (key === "distraction" || key === "distractions") return "distraction";
-  return "focus";
+  return countsAsOf(c ?? { name, isIdle: false });
+}
+
+/** Names of the categories that count as `what`, in settings order. */
+export function categoriesCounting(what: CountsAs, categories: Category[]): string[] {
+  return categories.filter((c) => !c.isIdle && countsAsOf(c) === what).map((c) => c.name);
+}
+
+/** "Work", "Work and Personal", "Work, Personal and Study". */
+export function nameList(names: string[]): string {
+  if (names.length <= 1) return names.join("");
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
 /**

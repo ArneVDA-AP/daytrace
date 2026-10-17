@@ -85,6 +85,51 @@ pub struct Category {
     pub description: String,
     #[serde(default)]
     pub is_idle: bool,
+    /// What the category's time counts as in the focus and distraction numbers (Daily, Weekly,
+    /// Goals, Your day so far, daytrace-mcp). Absent in settings written before it existed: then
+    /// it follows the name (see `counts()`); `Settings::sanitized` fills it in on load and save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub counts_as: Option<CountsAs>,
+}
+
+/// Dayflow lets each day plan pick its focus and distraction categories
+/// (Views/Components/DayCategorySelectionEditor.swift); Daytrace keeps one choice per category.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CountsAs {
+    Focus,
+    Distraction,
+    Neither,
+}
+
+impl CountsAs {
+    /// The value for a category without a stored choice, as Daytrace counted before the choice
+    /// existed: a category named Distraction or Distractions is distraction, the idle category is
+    /// neither, every other category is focus.
+    pub fn derived(name: &str, is_idle: bool) -> CountsAs {
+        if is_idle {
+            return CountsAs::Neither;
+        }
+        match name.trim().to_lowercase().as_str() {
+            "distraction" | "distractions" => CountsAs::Distraction,
+            _ => CountsAs::Focus,
+        }
+    }
+}
+
+impl Category {
+    pub fn new(name: &str, color: &str, description: &str, is_idle: bool) -> Category {
+        Category { name: name.into(), color: color.into(), description: description.into(), is_idle, counts_as: None }
+    }
+
+    /// The stored choice, or the one derived from the name. The idle category always counts as
+    /// neither: idle time is left out of focus, distraction and active time.
+    pub fn counts(&self) -> CountsAs {
+        if self.is_idle {
+            return CountsAs::Neither;
+        }
+        self.counts_as.unwrap_or_else(|| CountsAs::derived(&self.name, false))
+    }
 }
 
 /// Defaults for new installs. Work, Personal and Distraction use the validated palette of the UI
@@ -92,26 +137,36 @@ pub struct Category {
 /// colour-blind readers); the UI maps these hex values to theme-aware tokens. Idle is drawn as a
 /// hatch from its own token, so its stored colour is only a fallback.
 pub fn default_categories() -> Vec<Category> {
+    let with = |c: Category, counts: CountsAs| Category { counts_as: Some(counts), ..c };
     vec![
-        Category {
-            name: "Work".into(),
-            color: "#407BC5".into(),
-            description: "Career, school, or productivity-focused activities (projects, emails, assignments, video calls, learning skills, etc.)".into(),
-            is_idle: false,
-        },
-        Category {
-            name: "Personal".into(),
-            color: "#287C42".into(),
-            description: "Purposeful non-work activities or life tasks (paying bills, fitness tracking, meal planning, personal research, creative hobbies, etc.)".into(),
-            is_idle: false,
-        },
-        Category {
-            name: "Distraction".into(),
-            color: "#73176F".into(),
-            description: "Passive consumption or aimless browsing (scrolling feeds, watching random videos, clicking through news, mindless games, etc.)".into(),
-            is_idle: false,
-        },
-        Category { name: "Idle".into(), color: "#A0AEC0".into(), description: String::new(), is_idle: true },
+        with(
+            Category::new(
+                "Work",
+                "#407BC5",
+                "Career, school, or productivity-focused activities (projects, emails, assignments, video calls, learning skills, etc.)",
+                false,
+            ),
+            CountsAs::Focus,
+        ),
+        with(
+            Category::new(
+                "Personal",
+                "#287C42",
+                "Purposeful non-work activities or life tasks (paying bills, fitness tracking, meal planning, personal research, creative hobbies, etc.)",
+                false,
+            ),
+            CountsAs::Focus,
+        ),
+        with(
+            Category::new(
+                "Distraction",
+                "#73176F",
+                "Passive consumption or aimless browsing (scrolling feeds, watching random videos, clicking through news, mindless games, etc.)",
+                false,
+            ),
+            CountsAs::Distraction,
+        ),
+        with(Category::new("Idle", "#A0AEC0", "", true), CountsAs::Neither),
     ]
 }
 
@@ -120,7 +175,7 @@ pub fn default_categories() -> Vec<Category> {
 pub fn categories_for_llm(cats: &[Category]) -> Vec<Category> {
     let mut out: Vec<Category> = cats.iter().cloned().collect();
     if !out.iter().any(|c| c.is_idle) {
-        out.push(Category { name: "Idle".into(), color: "#A0AEC0".into(), description: String::new(), is_idle: true });
+        out.push(Category::new("Idle", "#A0AEC0", "", true));
     }
     for c in out.iter_mut() {
         c.description = c.description.trim().to_string();
@@ -165,5 +220,27 @@ mod tests {
         assert_eq!(normalize_category(&cards[0].category, &cats), "Work");
         assert_eq!(normalize_category("idle time", &cats), "Idle");
         assert_eq!(normalize_category("Gaming", &cats), "Work");
+    }
+
+    #[test]
+    fn counts_as_follows_the_name_until_chosen() {
+        // Settings written before the field existed.
+        let old: Vec<Category> = serde_json::from_str(
+            r##"[{"name":"Work","color":"#000000"},{"name":"Distractions","color":"#000000"},{"name":"Idle","color":"#000000","isIdle":true}]"##,
+        )
+        .unwrap();
+        let counts: Vec<CountsAs> = old.iter().map(Category::counts).collect();
+        assert_eq!(counts, vec![CountsAs::Focus, CountsAs::Distraction, CountsAs::Neither]);
+        // A stored choice wins over the name, except for the idle category.
+        let mut gaming = Category::new("Distraction", "#000000", "", false);
+        gaming.counts_as = Some(CountsAs::Neither);
+        assert_eq!(gaming.counts(), CountsAs::Neither);
+        let mut idle = Category::new("Away", "#000000", "", true);
+        idle.counts_as = Some(CountsAs::Focus);
+        assert_eq!(idle.counts(), CountsAs::Neither);
+        // Serialized as camelCase "countsAs" with lowercase values; absent when not chosen.
+        let json = serde_json::to_string(&default_categories()[2]).unwrap();
+        assert!(json.contains(r#""countsAs":"distraction""#), "{json}");
+        assert!(!serde_json::to_string(&Category::new("X", "#000000", "", false)).unwrap().contains("countsAs"));
     }
 }

@@ -268,7 +268,7 @@ export default function DailySection() {
                   <div className="grid items-start gap-4 split:grid-cols-2">
                     <DistractionsCard stats={current.stats} day={day} isToday={isToday} />
                     <div className="flex min-w-0 flex-col gap-4">
-                      <FocusCard stats={current.stats} />
+                      <FocusCard stats={current.stats} categories={categories} />
                       <ProgramsCard stats={current.stats} />
                     </div>
                   </div>

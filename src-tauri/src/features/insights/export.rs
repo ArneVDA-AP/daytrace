@@ -52,11 +52,12 @@ pub fn recap_markdown(day: &str, stats: &DayStats, recap: Option<&RecapEntry>, c
 
     out.push_str("## Day in numbers\n\n");
     if stats.captured_secs == 0 {
-        out.push_str("No activity was captured on this day.\n\n");
+        out.push_str("Nothing was recorded on this day.\n\n");
     } else {
-        out.push_str(&format!("- Time captured: {}\n", duration(stats.captured_secs)));
-        out.push_str(&format!("- Focused: {}\n", duration(stats.focus_secs)));
-        out.push_str(&format!("- Distracted: {} ({}%)\n", duration(stats.distracted_secs), (stats.distracted_ratio * 100.0).round() as i64));
+        let share = |secs: i64| if stats.active_secs > 0 { (secs as f64 / stats.active_secs as f64 * 100.0).round() as i64 } else { 0 };
+        out.push_str(&format!("- Recorded: {}\n", duration(stats.captured_secs)));
+        out.push_str(&format!("- Focused: {} ({}% of active time)\n", duration(stats.focus_secs), share(stats.focus_secs)));
+        out.push_str(&format!("- Distracted: {} ({}% of active time)\n", duration(stats.distracted_secs), share(stats.distracted_secs)));
         out.push_str(&format!("- Idle: {}\n", duration(stats.idle_secs)));
         if let Some(b) = &stats.longest_focus {
             out.push_str(&format!("- Longest focus block: {} – {} ({})\n", fmt_clock(b.start_ts), fmt_clock(b.end_ts), duration(b.secs)));
@@ -164,7 +165,7 @@ mod tests {
         };
         let md = recap_markdown("2026-10-16", &st, Some(&r), &cards, None);
         assert!(md.starts_with("# Friday 16 October 2026\n\n## Recap\n\n### Highlights\n\n- Finished the pricing page FAQ.\n\n### Tasks for Saturday 17 October 2026\n\n- Send it to Lisa.\n\n### Blockers\n\n- None\n\n## Day in numbers"), "{md}");
-        assert!(md.contains("- Time captured: 2 h 15 min\n- Focused: 2 h 10 min\n- Distracted: 5 min (4%)\n"), "{md}");
+        assert!(md.contains("- Recorded: 2 h 15 min\n- Focused: 2 h 10 min (96% of active time)\n- Distracted: 5 min (4% of active time)\n"), "{md}");
         assert!(md.contains("- Longest focus block: 9:00 AM – 11:15 AM (2 h 15 min)\n"));
         assert!(md.contains("- 9:40 AM – 9:45 AM: Checked X (5 min, during “Pricing page”)\n"));
         assert!(md.contains("### 9:00 AM – 11:15 AM · Work\n\n**Pricing page**\n\nPricing page summary\n\n"));
@@ -176,7 +177,7 @@ mod tests {
         let (s, e) = logical_day_bounds("2026-10-16").unwrap();
         let st = compute_day("2026-10-16", &[], &default_categories(), s, e);
         let md = recap_markdown("2026-10-16", &st, None, &[], Some("The recap could not be generated: no key."));
-        assert!(md.contains("## Recap\n\nThe recap could not be generated: no key.\n\n## Day in numbers\n\nNo activity was captured on this day."));
+        assert!(md.contains("## Recap\n\nThe recap could not be generated: no key.\n\n## Day in numbers\n\nNothing was recorded on this day."));
         assert!(md.ends_with("## Timeline\n\nNo cards for this day.\n"));
     }
 

@@ -156,6 +156,13 @@ pub struct Settings {
     /// Maximum disk space for screenshots in GB (10^9 bytes); the oldest are deleted first when
     /// they take more. 0 turns the limit off (retention_days still applies).
     pub storage_limit_gb: u32,
+    // ---- insights / goals (wave 4) ----
+    /// Model for the daily recap, on the same provider; empty uses `model` (Dayflow's own
+    /// provider picker on the Daily view).
+    pub recap_model: String,
+    /// Open yesterday's review and today's goal setup by itself on the first use of the window
+    /// after the day starts (Dayflow's "Show daily goal popups"; paced in features/journal.rs).
+    pub show_goal_prompt: bool,
 }
 
 impl Default for Settings {
@@ -192,6 +199,8 @@ impl Default for Settings {
             notifications: Default::default(),
             check_updates: true,
             storage_limit_gb: 0,
+            recap_model: String::new(),
+            show_goal_prompt: true,
         }
     }
 }
@@ -298,13 +307,14 @@ impl Settings {
         }
         self.categories.retain(|c| !c.name.trim().is_empty());
         if !self.categories.iter().any(|c| c.is_idle) {
-            self.categories.push(Category {
-                name: "Idle".into(),
-                color: "#A0AEC0".into(),
-                description: String::new(),
-                is_idle: true,
-            });
+            self.categories.push(Category::new("Idle", "#A0AEC0", "", true));
         }
+        // Make what each category counts as explicit, so a later rename keeps it (before the
+        // field existed it followed the name).
+        for c in self.categories.iter_mut() {
+            c.counts_as = Some(c.counts());
+        }
+        self.recap_model = self.recap_model.trim().to_string();
         if self.base_url.trim().is_empty() {
             self.base_url = default_base_url(self.provider).into();
         }
