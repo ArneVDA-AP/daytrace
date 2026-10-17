@@ -5,6 +5,7 @@ import { Dialog as DialogPrimitive } from "radix-ui"
 
 import { Button } from "@/components/ui/button"
 import { FocusReturnProvider, useCloseAutoFocus, useOpener, type ReturnFocus } from "@/components/ui/focus-return"
+import { PortalContainer } from "@/components/ui/portal-container"
 
 /** Remembers what had focus when it opened and gives it back on close (see focus-return.ts). */
 function Dialog({
@@ -79,7 +80,8 @@ function DialogContent({
         )}
         {...props}
       >
-        {children}
+        {/* Menus and tooltips inside the dialog go to <body>, outside the content it hides. */}
+        <PortalContainer container={null}>{children}</PortalContainer>
         {showCloseButton && (
           <DialogPrimitive.Close
             data-slot="dialog-close"

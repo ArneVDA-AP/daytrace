@@ -4,6 +4,7 @@ import { AlertDialog as AlertDialogPrimitive } from "radix-ui"
 
 import { Button } from "@/components/ui/button"
 import { FocusReturnProvider, useCloseAutoFocus, useOpener, type ReturnFocus } from "@/components/ui/focus-return"
+import { PortalContainer } from "@/components/ui/portal-container"
 
 /** Remembers what had focus when it opened and gives it back on close (see focus-return.ts). */
 function AlertDialog({
@@ -56,6 +57,7 @@ function AlertDialogContent({
   size = "default",
   returnFocus,
   onCloseAutoFocus,
+  children,
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Content> & {
   size?: "default" | "sm"
@@ -75,7 +77,10 @@ function AlertDialogContent({
           className
         )}
         {...props}
-      />
+      >
+        {/* Menus and tooltips inside the dialog go to <body>, outside the content it hides. */}
+        <PortalContainer container={null}>{children}</PortalContainer>
+      </AlertDialogPrimitive.Content>
     </AlertDialogPortal>
   )
 }
