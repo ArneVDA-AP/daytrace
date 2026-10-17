@@ -11,6 +11,7 @@ import { navigate, setParams, useRoute, type Section } from "@/lib/router";
 import { OPEN_ONBOARDING_EVENT } from "@/views/platform-api";
 import { useDayRollover, useNotificationNavigation } from "@/views/platform-hooks";
 import TimelineSection from "@/views/timeline";
+import { WhatsNew } from "@/app/WhatsNew";
 
 /*
  * One component per route section, each the default export of src/views/<area>/index.tsx.
@@ -126,6 +127,7 @@ function Root() {
           <CommandMenu open={commandOpen} onOpenChange={setCommandOpen} />
         </React.Suspense>
       )}
+      <WhatsNew />
     </>
   );
 }

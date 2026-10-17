@@ -1,8 +1,9 @@
 //! Update check: compares the running version with the latest GitHub release of
 //! ArneVDA-AP/daytrace (`GET /repos/{repo}/releases/latest`, which skips drafts and pre-releases
-//! and answers 404 while there is none). Dayflow uses Sparkle to download and install updates;
-//! Daytrace only tells the user and opens the release page, since a signed self-update needs a
-//! signing key (see the report for the steps).
+//! and answers 404 while there is none). The release's notes are kept for "What's new". Dayflow
+//! uses Sparkle to download and install updates; Daytrace does that with tauri-plugin-updater
+//! (`autoupdate.rs`) when the release carries a signed latest.json, and otherwise tells the user
+//! and opens the release page.
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,14 @@ pub const RETRY_AFTER_ERROR_SECS: i64 = 3600;
 pub fn api_url() -> String {
     format!("https://api.github.com/repos/{REPO}/releases/latest")
 }
+
+/// The release of one tag (for the notes of the running version).
+pub fn tag_api_url(version: &str) -> String {
+    format!("https://api.github.com/repos/{REPO}/releases/tags/v{}", version.trim_start_matches(['v', 'V']))
+}
+
+/// Release notes longer than this are cut (GitHub allows 125,000 characters).
+pub const MAX_NOTES_CHARS: usize = 20_000;
 
 fn releases_prefix() -> String {
     format!("https://github.com/{REPO}/releases/")
@@ -96,6 +105,8 @@ pub struct Release {
     pub tag: String,
     pub version: Version,
     pub url: String,
+    /// The release notes (Markdown), if any.
+    pub notes: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -107,6 +118,18 @@ struct ReleaseJson {
     draft: bool,
     #[serde(default)]
     prerelease: bool,
+    #[serde(default)]
+    body: Option<String>,
+}
+
+/// Trimmed notes, cut at `MAX_NOTES_CHARS`; None when empty.
+pub fn clean_notes(body: Option<&str>) -> Option<String> {
+    let t = body?.replace("\r\n", "\n");
+    let t = t.trim();
+    if t.is_empty() {
+        return None;
+    }
+    Some(if t.chars().count() > MAX_NOTES_CHARS { format!("{}…", t.chars().take(MAX_NOTES_CHARS).collect::<String>()) } else { t.to_string() })
 }
 
 /// Reads a release from the API's JSON. The page link is only kept when it points to this
@@ -122,7 +145,8 @@ pub fn parse_release(json: &str) -> Result<Option<Release>> {
     } else {
         format!("{}tag/{}", releases_prefix(), r.tag_name)
     };
-    Ok(Some(Release { tag: r.tag_name, version, url }))
+    let notes = clean_notes(r.body.as_deref());
+    Ok(Some(Release { tag: r.tag_name, version, url, notes }))
 }
 
 /// Whether `url` may be opened as a release page.
@@ -143,6 +167,8 @@ pub struct UpdateStatus {
     pub error: Option<String>,
     /// The last check, also one that failed.
     pub attempted_at: Option<i64>,
+    /// Notes of the latest release (Markdown), shown by "What's new" after the update.
+    pub release_notes: Option<String>,
 }
 
 /// The status to keep after a check: a failed check only adds its error and time, so the
@@ -180,6 +206,7 @@ where
                 st.available = Version::parse(current).is_some_and(|c| r.version > c);
                 st.latest_version = Some(r.tag.trim_start_matches(['v', 'V']).to_string());
                 st.release_url = Some(r.url);
+                st.release_notes = r.notes;
             }
             Ok(None) => st.no_releases = true,
             Err(e) => st.error = Some(format!("{e:#}")),
@@ -202,9 +229,18 @@ pub fn due(last: &UpdateStatus, now: i64) -> bool {
 
 /// The real fetcher: GitHub's REST API over HTTPS.
 pub async fn fetch_github(current: &str) -> Result<Fetched> {
+    fetch_url(&api_url(), current).await
+}
+
+/// The release of the running version's tag (`v<version>`), for its notes.
+pub async fn fetch_github_tag(current: &str) -> Result<Fetched> {
+    fetch_url(&tag_api_url(current), current).await
+}
+
+async fn fetch_url(url: &str, current: &str) -> Result<Fetched> {
     let http = reqwest::Client::builder().timeout(std::time::Duration::from_secs(20)).build()?;
     let r = http
-        .get(api_url())
+        .get(url)
         .header("User-Agent", format!("Daytrace/{current}"))
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
@@ -250,6 +286,12 @@ mod tests {
         assert_eq!(r.tag, "v0.3.0");
         assert_eq!(r.version, v("0.3.0"));
         assert_eq!(r.url, "https://github.com/ArneVDA-AP/daytrace/releases/tag/v0.3.0");
+        assert_eq!(r.notes, None, "no body");
+        let with_body = JSON.replace(r#""assets":[]"#, r#""assets":[],"body":"\r\n## Fixes\r\n- Pause from a script\r\n""#);
+        assert_eq!(parse_release(&with_body).unwrap().unwrap().notes.as_deref(), Some("## Fixes\n- Pause from a script"));
+        assert_eq!(clean_notes(Some("  ")), None);
+        assert_eq!(clean_notes(Some(&"x".repeat(MAX_NOTES_CHARS + 5))).unwrap().chars().count(), MAX_NOTES_CHARS + 1);
+        assert_eq!(tag_api_url("0.3.0"), "https://api.github.com/repos/ArneVDA-AP/daytrace/releases/tags/v0.3.0");
         // A link elsewhere is not trusted; it is rebuilt from the tag.
         let odd = JSON.replace("https://github.com/ArneVDA-AP/daytrace/releases/tag/v0.3.0", "https://example.com/x");
         assert_eq!(parse_release(&odd).unwrap().unwrap().url, "https://github.com/ArneVDA-AP/daytrace/releases/tag/v0.3.0");

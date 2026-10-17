@@ -10,6 +10,14 @@
 //!
 //! Everything here only flips batch statuses and wakes the analysis loop (`analysis::request_retry`);
 //! the loop's `process_batch` does the work, so there is never a second analysis path.
+//!
+//! With the Batch API on, batches queued here are marked `analysis::REASON_USER_REQUESTED` and
+//! sent directly. Each Message Batch takes minutes (up to an hour), a batch needs two of them
+//! (screenshots, then cards) and each batch's cards depend on the previous batch's, so a 40-batch
+//! day would take hours. Sending only the screenshot step of the whole day as one Message Batch
+//! would keep half price on that step, but the card steps would still run one after another and
+//! the day would wait for the slowest request of the Message Batch. Direct requests finish a day
+//! in minutes; the dialog says they cost the regular price (twice the Batch API price).
 
 use super::cards;
 use crate::db::Db;
@@ -64,6 +72,15 @@ pub struct DayPlan {
     pub kept_edited_cards: usize,
     /// Why the day can't be reprocessed, if it can't.
     pub blocked: Option<String>,
+    /// What the requests cost compared with the usual analysis (Batch API on).
+    pub cost_note: Option<String>,
+}
+
+/// The line for the reprocess dialog when the Batch API is on: reprocessing skips it.
+pub fn cost_note(settings: &crate::config::Settings) -> Option<String> {
+    (settings.use_batch_api && settings.provider == crate::config::ProviderKind::Anthropic).then(|| {
+        "With the Batch API on, these requests are sent directly so the day is done in minutes instead of hours. They cost the regular price, twice the Batch API price.".to_string()
+    })
 }
 
 /// What a day reprocess would do, without changing anything.
@@ -139,7 +156,10 @@ pub fn reprocess_day(state: &AppState, day: &str) -> Result<DayPlan> {
         }
         for b in &plan.batch_ids {
             tx.execute("DELETE FROM observations WHERE batch_id = ?", [b])?;
-            tx.execute("UPDATE analysis_batches SET status = 'pending', reason = NULL, attempts = 0 WHERE id = ?", [b])?;
+            tx.execute(
+                "UPDATE analysis_batches SET status = 'pending', reason = ?, attempts = 0 WHERE id = ?",
+                rusqlite::params![crate::analysis::REASON_USER_REQUESTED, b],
+            )?;
         }
         tx.commit()?;
     }
@@ -448,7 +468,9 @@ mod tests {
 
         reprocess_day(&st, "2026-10-14").unwrap();
         for b in [b1, b3] {
-            assert_eq!(st.db.batch(b).unwrap().unwrap().status, "pending");
+            let batch = st.db.batch(b).unwrap().unwrap();
+            assert_eq!(batch.status, "pending");
+            assert!(crate::analysis::user_requested(&batch), "sent directly, not through the Batch API");
         }
         assert_eq!(st.db.batch(b2).unwrap().unwrap().status, "completed");
         let live = st.db.cards_in_range(0, i64::MAX, false).unwrap();
@@ -457,6 +479,21 @@ mod tests {
         assert_eq!(obs.iter().map(|o| o.text.as_str()).collect::<Vec<_>>(), vec!["Videos"]);
         let p = progress(&st, &plan.batch_ids).unwrap();
         assert_eq!((p.waiting, p.running), (2, 0));
+    }
+
+    #[test]
+    fn batch_api_users_are_told_the_price() {
+        let mut s = crate::config::Settings::default();
+        assert_eq!(cost_note(&s), None, "Batch API off");
+        s.use_batch_api = true;
+        assert!(cost_note(&s).unwrap().contains("twice the Batch API price"));
+        s.provider = crate::config::ProviderKind::Ollama;
+        assert_eq!(cost_note(&s), None, "the Batch API is Claude only");
+        // Automatic retries and new batches keep the Batch API.
+        let b = crate::db::Batch { id: 1, start_ts: 0, end_ts: 900, status: "pending".into(), reason: None, attempts: 0 };
+        assert!(!crate::analysis::user_requested(&b));
+        let failed = crate::db::Batch { status: "failed".into(), reason: Some(crate::analysis::REASON_USER_REQUESTED.into()), ..b };
+        assert!(!crate::analysis::user_requested(&failed));
     }
 
     #[test]
@@ -482,6 +519,7 @@ mod tests {
         assert_eq!(reprocess_card(&st, c).unwrap(), b);
         assert!(!cards::is_user_edited(&st.db, c).unwrap());
         assert_eq!(st.db.batch(b).unwrap().unwrap().status, "pending");
+        assert!(crate::analysis::user_requested(&st.db.batch(b).unwrap().unwrap()));
         assert!(st.db.observations_in_range(0, i64::MAX).unwrap().is_empty());
         assert!(reprocess_card(&st, 9999).is_err());
     }

@@ -158,6 +158,7 @@ pub fn te_reprocess_day_plan(state: S, day: String) -> CmdResult<reprocess::DayP
     if plan.blocked.is_none() {
         plan.blocked = needs_key(&state);
     }
+    plan.cost_note = reprocess::cost_note(&state.settings());
     Ok(plan)
 }
 

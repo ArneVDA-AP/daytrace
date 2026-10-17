@@ -58,6 +58,8 @@ export interface Settings {
   checkUpdates: boolean;
   /** Maximum disk space for screenshots in GB (10^9 bytes); 0 turns the limit off. */
   storageLimitGb: number;
+  /** Install a new release while the PC is idle or locked, then start again minimized. */
+  autoInstallUpdates: boolean;
 }
 
 export interface NotificationPrefs {
@@ -114,6 +116,17 @@ export interface Card {
   distractions: Distraction[];
   appSites: { primary: string | null; secondary: string | null } | null;
   isIdleShortcut: boolean;
+  /** Which provider and model wrote the card; null for Idle and failed cards and cards written
+   *  before Daytrace recorded it. */
+  generatedBy?: GeneratedBy | null;
+}
+
+export interface GeneratedBy {
+  /** The provider's name as Settings shows it, e.g. "Claude API". */
+  provider: string;
+  model: string;
+  /** Written by the fallback provider. */
+  fallback: boolean;
 }
 
 export interface Shot {

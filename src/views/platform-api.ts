@@ -15,6 +15,28 @@ export interface UpdateStatus {
   error: string | null;
   /** The last check, also a failed one. */
   attemptedAt: number | null;
+  /** Notes of the latest release (Markdown). */
+  releaseNotes?: string | null;
+}
+
+/** The download and install of an update (backend: platform_extras/autoupdate.rs). */
+export interface InstallStatus {
+  stage: "idle" | "downloading" | "ready" | "installing" | "failed";
+  version: string | null;
+  downloaded: number;
+  total: number | null;
+  error: string | null;
+  failedAt: number | null;
+}
+
+/** Release notes shown once after an update. */
+export interface WhatsNew {
+  version: string;
+  /** Markdown. */
+  notes: string;
+  /** "release": the GitHub release; "changelog": the CHANGELOG bundled with the app (offline). */
+  source: "release" | "changelog";
+  releaseUrl: string | null;
 }
 
 export interface PauseOption {
@@ -30,6 +52,7 @@ export interface PlatformInfo {
   update: UpdateStatus;
   /** Set when settings.json could not be read at startup: where that file was kept. */
   damagedSettingsCopy: string | null;
+  install?: InstallStatus;
 }
 
 export interface AppCandidate {
@@ -54,7 +77,18 @@ export const platformApi = {
   openRelease: () => invoke<void>("platform_open_release"),
   openScreenshots: () => invoke<void>("platform_open_screenshots"),
   testNotification: () => invoke<void>("platform_test_notification"),
+  /** Runs the installer of the downloaded update now; Daytrace quits and starts again. */
+  installUpdate: () => invoke<void>("platform_install_update"),
+  whatsNew: () => invoke<WhatsNew | null>("platform_whats_new"),
+  whatsNewSeen: (version: string) => invoke<void>("platform_whats_new_seen", { version }),
+  /** Recent batches, model calls and the end of the log, with keys, user folder and titles left out. */
+  debugInfo: () => invoke<string>("platform_debug_info"),
+  /** Opens an http(s) link in the browser. */
+  openLink: (url: string) => invoke<void>("platform_open_link", { url }),
 };
+
+/** Event with the InstallStatus whenever the download or install moves on. */
+export const UPDATE_INSTALL_EVENT = "platform-update-install";
 
 /**
  * The settings form never edits the recording state, but its copy may be minutes old: take

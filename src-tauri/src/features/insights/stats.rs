@@ -616,6 +616,7 @@ pub(crate) mod tests {
             distractions: vec![],
             app_sites: None,
             is_idle_shortcut: false,
+            generated_by: None,
         }
     }
 

@@ -31,9 +31,25 @@ A fallback provider (Settings → Model) takes over a step when the main provide
 
 Screenshots, the timeline database and logs stay in `%APPDATA%\dev.daytrace.app`. Screenshots are deleted after the retention period (7 days by default), and the logged model requests and responses lose their text then; timeline cards, the text descriptions of the screen (observations) and token counts are kept, and app and window names for a year. With a cloud provider, the sampled screenshots of each batch are sent to that provider. With Ollama or LM Studio nothing leaves the machine.
 
-Every request is checked against a ceiling of 90k input tokens (Haiku bills 5× above 100k) and is not sent if it would exceed it.
+Every request is checked against a ceiling of 90k input tokens (Haiku bills 5× above 100k) and is not sent if it would exceed it. This includes the Claude Code and Codex one-step path, which sends fewer screenshots when they would not fit and stops correcting a card once the session would pass the ceiling.
 
 Known limit: Microsoft Store apps are reported under a shared host process, so they cannot be matched by the private-app list.
+
+## Pause from a script
+
+```
+daytrace.exe --pause 30            # minutes, 1 to 1440
+daytrace.exe --pause tomorrow      # until the day starts (4 AM)
+daytrace.exe --pause indefinite    # until resumed
+daytrace.exe --resume
+daytrace-mcp cli pause 30          # the same through the MCP program (resume: daytrace-mcp cli resume)
+```
+
+A running Daytrace takes the switch over from the second launch; otherwise Daytrace starts in the tray with it. This works from Task Scheduler, a shortcut or a Claude Code hook. The installer also registers `daytrace://pause?minutes=30` links. Any web page can open such a link after a browser prompt, so links can only pause, and resuming stays on the command line.
+
+## Updates
+
+Daytrace checks GitHub for a new release once a day. With "Install updates automatically" on (Settings → Updates and about, the default), it downloads the installer, checks its signature and installs it once the PC has been idle for 10 minutes or is locked, then starts again in the tray. "What's new" shows the release notes once after the update.
 
 ## Building
 
@@ -45,7 +61,9 @@ npm run tauri build      # installer in src-tauri/target/release/bundle/nsis
 npm run tauri dev        # development
 ```
 
-Pushes to `main` build a Windows installer in GitHub Actions; download it from the run's artifacts. Tags `v*` attach it to a draft release.
+Pushes to `main` build a Windows installer in GitHub Actions; download it from the run's artifacts. Tags `v*` publish a release with the installer, its notes taken from the version's section of `CHANGELOG.md`.
+
+Signed updates need the repository secret `TAURI_SIGNING_PRIVATE_KEY` (the private key made by `npm run tauri signer generate -- -w <file>`, whose public key is in `tauri.conf.json` > `plugins` > `updater` > `pubkey`) and, if the key has a password, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. With them the release also gets a signed installer and `latest.json`, which "Install updates automatically" reads from `releases/latest/download/latest.json`. Without them the build still works; Daytrace then shows a notification and the release page for that release. Local builds (`npm run tauri build`) make no updater files.
 
 ### Testing the pipeline without waiting
 

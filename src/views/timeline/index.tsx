@@ -549,6 +549,7 @@ function ReprocessDialog({ state, onStart, onClose, day }: { state: ReturnType<t
                   </p>
                   <p className="rounded-md border border-warn/50 bg-warn-surface px-3 py-2 font-medium text-foreground">
                     Each batch takes one or more model requests, so this can use a large number of API calls.
+                    {plan.costNote && ` ${plan.costNote}`}
                   </p>
                 </>
               )}

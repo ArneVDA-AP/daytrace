@@ -34,5 +34,19 @@
         "installMode": "currentUser"
       }
     }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["daytrace"]
+      }
+    },
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDczNDdEOEVFNTcwOTdGODUKUldTRmZ3bFg3dGhIYzVJMWZoQ3RrS1krR09JQzhFMmxHSjJPa2lQMlZ3c1VGNmczcU5kT1ZPbmoK",
+      "endpoints": ["https://github.com/ArneVDA-AP/daytrace/releases/latest/download/latest.json"],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

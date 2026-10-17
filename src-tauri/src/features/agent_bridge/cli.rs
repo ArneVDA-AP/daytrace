@@ -29,6 +29,10 @@ pub enum Command {
     Search(Option<String>),
     Days,
     Observations(Option<String>),
+    /// Pause or resume recording: starts daytrace.exe with `--pause`/`--resume`
+    /// (platform_extras::switches).
+    Pause(Option<String>),
+    Resume,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -76,6 +80,10 @@ Reading (works even when Daytrace is closed)
     --from/--to <date>       Only within these days
   days                       Days with activities, newest first
     --limit <n>              How many (default 30)
+
+Recording (hands the switch to the running Daytrace, or starts it in the tray)
+  pause <minutes|tomorrow|indefinite>   Pause recording (minutes from 1 to 1440)
+  resume                     Resume recording
 
 Options
   --db <path>                The database (daytrace.sqlite) or its folder. Default:
@@ -176,6 +184,8 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
         Some("categories") => Command::Categories,
         Some("search") => Command::Search((positional.len() > 1).then(|| positional[1..].join(" "))),
         Some("days") => Command::Days,
+        Some("pause") => Command::Pause(arg(1)),
+        Some("resume") => Command::Resume,
         Some(other) => return Err(format!("Unknown command \"{other}\". Run `daytrace-mcp help`.")),
     };
     Ok(inv)
@@ -328,7 +338,16 @@ fn day_or_today(arg: &Option<String>) -> Result<q::DayWindow, QueryError> {
 }
 
 fn execute(inv: &Invocation, source: &Source) -> Result<Done, QueryError> {
+    use crate::features::platform_extras::switches;
     match &inv.command {
+        Command::Pause(arg) => {
+            let (json, text) = switches::cli_command(switches::cli_pause_choice(arg.as_deref()), &source.data_dir)?;
+            both(json, text)
+        }
+        Command::Resume => {
+            let (json, text) = switches::cli_command(Some(switches::Action::Resume), &source.data_dir)?;
+            both(json, text)
+        }
         Command::Serve | Command::Help => Ok(Done { json: None, text: HELP.lines().map(String::from).collect() }),
         Command::Version => both(json!({"version": env!("CARGO_PKG_VERSION")}), vec![format!("daytrace-mcp {}", env!("CARGO_PKG_VERSION"))]),
         Command::Status => {

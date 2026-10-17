@@ -154,6 +154,22 @@ pub struct Batch {
     pub attempts: i64,
 }
 
+/// Which provider and model wrote a card (Dayflow's isBackupGenerated, plus the names). Stored in
+/// the card's metadata JSON under `generatedBy`; cards written before it was recorded, Idle cards
+/// and failed cards have none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedBy {
+    /// The provider's name as Settings shows it ("Claude API", "Claude Code CLI", "Ollama", …).
+    pub provider: String,
+    pub model: String,
+    /// Written by the fallback provider.
+    pub fallback: bool,
+}
+
+/// Metadata key of `GeneratedBy`.
+pub const GENERATED_BY_KEY: &str = "generatedBy";
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StoredCard {
@@ -172,6 +188,7 @@ pub struct StoredCard {
     pub distractions: Vec<Distraction>,
     pub app_sites: Option<AppSites>,
     pub is_idle_shortcut: bool,
+    pub generated_by: Option<GeneratedBy>,
 }
 
 impl StoredCard {
@@ -215,7 +232,7 @@ pub struct SentCard {
     pub end_ts: i64,
 }
 
-fn insert_cards(tx: &rusqlite::Transaction, cards: &[ResolvedCard], batch_id: i64) -> Result<usize> {
+fn insert_cards(tx: &rusqlite::Transaction, cards: &[ResolvedCard], batch_id: i64, generated_by: Option<&GeneratedBy>) -> Result<usize> {
     let mut st = tx.prepare(
         "INSERT INTO timeline_cards (batch_id, start, end, start_ts, end_ts, day, title, summary, category, subcategory, detailed_summary, metadata)
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -234,6 +251,9 @@ fn insert_cards(tx: &rusqlite::Transaction, cards: &[ResolvedCard], batch_id: i6
         }
         if let Some(i) = &rc.idle_meta {
             meta.insert("idle".into(), i.clone());
+        }
+        if let (Some(g), None) = (generated_by, &rc.idle_meta) {
+            meta.insert(GENERATED_BY_KEY.into(), serde_json::to_value(g)?);
         }
         st.execute(params![
             batch_id,
@@ -285,6 +305,7 @@ fn card_from_row(r: &rusqlite::Row) -> rusqlite::Result<StoredCard> {
         distractions,
         app_sites,
         is_idle_shortcut: meta.get("idle").is_some(),
+        generated_by: meta.get(GENERATED_BY_KEY).and_then(|g| serde_json::from_value(g.clone()).ok()),
     })
 }
 
@@ -713,7 +734,7 @@ impl Db {
             ),
             params![to, from, batch_id, keep_idle as i64],
         )?;
-        let n = insert_cards(&tx, cards, batch_id)?;
+        let n = insert_cards(&tx, cards, batch_id, None)?;
         tx.commit()?;
         Ok(n)
     }
@@ -726,13 +747,15 @@ impl Db {
     /// own System (failed) cards in [from, to). `build` gets the spans the new cards must stay
     /// out of: every other live non-System card in the window (Idle cards, cards the user edited,
     /// also while the model ran) and the sent cards the user deleted meanwhile. `build` must not
-    /// use the database. When it returns no cards, nothing changes.
+    /// use the database. When it returns no cards, nothing changes. `generated_by` is recorded in
+    /// each new card's metadata.
     pub fn commit_window_rewrite(
         &self,
         from: i64,
         to: i64,
         batch_id: i64,
         sent: &[SentCard],
+        generated_by: Option<&GeneratedBy>,
         build: impl FnOnce(&[(i64, i64)]) -> Vec<ResolvedCard>,
     ) -> Result<usize> {
         let mut c = self.c();
@@ -775,7 +798,7 @@ impl Db {
                 st.execute([id])?;
             }
         }
-        let n = insert_cards(&tx, &cards, batch_id)?;
+        let n = insert_cards(&tx, &cards, batch_id, generated_by)?;
         tx.commit()?;
         Ok(n)
     }

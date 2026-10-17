@@ -156,6 +156,10 @@ pub struct Settings {
     /// Maximum disk space for screenshots in GB (10^9 bytes); the oldest are deleted first when
     /// they take more. 0 turns the limit off (retention_days still applies).
     pub storage_limit_gb: u32,
+    /// Download a new release found by the daily check and install it while the PC is idle or
+    /// locked, then start again minimized (platform_extras::update). Off: a notification and
+    /// the release page, as before.
+    pub auto_install_updates: bool,
 }
 
 impl Default for Settings {
@@ -192,6 +196,7 @@ impl Default for Settings {
             notifications: Default::default(),
             check_updates: true,
             storage_limit_gb: 0,
+            auto_install_updates: true,
         }
     }
 }

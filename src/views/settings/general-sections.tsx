@@ -12,6 +12,8 @@ import { errorText } from "@/lib/utils";
 import { OPEN_ONBOARDING_EVENT, platformApi, type UpdateStatus } from "@/views/platform-api";
 import { FieldError, Group, OutcomeLine, Row, type Outcome } from "./fields";
 import { useSave } from "./save";
+import { AutoInstallRows } from "./update-install";
+import { DebugInfoGroup } from "./debug-info";
 import mitLicence from "../../../LICENSE?raw";
 import oflLicence from "@/assets/cascadia-mono-OFL.txt?raw";
 
@@ -176,7 +178,7 @@ export function AboutSection() {
 
   return (
     <>
-      <Group title="Updates" description="Daytrace looks for a new release on GitHub. It never downloads or installs anything; the release page opens in your browser.">
+      <Group title="Updates" description="Daytrace looks for a new release on GitHub.">
         <Row label={current ? `Daytrace ${current}` : "Daytrace"} description={<span aria-live="polite">{u ? u.text : "Reading the version…"}</span>}>
           <Button variant="outline" onClick={() => void checkNow()} disabled={checking}>
             {checking ? <Spinner {...SPINNER} /> : <RefreshCw aria-hidden />}
@@ -198,6 +200,7 @@ export function AboutSection() {
             }}
           />
         </Row>
+        <AutoInstallRows />
         {error && (
           <div className="px-4 py-3">
             <FieldError>{error}</FieldError>
@@ -212,6 +215,8 @@ export function AboutSection() {
           </Button>
         </Row>
       </Group>
+
+      <DebugInfoGroup />
 
       <Group title="About">
         <Row

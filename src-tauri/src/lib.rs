@@ -31,9 +31,15 @@ fn init_logging(dir: &std::path::Path) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let start_minimized = std::env::args().any(|a| a == "--minimized");
+    // `--minimized` (autostart), `--pause <minutes|tomorrow|indefinite>`, `--resume` and
+    // `daytrace://pause?minutes=N` (features::platform_extras::switches).
+    let args: Vec<String> = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
+    let launch = features::platform_extras::switches::parse_args(&args);
+    let start_hidden = launch.hidden();
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show_main(app)))
+        // A second launch hands its arguments to this instance: a pause or resume is applied,
+        // anything else brings the window up.
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| features::platform_extras::switches::on_second_launch(app, &args)))
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--minimized"]),
@@ -41,6 +47,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             let root = std::env::var_os("DAYTRACE_DATA_DIR")
                 .map(std::path::PathBuf::from)
@@ -53,12 +60,19 @@ pub fn run() {
             features::platform_extras::init(&state);
             app.manage(state.clone());
             tray::create(app.handle())?;
+            // A pause or resume asked for at launch is applied before the recorder starts.
+            for r in &launch.rejected {
+                log::warn!("launch: ignored {r}");
+            }
+            if let Some(action) = launch.action {
+                features::platform_extras::switches::apply(app.handle(), action, "launch");
+            }
             features::platform_extras::spawn(app.handle().clone());
             capture::spawn(state.clone());
             features::insights::spawn(state.clone());
             features::storage::spawn(state.clone());
             analysis::spawn(state);
-            if !start_minimized {
+            if !start_hidden {
                 tray::show_main(app.handle());
             }
             Ok(())
@@ -138,6 +152,11 @@ pub fn run() {
             features::platform_extras::platform_open_release,
             features::platform_extras::platform_open_screenshots,
             features::platform_extras::platform_test_notification,
+            features::platform_extras::platform_install_update,
+            features::platform_extras::platform_whats_new,
+            features::platform_extras::platform_whats_new_seen,
+            features::platform_extras::platform_debug_info,
+            features::platform_extras::platform_open_link,
             // provider commands
             llm::provider_cmds::provider_prompt_defaults,
             llm::provider_cmds::provider_key_status,

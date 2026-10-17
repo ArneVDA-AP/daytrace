@@ -6,11 +6,15 @@
 //!
 //! Daytrace differences: previous cards are all non-idle cards in the 45-minute window (as in
 //! Daytrace's Detailed mode) rather than only the cards connected to the batch; times without a
-//! screenshot (away, private app) are listed in the prompt; the user's name is not sent.
+//! screenshot (away, private app) are listed in the prompt; the user's name is not sent. Every
+//! run is checked against the 90k input-token ceiling (`client::MAX_INPUT_TOKENS`) like the HTTP
+//! providers: fewer frames are sent when they would not fit, and a correction that would push a
+//! resumed session past the ceiling is not sent.
 
 use super::cli::args::{Profile, Session};
 use super::cli::output::Usage;
 use super::cli::{run_timeout, CliBackend, CliRequest, CliTool};
+use super::client::{estimate_tokens, Part, MAX_INPUT_TOKENS};
 use super::one_step_prompts as p;
 use super::Ctx;
 use crate::db::{Shot, StoredCard};
@@ -23,6 +27,9 @@ use std::time::Instant;
 /// Dayflow ClaudeTranscriptionInputBuilder.maximumFrameCount.
 pub const MAX_FRAMES: usize = 15;
 const MAX_ATTEMPTS: usize = 3;
+/// Room under the ceiling for what the CLI adds itself (its own instructions and the Read tool)
+/// and for the two correction turns of a resumed Claude session.
+pub const CLI_RESERVE_TOKENS: usize = 14_000;
 /// Dayflow ClaudeTimelineTolerance.
 const SOURCE_CONNECTION_SECS: i64 = 60;
 const OUTPUT_COVERAGE_SECS: i64 = 59;
@@ -44,6 +51,25 @@ pub fn evenly_spaced(count: usize, max: usize) -> Vec<usize> {
         return (0..count.min(max)).collect();
     }
     (0..max).map(|i| ((i as f64) * (count - 1) as f64 / (max - 1) as f64).round() as usize).collect()
+}
+
+/// The frames to send so that `text_tokens` plus the frames stay within `limit`: as many as fit,
+/// spread evenly (first and last kept). Empty when not even one fits.
+pub fn frames_within(frame_tokens: &[usize], text_tokens: usize, limit: usize) -> Vec<usize> {
+    (1..=frame_tokens.len())
+        .rev()
+        .map(|keep| evenly_spaced(frame_tokens.len(), keep))
+        .find(|idx| text_tokens + idx.iter().map(|&i| frame_tokens[i]).sum::<usize>() <= limit)
+        .unwrap_or_default()
+}
+
+/// Input estimate of a prompt with its system prompt (images counted separately).
+fn text_tokens(prompt: &str, system: &str) -> usize {
+    estimate_tokens(&[Part::Text(prompt.to_string())], (!system.is_empty()).then_some(system))
+}
+
+fn over_ceiling(estimate: usize) -> anyhow::Error {
+    anyhow!("Request would be about {estimate} input tokens, over the {MAX_INPUT_TOKENS} limit; not sent")
 }
 
 /// The new window: the first shot's minute to one minute after the last shot's minute.
@@ -393,48 +419,92 @@ pub async fn generate_timeline(ctx: &Ctx<'_>, shots: &[Shot], previous: &[Stored
 
     let folder = cli.temp_dir("frames")?;
     let with_image: Vec<&Shot> = shots.iter().filter(|s| s.has_image()).collect();
-    let mut frames: Vec<(i64, String)> = Vec::new();
+    // (capture time, file, estimated input tokens) per frame.
+    let mut written: Vec<(i64, String, usize)> = Vec::new();
     for idx in evenly_spaced(with_image.len(), MAX_FRAMES) {
         let s = with_image[idx];
-        let file = folder.path().join(format!("frame_{:02}.jpg", frames.len() + 1));
+        let file = folder.path().join(format!("frame_{:02}.jpg", written.len() + 1));
         match write_frame(&s.file_path, &file) {
-            Ok(()) => frames.push((s.captured_at, file.display().to_string())),
+            Ok((w, h)) => written.push((s.captured_at, file.display().to_string(), crate::imaging::image_tokens(w, h))),
             Err(e) => log::warn!("skipping unreadable timeline frame {}: {e:#}", s.file_path),
         }
     }
-    if frames.is_empty() {
+    if written.is_empty() {
         bail!("No screenshots could be loaded for timeline generation.");
     }
     let not_captured = not_captured_lines(shots);
     let previous_cards: Vec<ActivityCard> = previous.iter().map(|c| c.to_activity()).collect();
     let previous_spans: Vec<(i64, i64)> = previous.iter().map(|c| (c.start_ts, c.end_ts)).collect();
-    let base = build_prompt(&PromptInput {
-        tool: cli.tool,
-        frames: &frames,
-        window,
-        previous: &previous_cards,
-        categories: ctx.categories,
-        language: ctx.language,
-        not_captured: &not_captured,
-    });
+    let prompt_for = |frames: &[(i64, String)]| {
+        build_prompt(&PromptInput {
+            tool: cli.tool,
+            frames,
+            window,
+            previous: &previous_cards,
+            categories: ctx.categories,
+            language: ctx.language,
+            not_captured: &not_captured,
+        })
+    };
+    let system = match cli.tool {
+        CliTool::Claude => p::CLAUDE_SYSTEM,
+        CliTool::Codex => "",
+    };
+    // The ceiling: the prompt with every frame listed (an upper bound for fewer), then as many
+    // frames as fit next to it.
+    let all: Vec<(i64, String)> = written.iter().map(|(t, f, _)| (*t, f.clone())).collect();
+    let text = text_tokens(&prompt_for(&all), system);
+    let tokens: Vec<usize> = written.iter().map(|w| w.2).collect();
+    let keep = frames_within(&tokens, text, MAX_INPUT_TOKENS - CLI_RESERVE_TOKENS);
+    if keep.is_empty() {
+        return Err(over_ceiling(text + tokens.iter().min().copied().unwrap_or(0) + CLI_RESERVE_TOKENS));
+    }
+    if keep.len() < written.len() {
+        log::info!("one-step: sending {} of {} frames to stay under the {MAX_INPUT_TOKENS}-token ceiling", keep.len(), written.len());
+        for (i, w) in written.iter().enumerate() {
+            if !keep.contains(&i) {
+                let _ = std::fs::remove_file(&w.1);
+            }
+        }
+    }
+    let frames: Vec<(i64, String)> = keep.iter().map(|&i| all[i].clone()).collect();
+    let image_tokens: usize = keep.iter().map(|&i| tokens[i]).sum();
+    let base = prompt_for(&frames);
+    let budget = Budget { image_tokens, system };
     match cli.tool {
-        CliTool::Claude => run_claude(ctx, cli, &base, folder.path(), window, &previous_spans).await,
+        CliTool::Claude => run_claude(ctx, cli, &base, folder.path(), window, &previous_spans, budget).await,
         CliTool::Codex => {
             let images: Vec<String> = frames.iter().map(|f| f.1.clone()).collect();
-            run_codex(ctx, cli, &base, &images, window, &previous_spans).await
+            run_codex(ctx, cli, &base, &images, window, &previous_spans, budget).await
         }
     }
 }
 
-fn write_frame(src: &str, dst: &std::path::Path) -> Result<()> {
-    let (_, h) = image::image_dimensions(src)?;
+/// What a run's requests weigh besides their prompt text.
+#[derive(Clone, Copy)]
+struct Budget {
+    image_tokens: usize,
+    system: &'static str,
+}
+
+impl Budget {
+    /// The estimate of a request with `prompt` and the frames.
+    fn request(&self, prompt: &str) -> usize {
+        text_tokens(prompt, self.system) + self.image_tokens
+    }
+}
+
+/// Copies or downscales a frame to at most 1080 px high; returns the written size.
+fn write_frame(src: &str, dst: &std::path::Path) -> Result<(u32, u32)> {
+    let (w, h) = image::image_dimensions(src)?;
     if h <= 1080 {
         std::fs::copy(src, dst)?;
-        return Ok(());
+        return Ok((w, h));
     }
     let rgb = crate::imaging::downscale_rgb(image::open(src)?.to_rgb8(), 1080);
+    let size = (rgb.width(), rgb.height());
     std::fs::write(dst, crate::imaging::encode_jpeg(&rgb, 85)?)?;
-    Ok(())
+    Ok(size)
 }
 
 fn not_captured_lines(shots: &[Shot]) -> Vec<String> {
@@ -477,7 +547,7 @@ fn log_call(ctx: &Ctx<'_>, model: &str, started: Instant, prompt: &str, result: 
     }
 }
 
-async fn run_claude(ctx: &Ctx<'_>, cli: &CliBackend, base: &str, frames_dir: &std::path::Path, window: (i64, i64), previous: &[(i64, i64)]) -> Result<OneStepResult> {
+async fn run_claude(ctx: &Ctx<'_>, cli: &CliBackend, base: &str, frames_dir: &std::path::Path, window: (i64, i64), previous: &[(i64, i64)], budget: Budget) -> Result<OneStepResult> {
     let session = super::cli::new_uuid();
     // Removes the resumable transcript however this ends (Dayflow ClaudeSessionCleanup).
     struct Cleanup<'a>(&'a CliBackend, String);
@@ -491,7 +561,17 @@ async fn run_claude(ctx: &Ctx<'_>, cli: &CliBackend, base: &str, frames_dir: &st
     let _cleanup = Cleanup(cli, session.clone());
     let mut prompt = base.to_string();
     let mut last_err = anyhow!("No timeline cards returned.");
+    // A resumed session carries everything before it: the first request, each answer and each
+    // correction.
+    let mut context = budget.request(base);
     for attempt in 1..=MAX_ATTEMPTS {
+        if context > MAX_INPUT_TOKENS {
+            if attempt == 1 {
+                return Err(over_ceiling(context));
+            }
+            log::warn!("generate_timeline: correction not sent; the resumed session would be about {context} input tokens");
+            break;
+        }
         let req = CliRequest {
             prompt: prompt.clone(),
             profile: Profile::Timeline,
@@ -523,6 +603,7 @@ async fn run_claude(ctx: &Ctx<'_>, cli: &CliBackend, base: &str, frames_dir: &st
                 log_call(ctx, &cli.model, started, &prompt, Err(format!("{e:#}")), reply.usage);
                 log::warn!("generate_timeline attempt {attempt} failed validation: {e:#}");
                 prompt = claude_correction(&format!("{e:#}"), window);
+                context += text_tokens(&reply.text, "") + text_tokens(&prompt, "");
                 last_err = e;
             }
         }
@@ -530,11 +611,20 @@ async fn run_claude(ctx: &Ctx<'_>, cli: &CliBackend, base: &str, frames_dir: &st
     Err(last_err)
 }
 
-async fn run_codex(ctx: &Ctx<'_>, cli: &CliBackend, base: &str, images: &[String], window: (i64, i64), previous: &[(i64, i64)]) -> Result<OneStepResult> {
+async fn run_codex(ctx: &Ctx<'_>, cli: &CliBackend, base: &str, images: &[String], window: (i64, i64), previous: &[(i64, i64)], budget: Budget) -> Result<OneStepResult> {
     let mut model = cli.model.clone();
     let mut prompt = base.to_string();
     let mut last_err = anyhow!("No timeline cards returned.");
     for attempt in 1..=MAX_ATTEMPTS {
+        // Each run is a new session: the prompt (with any correction) and the images.
+        let estimate = budget.request(&prompt);
+        if estimate > MAX_INPUT_TOKENS {
+            if attempt == 1 {
+                return Err(over_ceiling(estimate));
+            }
+            log::warn!("generate_timeline (codex): correction not sent; it would be about {estimate} input tokens");
+            break;
+        }
         let req = CliRequest {
             prompt: prompt.clone(),
             profile: Profile::Text,
@@ -620,6 +710,25 @@ mod tests {
         assert!(is_one_frame_per_minute(&minute));
         let tight: Vec<i64> = (0..15).map(|i| ts(9, 0) + i * 10).collect();
         assert!(!is_one_frame_per_minute(&tight));
+    }
+
+    #[test]
+    fn frames_fit_under_the_ceiling() {
+        // 15 ultrawide frames at 1080 px (3840x1080: 138 x 39 patches) do not all fit.
+        let per = crate::imaging::image_tokens(3840, 1080);
+        let tokens = vec![per; MAX_FRAMES];
+        let limit = MAX_INPUT_TOKENS - CLI_RESERVE_TOKENS;
+        let keep = frames_within(&tokens, 6_000, limit);
+        assert!(keep.len() < MAX_FRAMES && keep.len() >= 10, "{}", keep.len());
+        assert!(6_000 + keep.len() * per <= limit);
+        assert!(6_000 + (keep.len() + 1) * per > limit, "as many as fit");
+        assert_eq!((keep[0], *keep.last().unwrap()), (0, MAX_FRAMES - 1), "spread over the batch");
+        // 1080p frames fit as they are.
+        let hd = vec![crate::imaging::image_tokens(1920, 1080); MAX_FRAMES];
+        assert_eq!(frames_within(&hd, 6_000, limit).len(), MAX_FRAMES);
+        // A prompt that is too long on its own: nothing is sent.
+        assert!(frames_within(&hd, limit, limit).is_empty());
+        assert!(over_ceiling(95_000).to_string().contains("over the 90000 limit; not sent"));
     }
 
     #[test]

@@ -16,6 +16,15 @@ use std::time::Duration;
 const TICK: Duration = Duration::from_secs(60);
 const LOOKBACK: i64 = 24 * 3600;
 const MAX_AUTO_RETRIES: i64 = 3;
+/// Reason of a batch the user asked to analyze again (reprocess a day or a card, "Try again").
+/// Such a batch skips the Batch API: a day of batches, each step its own Message Batch, would
+/// take hours while the user waits (see `features::timeline_extras::reprocess`).
+pub const REASON_USER_REQUESTED: &str = "user_requested";
+
+/// Whether `batch` was queued by the user and goes to the provider directly.
+pub fn user_requested(batch: &Batch) -> bool {
+    batch.status == "pending" && batch.reason.as_deref() == Some(REASON_USER_REQUESTED)
+}
 
 pub fn spawn(state: Arc<AppState>) {
     tauri::async_runtime::spawn(async move {
@@ -163,17 +172,18 @@ pub async fn process_batch(state: &AppState, batch: &Batch) -> Result<bool> {
         return Ok(false);
     }
 
+    let direct = user_requested(batch);
     db.set_batch_status(batch.id, "processing", None)?;
     set_step(
         state,
         Some(batch.id),
-        Some(if settings.use_batch_api && settings.provider == crate::config::ProviderKind::Anthropic {
+        Some(if settings.use_batch_api && settings.provider == crate::config::ProviderKind::Anthropic && !direct {
             "Reading screenshots (Batch API, can take a while)"
         } else {
             "Reading screenshots"
         }),
     );
-    match run_pipeline(state, batch, &shots).await {
+    match run_pipeline(state, batch, &shots, direct).await {
         Ok(n) => {
             log::info!("batch {} done: {n} cards in window", batch.id);
             db.set_batch_status(batch.id, "completed", None)?;
@@ -193,10 +203,16 @@ pub async fn process_batch(state: &AppState, batch: &Batch) -> Result<bool> {
     }
 }
 
-async fn run_pipeline(state: &AppState, batch: &Batch, shots: &[crate::db::Shot]) -> Result<usize> {
+/// `direct`: the user asked for this batch; requests skip the Batch API.
+async fn run_pipeline(state: &AppState, batch: &Batch, shots: &[crate::db::Shot], direct: bool) -> Result<usize> {
     let settings = state.settings();
     // Main provider, then the fallback provider if one is set (Dayflow's provider routing).
-    let lanes = llm::routing::lanes(&settings, Some(state.db.clone()))?;
+    let mut lanes = llm::routing::lanes(&settings, Some(state.db.clone()))?;
+    if direct {
+        for lane in &mut lanes {
+            lane.client.use_batch = false;
+        }
+    }
     let lanes_ref = &lanes;
     let categories = categories_for_llm(&settings.categories);
     let ctx_for = |i: usize| Ctx {
@@ -229,6 +245,8 @@ async fn run_pipeline(state: &AppState, batch: &Batch, shots: &[crate::db::Shot]
     // When it fails, the batch falls through to the two-step path below.
     let mut one_step: Option<(Vec<ActivityCard>, Vec<crate::db::StoredCard>)> = None;
     let mut one_step_window: Option<(i64, i64)> = None;
+    // The model that answered the one-step run (Codex may switch to an older model).
+    let mut one_step_model: Option<String> = None;
     let mut skipped_main: Option<String> = None;
     if lanes[0].is_primary && lanes[0].client.is_cli() {
         set_step(state, Some(batch.id), Some("Writing timeline cards"));
@@ -238,6 +256,7 @@ async fn run_pipeline(state: &AppState, batch: &Batch, shots: &[crate::db::Shot]
                 state.db.insert_observations(batch.id, &r.observations, Some(&r.model))?;
                 one_step = Some((r.cards, stored));
                 one_step_window = Some(r.window);
+                one_step_model = Some(r.model);
             }
             Err(e) => {
                 log::warn!("one-step timeline failed for batch {}: {e:#}", batch.id);
@@ -300,6 +319,13 @@ async fn run_pipeline(state: &AppState, batch: &Batch, shots: &[crate::db::Shot]
             (cards, stored, window_obs, Some(lanes[active].pipeline))
         }
     };
+    // The lane that wrote the cards (the fallback stays active once it took over a step).
+    let writer = &lanes[active];
+    let generated_by = crate::db::GeneratedBy {
+        provider: writer.client.kind.label().to_string(),
+        model: one_step_model.unwrap_or_else(|| writer.client.model.clone()),
+        fallback: !writer.is_primary,
+    };
 
     // Models sometimes stretch a card past the evidence (e.g. to the window edge). Clamp every
     // card to the span covered by observations and the cards it was given.
@@ -346,7 +372,7 @@ async fn run_pipeline(state: &AppState, batch: &Batch, shots: &[crate::db::Shot]
     };
     let sent: Vec<SentCard> = stored.iter().map(|c| SentCard { id: c.id, start_ts: c.start_ts, end_ts: c.end_ts }).collect();
     let batch_id = batch.id;
-    state.db.commit_window_rewrite(window_start, current, batch.id, &sent, move |avoid| {
+    state.db.commit_window_rewrite(window_start, current, batch.id, &sent, Some(&generated_by), move |avoid| {
         // Cards that stay (Idle, edited, also while the model ran) and time the user deleted
         // meanwhile are cut out of the model's cards; a card around such a span is split.
         let mut out: Vec<ResolvedCard> = split_around(resolved, avoid)
@@ -538,7 +564,7 @@ fn enforce_retention(state: &AppState) -> Result<()> {
 /// Manual retry of a failed batch from the UI.
 pub fn request_retry(state: &AppState, batch_id: i64) -> Result<()> {
     state.db.reset_attempts(batch_id)?;
-    state.db.set_batch_status(batch_id, "pending", None)?;
+    state.db.set_batch_status(batch_id, "pending", Some(REASON_USER_REQUESTED))?;
     state.analyze_now.notify_one();
     Ok(())
 }
@@ -568,6 +594,7 @@ mod tests {
         let cards = st.db.cards_in_range(0, i64::MAX, false).unwrap();
         assert_eq!(cards.len(), 1);
         assert!(cards[0].is_idle_shortcut);
+        assert_eq!(cards[0].generated_by, None, "no model wrote the Idle card");
         assert_eq!(st.db.token_usage_since(0).unwrap(), (0, 0));
     }
 
@@ -889,6 +916,8 @@ mod rewrite_tests {
         let rest = cards.iter().find(|c| c.title == "Coding session").expect("the new time has a card");
         // Card times are whole minutes ("9:30 AM"): 1810 s reads as 1800.
         assert_eq!((rest.start_ts, rest.end_ts), (t0 + 900, t0 + 1800));
+        assert_eq!(rest.generated_by.as_ref().map(|g| (g.provider.as_str(), g.model.as_str(), g.fallback)), Some(("OpenAI-compatible API", "m", false)));
+        assert_eq!(edited.generated_by, None, "a card stored without it has none");
     }
 
     /// A model card from before an edited card to past it is split around it: the part after it
@@ -1058,6 +1087,10 @@ mod cli_provider_tests {
         let out = st.db.cards_in_range(0, i64::MAX, false).unwrap();
         assert_eq!(out.len(), 1, "{out:?}");
         assert_eq!(out[0].title, "Building the CLI provider");
+        assert_eq!(
+            out[0].generated_by,
+            Some(crate::db::GeneratedBy { provider: "Claude Code CLI".into(), model: "haiku".into(), fallback: false })
+        );
         assert_eq!(out[0].category, "Work");
         assert_eq!((out[0].start_ts, out[0].end_ts), (base, base + 960));
         assert!(out[0].detailed_summary.contains("edited one_step.rs"), "model's detail lines kept");
@@ -1099,6 +1132,11 @@ mod cli_provider_tests {
         let out = st.db.cards_in_range(0, i64::MAX, false).unwrap();
         assert_eq!(out.len(), 1, "{out:?}");
         assert_eq!(out[0].title, "Editing the analysis loop");
+        assert_eq!(
+            out[0].generated_by,
+            Some(crate::db::GeneratedBy { provider: "Claude Code CLI".into(), model: "sonnet".into(), fallback: true }),
+            "marked as written by the fallback provider"
+        );
         // The main CLI ran once (no two-step retry on a signed-out CLI); the backup twice.
         assert_eq!(std::fs::read_to_string(format!("{main}.args")).unwrap().lines().count(), 1);
         let backup_args = std::fs::read_to_string(format!("{backup}.args")).unwrap();

@@ -52,6 +52,8 @@ export interface DayPlan {
   batchIds: number[];
   keptEditedCards: number;
   blocked: string | null;
+  /** With the Batch API on: the requests are sent directly, at the regular price. */
+  costNote?: string | null;
 }
 
 export interface BatchProgress {

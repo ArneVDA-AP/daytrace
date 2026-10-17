@@ -1,13 +1,18 @@
-//! Platform features for Dayflow parity: first-run setup, timed pause, the tray's state, day
-//! rollover support, Windows notifications, the update check, the private-app picker and the
-//! light/dark override. A loop (`spawn`) resumes timed pauses, keeps the tray in sync and sends
-//! notifications; the pure logic lives in the submodules.
+//! Platform features for Dayflow parity: first-run setup, timed pause, pause and resume from
+//! outside the window, the tray's state, day rollover support, Windows notifications, the update
+//! check and the installing of updates, "What's new", "Copy debug info", the private-app picker
+//! and the light/dark override. A loop (`spawn`) resumes timed pauses, keeps the tray in sync,
+//! sends notifications and installs downloaded updates; the pure logic lives in the submodules.
 
 pub mod apps;
+pub mod autoupdate;
+pub mod debug_info;
 pub mod notify;
 pub mod pause;
+pub mod switches;
 pub mod tray_state;
 pub mod update;
+pub mod whats_new;
 
 pub use notify::NotificationPrefs;
 
@@ -58,6 +63,8 @@ const K_RECAP_SEEN: &str = "recap_seen";
 const K_FIRST_CARDS: &str = "first_cards";
 const K_UPDATE: &str = "update_status";
 const K_UPDATE_NOTIFIED: &str = "update_notified";
+/// The version whose "What's new" was shown (a fresh install records its own version).
+const K_WHATS_NEW: &str = "whats_new_seen";
 
 pub fn kv_get(state: &AppState, key: &str) -> Option<String> {
     let c = state.db.conn();
@@ -134,7 +141,8 @@ pub fn init(state: &AppState) {
     let raw = std::fs::read_to_string(&state.paths.settings).ok();
     let has_recordings = state.db.conn().query_row("SELECT EXISTS(SELECT 1 FROM screenshots)", [], |r| r.get::<_, bool>(0)).unwrap_or(false);
     match classify_install(raw.as_deref(), has_recordings) {
-        Install::Fresh | Install::Current => {}
+        Install::Fresh => kv_set(state, K_WHATS_NEW, env!("CARGO_PKG_VERSION")),
+        Install::Current => {}
         Install::Existing => {
             log::info!("existing install: marking first-run setup as done");
             if let Err(e) = update_settings(state, |s| s.onboarding_completed = true) {
@@ -292,6 +300,7 @@ pub fn detect(state: &AppState, watch: &mut Watch, now: i64) -> Vec<(Kind, Strin
     let up = update_status(state);
     if let (true, Some(v)) = (up.available, up.latest_version)
         && kv_get(state, K_UPDATE_NOTIFIED).as_deref() != Some(v.as_str())
+        && !(settings.auto_install_updates && autoupdate::installs_itself(&install_status(), &v))
     {
         out.push((Kind::Update, v));
     }
@@ -455,9 +464,17 @@ pub async fn check_updates(app: &AppHandle, announce: bool) -> UpdateStatus {
     let _ = app.emit("platform-update", &st);
     crate::tray::set_update(st.latest_version.clone().filter(|_| st.available));
     crate::tray::refresh(app);
+    if let (true, Some(v)) = (st.available, &st.latest_version)
+        && state.settings().auto_install_updates
+    {
+        start_download(app, v);
+    }
     if announce {
         let (title, body) = match (&st.error, st.available, &st.latest_version) {
             (Some(e), _, _) => ("Couldn’t check for updates".to_string(), e.clone()),
+            (None, true, Some(v)) if state.settings().auto_install_updates => {
+                (format!("Daytrace {v} is available"), "It installs when the PC is idle or locked. Click to open the release page.".to_string())
+            }
             (None, true, Some(v)) => (format!("Daytrace {v} is available"), "Click to open the release page.".to_string()),
             (None, _, _) if st.no_releases => ("No releases yet".to_string(), "No Daytrace release has been published on GitHub yet.".to_string()),
             _ => ("Daytrace is up to date".to_string(), format!("You have the latest version ({current}).")),
@@ -465,6 +482,168 @@ pub async fn check_updates(app: &AppHandle, announce: bool) -> UpdateStatus {
         show_toast(app, if st.available { Kind::Update.toast_id() } else { Kind::Test.toast_id() }, &title, &body);
     }
     st
+}
+
+// ---- installing updates (autoupdate.rs) ----
+
+static INSTALL: Mutex<autoupdate::InstallStatus> = Mutex::new(autoupdate::InstallStatus::idle());
+/// The downloaded, verified update, built to start Daytrace minimized after the install.
+static PENDING: Mutex<Option<(tauri_plugin_updater::Update, Vec<u8>)>> = Mutex::new(None);
+
+pub fn install_status() -> autoupdate::InstallStatus {
+    INSTALL.lock().unwrap().clone()
+}
+
+fn set_install(app: &AppHandle, f: impl FnOnce(&mut autoupdate::InstallStatus)) {
+    let st = {
+        let mut g = INSTALL.lock().unwrap();
+        f(&mut g);
+        g.clone()
+    };
+    let _ = app.emit("platform-update-install", &st);
+}
+
+/// The folder of daytrace.exe and daytrace-mcp.exe.
+fn exe_dir() -> Option<std::path::PathBuf> {
+    std::env::current_exe().ok()?.parent().map(std::path::Path::to_path_buf)
+}
+
+/// The updater, set up to run the installer passively (tauri.conf.json) and start Daytrace again
+/// (minimized for automatic installs). Before Daytrace quits for the installer, daytrace-mcp.exe
+/// is moved aside so an MCP client that keeps it running does not block the install.
+fn updater(app: &AppHandle, minimized: bool) -> Result<tauri_plugin_updater::Updater> {
+    use tauri_plugin_updater::UpdaterExt;
+    Ok(app
+        .updater_builder()
+        .timeout(Duration::from_secs(300))
+        .restart_after_install(false)
+        .installer_args(autoupdate::installer_args(minimized))
+        .on_before_exit(|| {
+            log::info!("starting the update installer; Daytrace quits now");
+            if let Some(dir) = exe_dir() {
+                match autoupdate::move_mcp_aside(&dir) {
+                    Ok(true) => log::info!("moved {} aside for the installer", autoupdate::MCP_EXE),
+                    Ok(false) => {}
+                    Err(e) => log::warn!("could not move {} aside: {e}", autoupdate::MCP_EXE),
+                }
+            }
+            log::logger().flush();
+        })
+        .build()?)
+}
+
+/// Downloads `latest` in the background when it is not downloaded or downloading already.
+pub fn start_download(app: &AppHandle, latest: &str) {
+    {
+        let mut g = INSTALL.lock().unwrap();
+        if !autoupdate::should_prepare(&g, latest, now_ts()) {
+            return;
+        }
+        *g = autoupdate::InstallStatus { stage: autoupdate::Stage::Downloading, version: Some(latest.to_string()), ..autoupdate::InstallStatus::idle() };
+    }
+    let _ = app.emit("platform-update-install", install_status());
+    let app = app.clone();
+    let latest = latest.to_string();
+    tauri::async_runtime::spawn(async move {
+        match download(&app).await {
+            Ok((update, bytes)) => {
+                log::info!("update {} downloaded and verified ({} bytes); installs when the PC is idle or locked", update.version, bytes.len());
+                let version = update.version.clone();
+                *PENDING.lock().unwrap() = Some((update, bytes));
+                set_install(&app, |s| {
+                    s.stage = autoupdate::Stage::Ready;
+                    s.version = Some(version);
+                    s.error = None;
+                });
+            }
+            Err(e) => {
+                log::warn!("update {latest}: {e:#}");
+                set_install(&app, |s| {
+                    s.stage = autoupdate::Stage::Failed;
+                    s.error = Some(format!("{e:#}"));
+                    s.failed_at = Some(now_ts());
+                });
+            }
+        }
+    });
+}
+
+async fn download(app: &AppHandle) -> Result<(tauri_plugin_updater::Update, Vec<u8>)> {
+    let update = updater(app, true)?
+        .check()
+        .await
+        .map_err(|e| anyhow::anyhow!("Couldn’t read the signed update of this release ({e})"))?
+        .ok_or_else(|| anyhow::anyhow!("This release has no signed update for Daytrace to install. Use the release page."))?;
+    let a = app.clone();
+    let mut got = 0u64;
+    let mut shown = 0u64;
+    let bytes = update
+        .download(
+            move |n, total| {
+                got += n as u64;
+                // About every megabyte, so the progress line moves without flooding the window.
+                if got - shown >= 1 << 20 || total == Some(got) {
+                    shown = got;
+                    set_install(&a, |s| {
+                        s.downloaded = got;
+                        s.total = total;
+                    });
+                }
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("The download failed or its signature did not match ({e})"))?;
+    Ok((update, bytes))
+}
+
+/// Runs the installer of the downloaded update; on Windows Daytrace quits here.
+fn run_installer(app: &AppHandle, update: &tauri_plugin_updater::Update, bytes: &[u8]) -> Result<()> {
+    set_install(app, |s| s.stage = autoupdate::Stage::Installing);
+    let result: Result<()> = if cfg!(windows) { update.install(bytes).map_err(anyhow::Error::from) } else { Err(anyhow::anyhow!("Updates install on Windows only.")) };
+    if let Err(e) = &result {
+        log::error!("update install failed: {e:#}");
+        set_install(app, |s| {
+            s.stage = autoupdate::Stage::Failed;
+            s.error = Some(format!("Couldn’t start the installer: {e:#}"));
+            s.failed_at = Some(now_ts());
+        });
+    }
+    result
+}
+
+/// From the platform loop: installs the downloaded update when the PC is idle or locked.
+fn maybe_install(app: &AppHandle, state: &AppState) {
+    if INSTALL.lock().unwrap().stage != autoupdate::Stage::Ready || !state.settings().auto_install_updates {
+        return;
+    }
+    let moment = autoupdate::Moment {
+        idle_secs: crate::platform::idle_seconds(),
+        locked: crate::platform::is_locked(),
+        display_required: crate::platform::display_required(),
+        analyzing: state.analysis.lock().unwrap().current_batch.is_some(),
+    };
+    if !autoupdate::may_install(&moment) {
+        return;
+    }
+    let Some((update, bytes)) = PENDING.lock().unwrap().take() else { return };
+    log::info!("installing update {} (idle {} s, locked {})", update.version, moment.idle_secs, moment.locked);
+    let _ = run_installer(app, &update, &bytes);
+}
+
+/// "Install and restart now": a fresh check so the installer brings the window back, then the
+/// downloaded bytes (verified again against the signature).
+async fn install_now(app: &AppHandle) -> Result<()> {
+    let (version, bytes) = match PENDING.lock().unwrap().as_ref() {
+        Some((u, b)) => (u.version.clone(), b.clone()),
+        None => anyhow::bail!("No update is downloaded yet."),
+    };
+    let update = updater(app, false)?.check().await?.ok_or_else(|| anyhow::anyhow!("The update is no longer offered."))?;
+    if update.version != version {
+        anyhow::bail!("A newer version ({}) was published meanwhile; it downloads on the next check.", update.version);
+    }
+    log::info!("installing update {version} now (asked in Settings)");
+    run_installer(app, &update, &bytes)
 }
 
 fn open_release(app: &AppHandle) -> Result<(), String> {
@@ -497,6 +676,10 @@ pub fn spawn(app: AppHandle) {
             let mut watch = Watch::default();
             let mut last_notify_check = 0i64;
             let mut last_update_check = 0i64;
+            let mut last_install_check = 0i64;
+            if let Some(dir) = exe_dir() {
+                autoupdate::tidy_mcp_after_update(&dir);
+            }
             loop {
                 let now = now_ts();
                 match apply_due_pause(&state, now) {
@@ -526,6 +709,16 @@ pub fn spawn(app: AppHandle) {
                             check_updates(&a, false).await;
                         });
                     }
+                }
+                // A release found earlier (also before a restart) is downloaded when installing
+                // is on; a downloaded one installs when the PC is idle or locked.
+                if now - last_install_check >= 30 {
+                    last_install_check = now;
+                    let up = update_status(&state);
+                    if let (true, Some(v), true) = (up.available, up.latest_version.as_deref(), state.settings().auto_install_updates) {
+                        start_download(&app, v);
+                    }
+                    maybe_install(&app, &state);
                 }
                 std::thread::sleep(Duration::from_secs(1));
             }
@@ -558,6 +751,8 @@ pub struct PlatformInfo {
     update: UpdateStatus,
     /// Set when settings.json could not be read at startup: where the unreadable file was kept.
     damaged_settings_copy: Option<String>,
+    /// The download and install of an update.
+    install: autoupdate::InstallStatus,
 }
 
 #[tauri::command]
@@ -569,6 +764,7 @@ pub fn platform_info(state: S) -> PlatformInfo {
         minute_options: pause::MINUTE_OPTIONS.to_vec(),
         update: update_status(&state),
         damaged_settings_copy: kv_get(&state, K_SETTINGS_DAMAGED),
+        install: install_status(),
     }
 }
 
@@ -629,6 +825,82 @@ pub fn platform_open_screenshots(app: AppHandle, state: S) -> CmdResult<()> {
 #[tauri::command]
 pub fn platform_test_notification(app: AppHandle) {
     notify(&app, Kind::Test, "");
+}
+
+/// "Install and restart now" in Settings. On success Daytrace quits for the installer.
+#[tauri::command]
+pub async fn platform_install_update(app: AppHandle) -> CmdResult<()> {
+    install_now(&app).await.map_err(err)
+}
+
+/// The notes to show once after an update, or None.
+#[tauri::command]
+pub async fn platform_whats_new(state: S<'_>) -> CmdResult<Option<whats_new::WhatsNew>> {
+    let st = state.inner().clone();
+    let current = env!("CARGO_PKG_VERSION");
+    if !whats_new::due(kv_get(&st, K_WHATS_NEW).as_deref(), current, st.settings().onboarding_completed) {
+        return Ok(None);
+    }
+    let status = update_status(&st);
+    let fetched = if whats_new::stored_has_notes(&status, current) { None } else { Some(update::fetch_github_tag(current).await) };
+    let found = whats_new::resolve(current, &status, fetched, whats_new::CHANGELOG);
+    if found.is_none() {
+        // No notes anywhere: nothing to show for this version.
+        kv_set(&st, K_WHATS_NEW, current);
+    }
+    Ok(found)
+}
+
+/// Records that the notes of `version` were shown.
+#[tauri::command]
+pub fn platform_whats_new_seen(state: S, version: String) {
+    kv_set(&state, K_WHATS_NEW, version.trim());
+}
+
+/// "Copy debug info": recent batches, model calls and the end of the log, with keys, the user
+/// folder and titles taken out.
+#[tauri::command]
+pub async fn platform_debug_info(state: S<'_>) -> CmdResult<String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let s = st.settings();
+        let secrets: Vec<String> = [
+            crate::config::stored_key(s.provider, &s.base_url),
+            s.fallback_provider.and_then(|k| crate::config::stored_fallback_key(k, &s.fallback_base_url)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let env = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
+        let r = debug_info::Redactions { secrets, home: env("USERPROFILE").or_else(|| env("HOME")), user: env("USERNAME").or_else(|| env("USER")), titles: vec![] };
+        let up = update_status(&st);
+        let inst = install_status();
+        let extra = vec![
+            format!(
+                "Update check: latest {} · available {} · last check {} · error {}",
+                up.latest_version.as_deref().unwrap_or("unknown"),
+                up.available,
+                up.attempted_at.or(up.checked_at).map(|t| crate::timeutil::local(t).format("%Y-%m-%d %H:%M").to_string()).unwrap_or_else(|| "never".into()),
+                up.error.as_deref().unwrap_or("none")
+            ),
+            format!("Update install: {:?} {} {}", inst.stage, inst.version.as_deref().unwrap_or(""), inst.error.as_deref().unwrap_or("")).trim_end().to_string(),
+        ];
+        debug_info::build(&st, &st.paths.root.join("daytrace.log"), now_ts(), r, &extra)
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)
+}
+
+/// Opens a web link from the release notes in the browser.
+#[tauri::command]
+pub fn platform_open_link(app: AppHandle, url: String) -> CmdResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let parsed = reqwest::Url::parse(url.trim()).map_err(|_| "That link is not a valid web address.".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("Only web links can be opened.".into());
+    }
+    app.opener().open_url(parsed.as_str(), None::<&str>).map_err(err)
 }
 
 /// Opens the screenshots folder (tray menu).
