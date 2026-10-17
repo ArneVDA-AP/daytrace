@@ -8,8 +8,10 @@
 // 2. The browser-preview IPC mock (src/dev) must not be in the production bundle.
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const dist = new URL("../dist/", import.meta.url).pathname;
+// fileURLToPath, not URL.pathname: on Windows the pathname is "/D:/…", which join() turns into "D:\D:\…".
+const dist = fileURLToPath(new URL("../dist/", import.meta.url));
 const problems = [];
 
 const html = readFileSync(join(dist, "index.html"), "utf8");
