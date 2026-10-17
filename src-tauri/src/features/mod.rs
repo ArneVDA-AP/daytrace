@@ -5,6 +5,7 @@ pub mod chat;
 pub mod insights;
 pub mod journal;
 pub mod platform_extras;
+pub mod timeline_extras;
 
 /// Schemas of all feature modules, applied by `Db::open` after the core schema.
-pub const SCHEMAS: &[&str] = &[insights::SCHEMA, chat::SCHEMA, journal::SCHEMA, platform_extras::SCHEMA];
+pub const SCHEMAS: &[&str] = &[insights::SCHEMA, chat::SCHEMA, journal::SCHEMA, platform_extras::SCHEMA, timeline_extras::SCHEMA];

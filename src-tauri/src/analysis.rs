@@ -206,9 +206,12 @@ async fn run_pipeline(state: &AppState, batch: &Batch, shots: &[crate::db::Shot]
     let current = batch.end_ts;
     let window_start = current - CARD_LOOKBACK;
     // Idle-shortcut cards stay out of the model's view (nothing to rewrite there) and are kept.
+    // Cards the user edited are treated the same way, so a rewrite never undoes the edit.
     let all_cards = state.db.cards_in_range(window_start, current, true)?;
-    let idle_spans: Vec<(i64, i64)> = all_cards.iter().filter(|c| c.is_idle_shortcut).map(|c| (c.start_ts, c.end_ts)).collect();
-    let stored: Vec<_> = all_cards.into_iter().filter(|c| !c.is_idle_shortcut).collect();
+    let edited = state.db.user_edited_card_ids(window_start, current)?;
+    let kept = |c: &crate::db::StoredCard| c.is_idle_shortcut || edited.contains(&c.id);
+    let idle_spans: Vec<(i64, i64)> = all_cards.iter().filter(|c| kept(c)).map(|c| (c.start_ts, c.end_ts)).collect();
+    let stored: Vec<_> = all_cards.into_iter().filter(|c| !kept(c)).collect();
     let existing: Vec<ActivityCard> = stored.iter().map(|c| c.to_activity()).collect();
     // Context for the model: the whole span of the cards it rewrites, not just the last 45 min,
     // so the part of a long card before the window is not reduced to its summary (capped at 2 h).

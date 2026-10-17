@@ -93,6 +93,26 @@ pub fn run() {
             features::chat::chat_save_memory,
             features::chat::chat_open_link,
             // journal commands
+            features::journal::journal_get,
+            features::journal::journal_save_plan,
+            features::journal::journal_skip,
+            features::journal::journal_add_item,
+            features::journal::journal_update_item,
+            features::journal::journal_delete_item,
+            // timeline_extras commands
+            features::timeline_extras::te_day_extras,
+            features::timeline_extras::te_update_card,
+            features::timeline_extras::te_delete_card,
+            features::timeline_extras::te_set_feedback,
+            features::timeline_extras::te_rate_card,
+            features::timeline_extras::te_days_with_data,
+            features::timeline_extras::te_timeline_text,
+            features::timeline_extras::te_reprocess_day_plan,
+            features::timeline_extras::te_reprocess_day,
+            features::timeline_extras::te_reprocess_card,
+            features::timeline_extras::te_batch_progress,
+            features::timeline_extras::te_retry_batches,
+            features::timeline_extras::te_retry_status,
             // platform_extras commands
             // provider commands
         ])
