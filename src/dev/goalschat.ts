@@ -23,6 +23,7 @@ import type { Evidence, GoalItem, GoalsView, Plan, Progress } from "@/views/jour
 import { formatDayShort, shiftDay } from "@/lib/time";
 import type { Dataset } from "@/dev/fixtures";
 import { computeDay } from "@/dev/insights";
+import { countsAsOf } from "@/views/insights/format";
 
 type Args = Record<string, unknown>;
 
@@ -169,9 +170,9 @@ export function goalsChatHandlers(ctx: GoalsChatContext): Record<string, (a: Arg
       distractedSecs: st.distractedSecs,
       // Like the backend: every focus category, also those without time yet.
       focusCategories: settings.categories
-        .filter((c) => !c.isIdle && !/^distractions?$/i.test(c.name.trim()))
+        .filter((c) => countsAsOf(c) === "focus")
         .map((c) => ({ name: c.name, color: c.color, secs: st.totals.find((t) => t.name === c.name)?.secs ?? 0 })),
-      distractionCategories: settings.categories.filter((c) => /^distractions?$/i.test(c.name.trim())).map((c) => c.name),
+      distractionCategories: settings.categories.filter((c) => countsAsOf(c) === "distraction").map((c) => c.name),
     };
   };
   const goals = (day: string): GoalsView => {

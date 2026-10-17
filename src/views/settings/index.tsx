@@ -1,9 +1,9 @@
 import * as React from "react";
 import { CircleAlert, CircleCheck } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Spinner } from "@/components/ui/spinner";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { href, useRoute } from "@/lib/router";
+import { href, navigate, useRoute } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import { AiToolsSection } from "./ai-tools-section";
 import { CategoriesSection } from "./categories-section";
@@ -18,9 +18,9 @@ import { SETTINGS_SECTION_META, type SettingsSectionMeta } from "./sections";
 import { StorageSection } from "./storage-section";
 
 /*
- * Settings: one page per section, picked in the list on the left (icons only below 960 px) and
- * addressable as #/settings?section=storage. Every control applies as you change it; text fields
- * save when you leave them, and when you leave the page (see save.ts).
+ * Settings: one page per section, picked in the list on the left (a "Section" list box above the
+ * page below 960 px) and addressable as #/settings?section=storage. Every control applies as you
+ * change it; text fields save when you leave them, and when you leave the page (see save.ts).
  */
 
 interface SettingsPage extends SettingsSectionMeta {
@@ -59,7 +59,7 @@ export default function SettingsSection() {
     <SaveStatusProvider value={status}>
       <PageHeader label="Settings" title={page.label} actions={<SaveStatusText />} />
       <div className="flex min-h-0 flex-1">
-        <nav aria-label="Settings sections" className="scroll-thin w-56 shrink-0 overflow-y-auto border-r p-2 max-split:w-14">
+        <nav aria-label="Settings sections" className="scroll-thin w-56 shrink-0 overflow-y-auto border-r p-2 max-split:hidden">
           <ul className="flex flex-col gap-0.5">
             {SETTINGS_SECTIONS.map((p) => (
               <li key={p.id}>
@@ -70,6 +70,7 @@ export default function SettingsSection() {
         </nav>
         <div ref={scroller} className="scroll-thin min-h-0 min-w-0 flex-1 overflow-y-auto">
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 pt-5 pb-10 max-split:px-5">
+            <SectionPicker current={page.id} />
             <Page key={page.id} />
           </div>
         </div>
@@ -80,37 +81,43 @@ export default function SettingsSection() {
 
 function SectionLink({ page, active }: { page: SettingsPage; active: boolean }) {
   const Icon = page.icon;
-  const link = (
+  return (
     <a
       href={href("settings", { section: page.id })}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "flex h-8 items-center gap-2.5 rounded-md px-2.5 text-meta text-muted-foreground hover:bg-surface-2 hover:text-foreground max-split:justify-center max-split:px-0",
+        "flex h-8 items-center gap-2.5 rounded-md px-2.5 text-meta text-muted-foreground hover:bg-surface-2 hover:text-foreground",
         active && "bg-surface-2 font-medium text-foreground",
       )}
     >
       <Icon className="size-4 shrink-0" aria-hidden />
-      <span className="truncate max-split:sr-only">{page.label}</span>
+      <span className="truncate">{page.label}</span>
     </a>
   );
-  return <NarrowTooltip label={page.label}>{link}</NarrowTooltip>;
 }
 
-/** Below 960 px the section list shows icons only; the tooltip names them. */
-function NarrowTooltip({ label, children }: { label: string; children: React.ReactElement }) {
-  const [narrow, setNarrow] = React.useState(() => !matchMedia("(min-width: 60rem)").matches);
-  React.useEffect(() => {
-    const mq = matchMedia("(min-width: 60rem)");
-    const on = () => setNarrow(!mq.matches);
-    mq.addEventListener("change", on);
-    return () => mq.removeEventListener("change", on);
-  }, []);
-  if (!narrow) return children;
+/** Below 960 px there is no room for the list of sections: a list box above the page picks one. */
+function SectionPicker({ current }: { current: string }) {
+  const id = React.useId();
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>{children}</TooltipTrigger>
-      <TooltipContent side="right">{label}</TooltipContent>
-    </Tooltip>
+    <div className="flex items-center gap-3 split:hidden">
+      <label htmlFor={id} className="text-meta font-medium">
+        Section
+      </label>
+      <NativeSelect
+        id={id}
+        value={current}
+        wrapperClassName="min-w-0 flex-1"
+        className="w-full"
+        onChange={(e) => navigate("settings", { section: e.target.value }, { replace: true })}
+      >
+        {SETTINGS_SECTIONS.map((p) => (
+          <NativeSelectOption key={p.id} value={p.id}>
+            {p.label}
+          </NativeSelectOption>
+        ))}
+      </NativeSelect>
+    </div>
   );
 }
 

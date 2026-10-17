@@ -28,10 +28,12 @@ import { AssistantMessage, ErrorMessage, StepList, UserMessage, type Step } from
 
 /** The open chat survives leaving the section (the rail links to #/chat without ?c=). */
 let lastConversationId: number | null = null;
+/** So does a question typed but not sent (Ctrl+2 and back keeps it). */
+let draftInput = "";
 
 export default function ChatSection() {
   const { today, colorFor, settings } = useViewProps();
-  const { analysis } = useAppState();
+  const { analysis, problems } = useAppState();
   const route = useRoute();
   const cParam = numParam(route.params, "c");
   const activeId = route.section === "chat" ? cParam : null;
@@ -48,8 +50,15 @@ export default function ChatSection() {
   const [stopping, setStopping] = React.useState(false);
   const [steps, setSteps] = React.useState<Step[]>([]);
   const [stage, setStage] = React.useState<"thinking" | "tools">("thinking");
-  const [sendError, setSendError] = React.useState<string | null>(null);
-  const [input, setInput] = React.useState("");
+  /** A question that could not be sent, and whether it went back into the empty field. */
+  const [sendError, setSendError] = React.useState<{ message: string; question: string; restored: boolean } | null>(null);
+  const [input, setInputState] = React.useState(() => draftInput);
+  const inputNow = React.useRef(input);
+  const setInput = React.useCallback((v: string) => {
+    draftInput = v;
+    inputNow.current = v;
+    setInputState(v);
+  }, []);
   const [copied, setCopied] = React.useState<number | null>(null);
   const [toDelete, setToDelete] = React.useState<Conversation | null>(null);
   const [link, setLink] = React.useState<ReturnType<typeof linkTarget>>(null);
@@ -76,9 +85,10 @@ export default function ChatSection() {
     setParams({ c: id }, { section: "chat" });
   }, []);
 
-  // Back to the chat that was open when the section was left.
+  // Back to the chat that was open when the section was left; a new chat starts in the field.
   React.useEffect(() => {
     if (cParam === null && lastConversationId !== null) setParams({ c: lastConversationId }, { section: "chat" });
+    else if (cParam === null) requestAnimationFrame(() => inputRef.current?.focus());
     // Only on entering the section.
   }, []);
 
@@ -218,13 +228,17 @@ export default function ChatSection() {
   const blocked = info?.problem ?? null;
   const othersBusy = !busy && !!info?.busy;
 
-  const send = async (raw: string) => {
+  /**
+   * Sends a question. `fromField`: it is the text in the field, which empties; a suggestion, a
+   * welcome prompt or Try again leave what is typed there alone.
+   */
+  const send = async (raw: string, fromField: boolean) => {
     const text = raw.trim();
     if (!text || busy || info?.busy || blocked) return;
     setSendError(null);
     setConvError(null);
     setPending(text);
-    setInput("");
+    if (fromField) setInput("");
     setSteps([]);
     setStage("thinking");
     setBusy(true);
@@ -247,9 +261,11 @@ export default function ChatSection() {
           : `No answer. ${last?.content ?? ""}`,
       );
     } catch (e) {
-      // Nothing was stored (for example the provider is not set up); give the question back.
-      setSendError(errorText(e));
-      setInput(text);
+      // Nothing was stored (for example the provider is not set up). The question goes back into
+      // the field when it is empty; newer typing there is kept.
+      const restored = !inputNow.current.trim();
+      if (restored) setInput(text);
+      setSendError({ message: errorText(e), question: text, restored });
     } finally {
       busyRef.current = false;
       setPending(null);
@@ -270,7 +286,7 @@ export default function ChatSection() {
 
   const retry = () => {
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
-    if (lastUser) void send(lastUser.content);
+    if (lastUser) void send(lastUser.content, false);
   };
 
   const remove = async (c: Conversation) => {
@@ -368,7 +384,15 @@ export default function ChatSection() {
               </TooltipTrigger>
               <TooltipContent className="wide:hidden">Memory</TooltipContent>
             </Tooltip>
-            <Button variant="outline" size="sm" onClick={() => openConversation(null)} disabled={busy || (activeId === null && messages.length === 0)}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                openConversation(null);
+                requestAnimationFrame(() => inputRef.current?.focus());
+              }}
+              disabled={busy || (activeId === null && messages.length === 0)}
+            >
               <SquarePen aria-hidden="true" /> New chat
             </Button>
           </>
@@ -418,7 +442,7 @@ export default function ChatSection() {
                   prompts={info?.welcomePrompts ?? []}
                   providerLabel={info?.providerLabel ?? null}
                   disabled={!!blocked || busy || !!info?.busy}
-                  onAsk={(q) => void send(q)}
+                  onAsk={(q) => void send(q, false)}
                 />
               )}
 
@@ -465,7 +489,7 @@ export default function ChatSection() {
                           size="sm"
                           className="h-auto min-h-7 rounded-full py-1 text-left whitespace-normal"
                           disabled={!!blocked || !!info?.busy}
-                          onClick={() => void send(s)}
+                          onClick={() => void send(s, false)}
                         >
                           {s}
                         </Button>
@@ -498,23 +522,29 @@ export default function ChatSection() {
                   tone="error"
                   title="Couldn’t send the question"
                   actions={
-                    <Button size="sm" variant="outline" onClick={() => void send(input)} disabled={!input.trim() || !!blocked}>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void send(sendError.question, input.trim() === sendError.question)}
+                      disabled={!!blocked || busy || !!info?.busy}
+                    >
                       <RotateCcw aria-hidden="true" /> Try again
                     </Button>
                   }
                 >
-                  {sendError} Your question is back in the field below.
+                  {sendError.message} {sendError.restored ? "Your question is back in the field below." : `Try again sends “${sendError.question}” again.`}
                 </Banner>
               )}
               <Composer
                 value={input}
                 onChange={setInput}
-                onSend={() => void send(input)}
+                onSend={() => void send(input, true)}
                 onStop={stop}
                 canStop={busy || !!info?.busy}
                 stopping={stopping}
                 sending={busy}
                 problem={blocked}
+                fixInSettings={!(problems.noKey && /api key/i.test(blocked ?? ""))}
                 inputRef={inputRef}
               />
             </div>

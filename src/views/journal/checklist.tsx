@@ -28,6 +28,7 @@ export function Checklist({
   onAdd,
   onRename,
   onDelete,
+  onDirty,
 }: {
   day: string;
   today: string;
@@ -38,12 +39,35 @@ export function Checklist({
   onAdd: (text: string) => Promise<boolean>;
   onRename: (item: GoalItem, text: string) => Promise<boolean>;
   onDelete: (item: GoalItem) => void;
+  /** Text typed but not added, or an item being edited. */
+  onDirty?: (dirty: boolean) => void;
 }) {
   const [draft, setDraft] = React.useState("");
   const [adding, setAdding] = React.useState(false);
   const [editId, setEditId] = React.useState<number | null>(null);
   const addRef = React.useRef<HTMLInputElement>(null);
+  const listRef = React.useRef<HTMLUListElement>(null);
+  /** The item being deleted and its place: focus goes to the item that takes it. */
+  const deleting = React.useRef<{ id: number; index: number } | null>(null);
   const full = items.length >= MAX_ITEMS;
+
+  const dirty = draft.trim() !== "" || editId !== null;
+  React.useEffect(() => onDirty?.(dirty), [dirty, onDirty]);
+  React.useEffect(() => () => onDirty?.(false), [onDirty]);
+
+  React.useEffect(() => {
+    const d = deleting.current;
+    if (!d || items.some((i) => i.id === d.id)) return;
+    deleting.current = null;
+    const next = items[Math.min(d.index, items.length - 1)];
+    const target = next ? listRef.current?.querySelector<HTMLElement>(`#goal-${next.id}`) : addRef.current;
+    target?.focus();
+  }, [items]);
+
+  const remove = (item: GoalItem) => {
+    deleting.current = { id: item.id, index: items.findIndex((i) => i.id === item.id) };
+    onDelete(item);
+  };
 
   const add = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -58,7 +82,7 @@ export function Checklist({
   return (
     <div className="flex flex-col gap-3">
       {items.length > 0 && (
-        <ul className="flex flex-col">
+        <ul ref={listRef} className="flex flex-col">
           {items.map((item) => (
             <ItemRow
               key={item.id}
@@ -72,7 +96,7 @@ export function Checklist({
               colorFor={colorFor}
               onToggle={onToggle}
               onRename={onRename}
-              onDelete={onDelete}
+              onDelete={remove}
             />
           ))}
         </ul>

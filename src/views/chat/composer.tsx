@@ -11,7 +11,8 @@ import { cn } from "@/lib/utils";
  * The question field. Enter sends, Shift+Enter starts a new line, Esc stops an answer that is
  * being written (here or in another window). Typing stays possible while an answer runs; only
  * sending waits. When chat cannot run (no model, no key, a CLI provider), the field is disabled
- * and the reason is shown in its place with the way to fix it.
+ * and the reason is shown in one line, with Open Settings unless the page already offers the fix
+ * (a missing API key has its own banner under the page title).
  */
 export function Composer({
   value,
@@ -22,6 +23,7 @@ export function Composer({
   stopping,
   sending,
   problem,
+  fixInSettings = true,
   inputRef,
 }: {
   value: string;
@@ -34,6 +36,8 @@ export function Composer({
   /** This window is answering (the send button would do nothing). */
   sending: boolean;
   problem: string | null;
+  /** Offer Open Settings next to the problem (false when a page banner already has the fix). */
+  fixInSettings?: boolean;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
 }) {
   const disabled = problem !== null;
@@ -95,9 +99,11 @@ export function Composer({
           </p>
         )}
         {problem ? (
-          <Button type="button" size="sm" variant="outline" onClick={() => navigate("settings", { section: "provider" })}>
-            Open Settings
-          </Button>
+          fixInSettings && (
+            <Button type="button" size="sm" variant="outline" onClick={() => navigate("settings", { section: "provider" })}>
+              Open Settings
+            </Button>
+          )
         ) : canStop ? (
           <Tooltip>
             <TooltipTrigger asChild>

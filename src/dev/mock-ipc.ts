@@ -30,6 +30,7 @@ import { goalsChatHandlers } from "@/dev/goalschat";
 import { timelineMock } from "@/dev/timeline";
 import { applySettingsMock } from "@/dev/settings";
 import { applyF4Mock } from "@/dev/f4";
+import { applyF2Mock } from "@/dev/w4-f2";
 
 export const DEV_MOCK_MARKER = "DAYTRACE_DEV_MOCK_IPC";
 
@@ -77,6 +78,8 @@ function defaultSettings(provider: ProviderKind): Settings {
     checkUpdates: true,
     storageLimitGb: 0,
     autoInstallUpdates: true,
+    recapModel: "",
+    showGoalPrompt: true,
   };
 }
 
@@ -296,6 +299,7 @@ export function installMockIpc() {
   Object.assign(handlers, timelineMock(ds, now)); // Timeline fixtures and handlers (src/dev/timeline.ts)
   applySettingsMock(handlers, { q, flags, settings, now, dataDir });
   applyF4Mock(handlers, { q, now }); // update install, What's new, debug info (src/dev/f4.ts)
+  applyF2Mock(handlers, { q, settings, today: ds.today }); // wave 4 views (src/dev/w4-f2.ts)
 
   mockWindows("main");
   mockIPC(

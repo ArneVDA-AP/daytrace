@@ -81,4 +81,6 @@ export const journalApi = {
   updateItem: (id: number, patch: { text?: string; done?: boolean }) =>
     invoke<GoalsView>("journal_update_item", { id, text: patch.text ?? null, done: patch.done ?? null }),
   deleteItem: (id: number, day: string) => invoke<GoalsView>("journal_delete_item", { id, day }),
+  /** The morning flow to open by itself, at most once a day; null when it is off, not due or shown. */
+  takePrompt: () => invoke<GoalsView | null>("journal_take_prompt"),
 };

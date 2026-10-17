@@ -1,8 +1,9 @@
 import { ArrowUpRight } from "lucide-react";
+import type { Category } from "@/api";
 import { href } from "@/lib/router";
 import { clock, formatDuration } from "@/lib/time";
 import type { DayStats } from "@/views/insights/api";
-import { percent } from "@/views/insights/format";
+import { categoriesCounting, nameList, percent } from "@/views/insights/format";
 import { BarList, SectionCard, StatStrip, StatTile } from "@/views/insights/parts";
 
 /*
@@ -10,8 +11,13 @@ import { BarList, SectionCard, StatStrip, StatTile } from "@/views/insights/part
  * distractions, focus blocks and the programs in front.
  */
 
-function times(n: number): string {
-  return n === 1 ? "1 time" : `${n} times`;
+function cards(n: number): string {
+  return n === 1 ? "1 card" : `${n} cards`;
+}
+
+/** Recorded minus idle: the denominator of every percentage of the day. */
+export function activeSecs(stats: Pick<DayStats, "activeSecs" | "capturedSecs" | "idleSecs">): number {
+  return stats.activeSecs ?? Math.max(0, stats.capturedSecs - stats.idleSecs);
 }
 
 // Three tiles then two below 960 px, five in a row from there.
@@ -19,13 +25,13 @@ const third = "col-span-2 split:col-span-1";
 const half = "col-span-3 split:col-span-1";
 
 export function DayStatStrip({ stats }: { stats: DayStats }) {
-  const active = stats.focusSecs + stats.distractedSecs;
+  const active = activeSecs(stats);
   return (
     <StatStrip label="The day in numbers" className="grid-cols-6 split:grid-cols-5">
       <StatTile className={third} label="Focused for" value={formatDuration(stats.focusSecs)} note={`${percent(stats.focusSecs, active)} of active time`} />
       <StatTile className={third} label="Distracted for" value={formatDuration(stats.distractedSecs)} note={`${percent(stats.distractedSecs, active)} of active time`} />
-      <StatTile className={third} label="Context switched" value={times(stats.contextSwitches)} note="Changes of category" />
-      <StatTile className={half} label="Interrupted" value={times(stats.interruptions)} note="Cards with a distraction noted" />
+      <StatTile className={third} label="Context switches" value={stats.contextSwitches} note="Changes of category" />
+      <StatTile className={half} label="Interrupted" value={cards(stats.interruptions)} note="With a distraction noted inside" />
       <StatTile className={half} label="Transitioning" value={formatDuration(stats.transitionSecs)} note="Gaps between cards" />
     </StatStrip>
   );
@@ -33,10 +39,11 @@ export function DayStatStrip({ stats }: { stats: DayStats }) {
 
 export function DistractionsCard({ stats, day, isToday }: { stats: DayStats; day: string; isToday: boolean }) {
   const list = stats.distractions;
+  const active = activeSecs(stats);
   return (
     <SectionCard
       title={isToday ? "Distractions so far" : "Distractions"}
-      description={`${formatDuration(stats.distractedSecs)} of ${formatDuration(stats.capturedSecs)} recorded (${percent(stats.distractedSecs, stats.capturedSecs)}), from Distraction cards and distractions noted inside other cards.`}
+      description={`${formatDuration(stats.distractedSecs)}, ${percent(stats.distractedSecs, active)} of active time, from cards that count as distraction and distractions noted inside other cards.`}
     >
       {list.length ? (
         <ol className="flex flex-col">
@@ -69,10 +76,17 @@ export function DistractionsCard({ stats, day, isToday }: { stats: DayStats; day
   );
 }
 
-export function FocusCard({ stats }: { stats: DayStats }) {
+/** "Work and Personal count as focus." from Settings > Categories. */
+export function focusSentence(categories: Category[]): string {
+  const names = categoriesCounting("focus", categories);
+  if (!names.length) return "No category counts as focus.";
+  return `${nameList(names)} ${names.length === 1 ? "counts" : "count"} as focus.`;
+}
+
+export function FocusCard({ stats, categories }: { stats: DayStats; categories: Category[] }) {
   const longest = stats.longestFocus;
   return (
-    <SectionCard title="Focus blocks" description="Every category except Distraction and Idle counts as focus. Breaks under 5 minutes do not end a block.">
+    <SectionCard title="Focus blocks" description={`${focusSentence(categories)} Breaks under 5 minutes do not end a block.`}>
       {longest ? (
         <div className="flex flex-col gap-3">
           <div>

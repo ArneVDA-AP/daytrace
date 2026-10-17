@@ -11,6 +11,7 @@ import { toast } from "@/components/ui/toast";
 import { formatDayTitle, shiftDay } from "@/lib/time";
 import { useDelayedLoading } from "@/lib/use-delayed";
 import { errorText } from "@/lib/utils";
+import { useUnsavedWork } from "@/views/platform-hooks";
 import { teApi, type DayExtras } from "@/timeline-extras-api";
 import { journalApi, type GoalItem, type GoalsView } from "@/views/journal-api";
 import { Checklist } from "@/views/journal/checklist";
@@ -20,7 +21,7 @@ import { GoalSetup, SkippedView, TargetsActions, TargetsView, YesterdayReview } 
 
 /*
  * Goals (view id "journal"): Dayflow's day goals for the shared day. A focus target and a
- * distraction budget with progress, the morning review and setup ("Skip today"), a to-do list
+ * distraction limit with progress, the morning review and setup ("Skip today"), a to-do list
  * whose items show the cards that mention them (the evidence check), and the day's ratings.
  * Backend: features/journal.rs (goals) and features/timeline_extras (ratings).
  */
@@ -37,8 +38,27 @@ export default function GoalsSection() {
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [editing, setEditing] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
+  const [setupDirty, setSetupDirty] = React.useState(false);
+  const [listDirty, setListDirty] = React.useState(false);
   const dayRef = React.useRef(day);
   dayRef.current = day;
+  const editTargetsRef = React.useRef<HTMLButtonElement>(null);
+  const setTargetsRef = React.useRef<HTMLButtonElement>(null);
+  const wasEditing = React.useRef(false);
+
+  // Targets being chosen or a to-do being typed hold off the idle return to today and the 4 AM
+  // rollover, which would reset them.
+  useUnsavedWork(setupDirty || listDirty, "goals");
+
+  // Edit targets swaps the targets for the form: focus moves to the first field, and back to the
+  // button that opened it when the form closes (saved, skipped or canceled).
+  const focusTargetsAction = () => requestAnimationFrame(() => (editTargetsRef.current ?? setTargetsRef.current)?.focus());
+  React.useEffect(() => {
+    if (editing && !wasEditing.current) requestAnimationFrame(() => document.getElementById("goal-focus-h")?.focus());
+    if (!editing && wasEditing.current) focusTargetsAction();
+    wasEditing.current = editing;
+    if (!editing) setSetupDirty(false);
+  }, [editing]);
 
   const load = React.useCallback((d: string) => {
     const same = <T,>(prev: T | null, next: T) => (prev !== null && JSON.stringify(prev) === JSON.stringify(next) ? prev : next);
@@ -152,7 +172,7 @@ export default function GoalsSection() {
     else if (noRecording) targetsNote = "Nothing was recorded on this day, so there is no progress to compare.";
     else if (!plan.saved)
       targetsNote = plan.carriedFrom ? `Same targets as ${formatDayTitle(plan.carriedFrom)}.` : "Default targets. Edit them to set your own.";
-    else if (view.isToday) targetsNote = "Progress comes from your focus and distraction categories.";
+    else if (view.isToday) targetsNote = "Progress comes from the categories that count as focus or distraction.";
 
     body = (
       <>
@@ -175,7 +195,7 @@ export default function GoalsSection() {
             className="wide:col-start-1 wide:row-start-1"
             title={view.isToday ? "Today’s targets" : "Targets"}
             description={targetsNote}
-            actions={!showSetup && !plan.isSkipped && <TargetsActions onEdit={() => setEditing(true)} />}
+            actions={!showSetup && !plan.isSkipped && <TargetsActions editRef={editTargetsRef} onEdit={() => setEditing(true)} />}
           >
             {showSetup ? (
               <GoalSetup
@@ -189,19 +209,24 @@ export default function GoalsSection() {
                   setSaving(true);
                   if (await run(() => journalApi.savePlan(day, f, dl))) {
                     setEditing(false);
+                    focusTargetsAction();
                     toast("Targets saved");
                   }
                   setSaving(false);
                 }}
                 onSkip={async () => {
                   setSaving(true);
-                  if (await run(() => journalApi.skip(day))) setEditing(false);
+                  if (await run(() => journalApi.skip(day))) {
+                    setEditing(false);
+                    focusTargetsAction();
+                  }
                   setSaving(false);
                 }}
                 onCancel={editing ? () => setEditing(false) : undefined}
+                onDirty={setSetupDirty}
               />
             ) : plan.isSkipped ? (
-              <SkippedView isToday={view.isToday} onSet={() => setEditing(true)} />
+              <SkippedView isToday={view.isToday} onSet={() => setEditing(true)} setRef={setTargetsRef} />
             ) : (
               <TargetsView
                 plan={plan}
@@ -234,6 +259,7 @@ export default function GoalsSection() {
               onAdd={(text) => run(() => journalApi.addItem(day, text))}
               onRename={(item, text) => run(() => journalApi.updateItem(item.id, { text }))}
               onDelete={(item) => void remove(item)}
+              onDirty={setListDirty}
             />
           </Panel>
 

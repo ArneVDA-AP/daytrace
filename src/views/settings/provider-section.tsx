@@ -11,7 +11,7 @@ import { cn, errorText } from "@/lib/utils";
 import { CliPathField } from "./cli-path-field";
 import { Choice, FieldError, Group, OutcomeLine, Row, type Outcome } from "./fields";
 import { cliCommand, cliCompany, cliProduct, cliSignIn, defaultPipeline, keySource, PROVIDERS, providerInfo, type ProviderInfo } from "./providers";
-import { savedSettings, useCommitField, useSave } from "./save";
+import { reportLeaveFailure, savedSettings, useCommitField, useFieldSaves, useSave } from "./save";
 
 /** Settings > Model provider: the main provider, its connection and analysis options, the fallback. */
 export function ProviderSection() {
@@ -40,6 +40,7 @@ function MainProvider() {
   const s = app.settings.settings;
   const hasKey = app.settings.hasApiKey;
   const save = useSave();
+  const fields = useFieldSaves();
   const [choice, setChoice] = React.useState<ProviderKind | null>(null);
   const [previous, setPrevious] = React.useState<Saved | null>(null);
   const [providerError, setProviderError] = React.useState<string | null>(null);
@@ -62,7 +63,7 @@ function MainProvider() {
   React.useEffect(
     () => () => {
       const k = keyRef.current.trim();
-      if (k) queueMicrotask(() => void save({}, { apiKey: k }).catch(() => undefined));
+      if (k) queueMicrotask(() => void save({}, { apiKey: k }).catch(reportLeaveFailure("The API key")));
     },
     [save],
   );
@@ -325,8 +326,8 @@ function MainProvider() {
         ) : (
           <Row label="Analysis" labelId={ids.pipeline} stack>
             <RadioGroup
-              value={s.pipeline}
-              onValueChange={(v) => void save({ pipeline: v as Settings["pipeline"] }).catch(() => undefined)}
+              value={fields.shown("pipeline", s.pipeline)}
+              onValueChange={(v) => void fields.apply("pipeline", v, { pipeline: v as Settings["pipeline"] })}
               aria-labelledby={ids.pipeline}
               className="gap-2"
             >
@@ -341,6 +342,7 @@ function MainProvider() {
                 text="Each screenshot is described on its own, then combined into one card. Suited to small local vision models such as qwen3-vl:4b."
               />
             </RadioGroup>
+            <FieldError>{fields.error("pipeline")}</FieldError>
           </Row>
         )}
 
@@ -349,22 +351,24 @@ function MainProvider() {
             <Row label="Model reasoning" htmlFor={ids.reasoning} description="How much the model thinks before it writes a card.">
               <Choice
                 id={ids.reasoning}
-                value={s.reasoning}
+                value={fields.shown("reasoning", s.reasoning)}
                 className="w-80 max-w-full"
-                onChange={(v) => void save({ reasoning: v }).catch(() => undefined)}
+                onChange={(v) => void fields.apply("reasoning", v, { reasoning: v })}
                 options={[
                   { value: "low", label: "Low (recommended)" },
                   { value: "off", label: "Off (cheapest, breaks Dayflow’s card rules more often)" },
                   { value: "default", label: "Model default (about 1.5× the output cost of Low)" },
                 ]}
               />
+              <FieldError>{fields.error("reasoning")}</FieldError>
             </Row>
             <Row
               label="Use the Batch API"
               htmlFor={ids.batch}
               description="Half the cost, but cards can take from a few minutes up to an hour to appear."
             >
-              <Switch id={ids.batch} checked={s.useBatchApi} onCheckedChange={(v) => void save({ useBatchApi: v }).catch(() => undefined)} />
+              <Switch id={ids.batch} checked={fields.shown("batch", s.useBatchApi)} onCheckedChange={(v) => void fields.apply("batch", v, { useBatchApi: v })} />
+              <FieldError>{fields.error("batch")}</FieldError>
             </Row>
           </>
         )}
@@ -516,7 +520,7 @@ function FallbackProvider() {
     () => () => {
       const { key: k, saved: f } = keyRef.current;
       if (k.trim() && f && providerInfo(f.kind).key !== "none") {
-        queueMicrotask(() => void api.providerSaveKey(f.kind, f.baseUrl, k.trim()).catch(() => undefined));
+        queueMicrotask(() => void api.providerSaveKey(f.kind, f.baseUrl, k.trim()).catch(reportLeaveFailure("The fallback API key")));
       }
     },
     [],

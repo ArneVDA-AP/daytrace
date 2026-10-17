@@ -3,14 +3,25 @@ import { listen } from "@tauri-apps/api/event";
 import { applyAppearance, platformApi, type Appearance, type NavTarget } from "./platform-api";
 import { rolloverDay, shouldIdleReset } from "./rollover";
 
-// Unsaved work in the card panel (a title or category edit, a feedback note). While it is there,
-// the idle reset and the 4 AM rollover leave the view alone; they happen once it is saved or
-// dropped.
+// Unsaved work: the card panel (a title or category edit, a feedback note), the Daily standup
+// editor, Goals (targets being set, a to-do being typed or edited). While any holds some, the
+// idle reset and the 4 AM rollover leave the view alone; they happen once it is saved or dropped.
+const unsavedSources = new Set<string>();
 let unsavedWork = false;
 
-/** The card panel reports whether it holds unsaved work. */
-export function setUnsavedWork(busy: boolean) {
-  unsavedWork = busy;
+/** A view reports whether it holds unsaved work; `source` keeps the reports of views apart. */
+export function setUnsavedWork(busy: boolean, source = "card") {
+  if (busy) unsavedSources.add(source);
+  else unsavedSources.delete(source);
+  unsavedWork = unsavedSources.size > 0;
+}
+
+/** Reports unsaved work while `busy` is true, and clears it when the component unmounts. */
+export function useUnsavedWork(busy: boolean, source: string) {
+  useEffect(() => {
+    setUnsavedWork(busy, source);
+    return () => setUnsavedWork(false, source);
+  }, [busy, source]);
 }
 
 /**

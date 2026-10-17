@@ -30,6 +30,7 @@ export function PromptsSection() {
 
   const [defaults, setDefaults] = React.useState<PromptOverrides | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [resetError, setResetError] = React.useState<string | null>(null);
   const load = React.useCallback(() => {
     setError(null);
     api
@@ -61,7 +62,14 @@ export function PromptsSection() {
         description="Change how the model writes card titles and summaries. These instructions are part of the Detailed and Lightweight prompts, also when they run on the fallback provider. A block is saved when you leave it; Ctrl+Enter saves it now, Esc drops your typing."
         actions={
           edited > 0 && defaults ? (
-            <Button variant="ghost" size="sm" onClick={() => void save({ promptOverrides: NO_OVERRIDES }).catch(() => undefined)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setResetError(null);
+                save({ promptOverrides: NO_OVERRIDES }).catch((e) => setResetError(`Couldn’t reset the instructions: ${errorText(e)}`));
+              }}
+            >
               <RotateCcw aria-hidden /> Reset all to default
             </Button>
           ) : undefined
@@ -92,6 +100,11 @@ export function PromptsSection() {
             )}
           </div>
         )}
+        {resetError && (
+          <div className="px-4 py-3">
+            <FieldError>{resetError}</FieldError>
+          </div>
+        )}
         {defaults && BLOCKS.map((b) => <PromptBlock key={b.key} block={b} defaults={defaults} />)}
       </Group>
       <Note>
@@ -107,6 +120,7 @@ function PromptBlock({ block, defaults }: { block: (typeof BLOCKS)[number]; defa
   const save = useSave();
   const id = React.useId();
   const stored = app.settings.settings.promptOverrides[block.key];
+  const [resetError, setResetError] = React.useState<string | null>(null);
   const custom = stored.trim() !== "";
   // Text equal to the default is stored as "no override", so later default updates still apply.
   const field = useCommitField(custom ? stored : defaults[block.key], (v) =>
@@ -134,14 +148,17 @@ function PromptBlock({ block, defaults }: { block: (typeof BLOCKS)[number]; defa
             size="sm"
             onClick={() => {
               field.revert();
-              void save((cur) => ({ promptOverrides: { ...cur.promptOverrides, [block.key]: "" } })).catch(() => undefined);
+              setResetError(null);
+              save((cur) => ({ promptOverrides: { ...cur.promptOverrides, [block.key]: "" } })).catch((e) =>
+                setResetError(`Couldn’t reset to the default: ${errorText(e)}`),
+              );
             }}
           >
             <RotateCcw aria-hidden /> Reset to default
           </Button>
         </div>
       )}
-      <FieldError>{field.error}</FieldError>
+      <FieldError>{field.error ?? resetError}</FieldError>
     </Row>
   );
 }

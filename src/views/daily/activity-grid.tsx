@@ -4,7 +4,7 @@ import { clock, formatDuration, hourLabel } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import { byCategory } from "@/views/insights/format";
 import { CategoryMark, EmptyMark, Legend, type LegendItem } from "@/views/insights/parts";
-import { SLOTS, type Share, type Slot } from "./activity";
+import { SLOTS, slotLabel, type Share, type Slot } from "./activity";
 
 /*
  * GitHub-style grid of the day: 24 hour columns (4 AM to 4 AM) by 4 quarter-hour rows. Every
@@ -25,11 +25,14 @@ function shareLabel(s: Share): string {
   return s.kind === "system" ? "Not analyzed" : s.name;
 }
 
-function slotLabel(s: Slot): string {
+function slotText(s: Slot, now: number | undefined): string {
+  if (s.skipped) return `${slotLabel(s.index)} to ${slotLabel(s.index + 1)}: skipped, the clock moved forward an hour`;
   const when = `${clock(s.start)} to ${clock(s.end)}`;
+  if (s.future) return `${when}: not yet`;
   if (!s.shares.length) return `${when}: not recorded`;
   const parts = s.shares.map((x) => `${shareLabel(x)} ${dur(x.secs)}`);
-  const gap = s.end - s.start - s.filled;
+  // Only the part already behind us can be "not recorded".
+  const gap = Math.min(s.end, now ?? s.end) - s.start - s.filled;
   if (gap >= 60) parts.push(`not recorded ${dur(gap)}`);
   let text = `${when}: ${parts.join(", ")}.`;
   if (s.top) text += ` Mostly “${s.top.title || "Untitled card"}”.`;
@@ -37,16 +40,29 @@ function slotLabel(s: Slot): string {
   return text;
 }
 
+/** "Not yet" key: a lighter, outlined well. */
+function FutureMark() {
+  return (
+    <span
+      aria-hidden="true"
+      className="size-2.5 shrink-0 rounded-[2px] bg-surface-1 ring-1 ring-border-strong ring-inset forced-colors:border forced-colors:border-[GrayText]"
+    />
+  );
+}
+
 export function ActivityGrid({
   slots,
   categories,
   colorFor,
   onOpen,
+  now,
 }: {
   slots: Slot[];
   categories: Category[];
   colorFor: (n: string) => string;
   onOpen: (cardId: number) => void;
+  /** Today: the moment the slots were made for (later quarter hours are "not yet"). */
+  now?: number;
 }) {
   const firstFilled = Math.max(0, slots.findIndex((s) => s.shares.length > 0));
   const [active, setActive] = React.useState(firstFilled);
@@ -104,6 +120,7 @@ export function ActivityGrid({
       ? [{ key: "system", label: "Not analyzed", mark: <CategoryMark name="System" kind="system" colorFor={colorFor} /> }]
       : []),
     { key: "none", label: "Not recorded", mark: <EmptyMark /> },
+    ...(slots.some((s) => s.future) ? [{ key: "future", label: "Not yet", mark: <FutureMark /> }] : []),
   ];
 
   const t = tip ? slots[tip.i] : null;
@@ -137,18 +154,21 @@ export function ActivityGrid({
             {slots.map((s) => {
               const len = Math.max(1, s.end - s.start);
               const empty = !s.top;
+              const ahead = s.future || s.skipped;
               return (
                 <button
                   key={s.index}
                   type="button"
                   data-slot-index={s.index}
                   tabIndex={s.index === active ? 0 : -1}
-                  aria-label={slotLabel(s)}
+                  aria-label={slotText(s, now)}
                   aria-disabled={empty || undefined}
                   className={cn(
-                    "relative flex aspect-square min-w-0 flex-col-reverse overflow-hidden rounded-[3px] bg-surface-2 p-0",
+                    "relative flex aspect-square min-w-0 flex-col-reverse overflow-hidden rounded-[3px] p-0",
+                    // Time still ahead (or skipped by the clock): a lighter, outlined well.
+                    ahead ? "bg-surface-1 ring-1 ring-border ring-inset" : "bg-surface-2",
                     !empty && "hover:ring-2 hover:ring-foreground/70",
-                    // Windows Contrast themes drop the well colour: keep every square's outline.
+                    // Windows Contrast themes drop the well color: keep every square's outline.
                     "forced-colors:border forced-colors:border-[GrayText]",
                   )}
                   onClick={() => s.top && onOpen(s.top.id)}
@@ -183,9 +203,13 @@ export function ActivityGrid({
             }}
           >
             <p className="font-mono tnum">
-              {clock(t.start)} – {clock(t.end)}
+              {t.skipped ? `${slotLabel(t.index)} – ${slotLabel(t.index + 1)}` : `${clock(t.start)} – ${clock(t.end)}`}
             </p>
-            {t.shares.length ? (
+            {t.skipped ? (
+              <p className="mt-0.5">Skipped: the clock moved forward an hour</p>
+            ) : t.future ? (
+              <p className="mt-0.5">Not yet</p>
+            ) : t.shares.length ? (
               <ul className="mt-1 flex flex-col gap-0.5">
                 {t.shares.map((x) => (
                   <li key={x.name} className="flex items-center gap-1.5">

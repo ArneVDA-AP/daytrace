@@ -3,11 +3,12 @@ import { invoke } from "@tauri-apps/api/core";
 /*
  * Daily and Weekly: the insights commands. Types mirror src-tauri/src/features/insights/*.rs
  * (serde camelCase). The backend also sends a `color` hex on categories (the stored settings hex
- * or an old fallback palette); it is left out of these types on purpose: views colour every
+ * or an old fallback palette); it is left out of these types on purpose: views color every
  * category mark with colorFor(name), which follows the theme and Windows Contrast themes.
  */
 
-export type Kind = "focus" | "distraction" | "idle" | "system";
+/** "neither": a category set to count as neither focus nor distraction (still active time). */
+export type Kind = "focus" | "distraction" | "neither" | "idle" | "system";
 
 export interface CategoryTotal {
   key: string;
@@ -72,8 +73,10 @@ export interface DayStats {
   dayStartTs: number;
   dayEndTs: number;
   cardCount: number;
-  /** All non-System time, overlaps counted once. */
+  /** All non-System time, overlaps counted once ("Recorded"). */
   capturedSecs: number;
+  /** Recorded minus idle: the denominator of every percentage of the day. */
+  activeSecs: number;
   focusSecs: number;
   distractedSecs: number;
   idleSecs: number;
@@ -82,6 +85,7 @@ export interface DayStats {
   contextSwitches: number;
   /** Cards with distractions noted inside them. */
   interruptions: number;
+  /** Distracted time as a share of active time. */
   distractedRatio: number;
   totals: CategoryTotal[];
   grid: DayGrid;
@@ -135,6 +139,8 @@ export interface WeekDaySummary {
   day: string;
   label: string;
   capturedSecs: number;
+  /** Recorded minus idle: the denominator of the day's percentages. */
+  activeSecs: number;
   focusSecs: number;
   distractedSecs: number;
   idleSecs: number;
@@ -165,6 +171,15 @@ export interface AppCategory {
   apps: AppUsage[];
 }
 
+export interface FocusHourRow {
+  day: string;
+  label: string;
+  /** -1 focused to 1 distracted; null for an hour without focus or distraction. */
+  scores: (number | null)[];
+  focusSecs: number[];
+  distractedSecs: number[];
+}
+
 export interface WeekStats {
   weekStart: string;
   weekEnd: string;
@@ -172,6 +187,8 @@ export interface WeekStats {
   /** Top four categories plus Other, without Idle and System. */
   distribution: CategoryTotal[];
   capturedSecs: number;
+  /** Recorded minus idle: the denominator of the week's percentages. */
+  activeSecs: number;
   focusSecs: number;
   distractedSecs: number;
   idleSecs: number;
@@ -191,6 +208,8 @@ export interface WeekStats {
   };
   /** Distracted seconds per clock hour, index 0 = 4 AM. */
   distractionHours: { day: string; label: string; secs: number[] }[];
+  /** Dayflow's focus heat map by clock hour (index 0 = 4 AM). */
+  focusHours: FocusHourRow[];
   contextInsight: string;
   focusBlocks: { day: string; startTs: number; endTs: number; secs: number }[];
   appsByCategory: AppCategory[];
@@ -207,4 +226,6 @@ export const insightsApi = {
     invoke<RecapView>("insights_save_recap", { day, highlights, tasks, blockers }),
   /** Writes the recap file of `day` (a source day); without a path it goes to the export folder. Returns the path. */
   exportRecap: (day: string, path?: string) => invoke<string>("insights_export_recap", { day, path: path ?? null }),
+  /** Writes a chart image (PNG as base64, without the data: prefix) to a path from the save dialog. */
+  saveImage: (path: string, pngBase64: string) => invoke<void>("insights_save_image", { path, pngBase64 }),
 };

@@ -2,15 +2,18 @@
 //! distractions. Ported from Dayflow (MIT, (c) 2025 Jerry Liu):
 //! Views/UI/DailyWorkflowComputation.swift (grid, stat chips, distraction markers) and
 //! Views/Components/DaySummaryStats.swift (overlap removal, focus blocks, captured and distracted
-//! time). Focus and distraction categories follow Dayflow's default day plan (Models/DayGoalPlan.swift):
-//! every category except Distraction, Idle and System counts as focus.
+//! time). What a category counts as (focus, distraction or neither) is its "Counts as" choice in
+//! Settings > Categories (`Category::counts`); without a choice it follows Dayflow's default day
+//! plan (Models/DayGoalPlan.swift): every category except Distraction, Idle and System is focus.
+//!
+//! Percentages of the day use active time (recorded minus idle) as the denominator everywhere.
 //!
 //! Positions on the grid are wall-clock minutes since 4 AM, so hour labels match the clock;
 //! durations come from the stored Unix timestamps.
 
 use crate::db::StoredCard;
 use crate::timeutil;
-use crate::types::{Category, Distraction};
+use crate::types::{Category, CountsAs, Distraction};
 use chrono::Timelike;
 use serde::Serialize;
 
@@ -27,8 +30,20 @@ const MIN_WINDOW_MINUTES: f64 = 12.0 * 60.0;
 pub enum Kind {
     Focus,
     Distraction,
+    /// A category set to count as neither focus nor distraction (still active time).
+    Neither,
     Idle,
     System,
+}
+
+impl From<CountsAs> for Kind {
+    fn from(c: CountsAs) -> Kind {
+        match c {
+            CountsAs::Focus => Kind::Focus,
+            CountsAs::Distraction => Kind::Distraction,
+            CountsAs::Neither => Kind::Neither,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -42,8 +57,24 @@ pub struct CatInfo {
     pub order: usize,
 }
 
-pub fn is_distraction_key(key: &str) -> bool {
-    matches!(key, "distraction" | "distractions")
+/// What a card's category name counts as under the settings' categories: the category's choice,
+/// or for a name that is not in the settings the rule by name. Failed cards ("System") and the
+/// idle category count as neither. Shared by the views' numbers, Goals and daytrace-mcp.
+pub fn counts_as(name: &str, cats: &[Category]) -> CountsAs {
+    let key = name.trim().to_lowercase();
+    if key == "system" {
+        return CountsAs::Neither;
+    }
+    match cats.iter().find(|c| c.name.trim().to_lowercase() == key) {
+        Some(c) => c.counts(),
+        None => CountsAs::derived(&key, key == "idle"),
+    }
+}
+
+/// Minutes of the categories that count as focus, from per-category totals (daytrace-mcp's
+/// get_weekly and the CLI's `weekly`).
+pub fn focus_minutes(totals: &[(String, i64)], cats: &[Category]) -> i64 {
+    totals.iter().filter(|(name, _)| counts_as(name, cats) == CountsAs::Focus).map(|(_, m)| m).sum()
 }
 
 /// Dayflow's fallback palette for categories that are not in the settings (djb2 hash).
@@ -65,22 +96,10 @@ pub fn cat_info(raw: &str, cats: &[Category]) -> CatInfo {
         return CatInfo { key, name: name.into(), color: "#B4443A".into(), kind: Kind::System, order: usize::MAX };
     }
     if let Some((i, c)) = cats.iter().enumerate().find(|(_, c)| c.name.trim().to_lowercase() == key) {
-        let kind = if c.is_idle {
-            Kind::Idle
-        } else if is_distraction_key(&key) {
-            Kind::Distraction
-        } else {
-            Kind::Focus
-        };
+        let kind = if c.is_idle { Kind::Idle } else { c.counts().into() };
         return CatInfo { key, name: c.name.trim().to_string(), color: c.color.clone(), kind, order: i };
     }
-    let kind = if key == "idle" {
-        Kind::Idle
-    } else if is_distraction_key(&key) {
-        Kind::Distraction
-    } else {
-        Kind::Focus
-    };
+    let kind = if key == "idle" { Kind::Idle } else { CountsAs::derived(&key, false).into() };
     CatInfo { color: fallback_color(&key), key, name: name.into(), kind, order: usize::MAX }
 }
 
@@ -256,8 +275,10 @@ pub struct DayStats {
     pub day_start_ts: i64,
     pub day_end_ts: i64,
     pub card_count: usize,
-    /// All non-System time, overlaps counted once (Dayflow's "Total time captured").
+    /// All non-System time, overlaps counted once (Dayflow's "Total time captured"; "Recorded").
     pub captured_secs: i64,
+    /// Recorded minus idle: the denominator of every percentage of the day.
+    pub active_secs: i64,
     pub focus_secs: i64,
     pub distracted_secs: i64,
     pub idle_secs: i64,
@@ -266,6 +287,7 @@ pub struct DayStats {
     pub context_switches: u32,
     /// Cards with distractions noted inside them (Dayflow's "Interrupted").
     pub interruptions: u32,
+    /// Distracted time as a share of active time.
     pub distracted_ratio: f64,
     pub totals: Vec<CategoryTotal>,
     pub grid: Grid,
@@ -492,29 +514,57 @@ pub fn grid(segs: &[Seg], cats: &[Category]) -> Grid {
     Grid { start_minute: start, end_minute: end, slot_minutes: SLOT_MINUTES, rows, dominant, markers }
 }
 
+/// Focus and distraction of de-overlapped segments: time in focus categories (minus the
+/// distractions noted inside those cards), and time in distraction categories plus the noted
+/// distractions. Daily, Weekly, Goals and Your day so far all use these numbers.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FocusSplit {
+    pub captured: i64,
+    pub focus: i64,
+    pub distracted: i64,
+    pub idle: i64,
+    /// Focus seconds per focus category (key, name, color, secs), in segment order.
+    pub focus_by_category: Vec<(String, String, String, i64)>,
+}
+
+impl FocusSplit {
+    /// Recorded minus idle.
+    pub fn active(&self) -> i64 {
+        (self.captured - self.idle).max(0)
+    }
+}
+
+pub fn focus_split(normalized: &[Seg]) -> FocusSplit {
+    let mut f = FocusSplit::default();
+    for s in normalized {
+        let d = s.end - s.start;
+        f.captured += d;
+        match s.cat.kind {
+            Kind::Focus => {
+                let inside = embedded_secs(s).min(d);
+                f.focus += d - inside;
+                f.distracted += inside;
+                match f.focus_by_category.iter_mut().find(|c| c.0 == s.cat.key) {
+                    Some(c) => c.3 += d - inside,
+                    None => f.focus_by_category.push((s.cat.key.clone(), s.cat.name.clone(), s.cat.color.clone(), d - inside)),
+                }
+            }
+            Kind::Distraction => f.distracted += d,
+            // Noted distractions inside a card that counts as neither are distracted time too.
+            Kind::Neither => f.distracted += embedded_secs(s).min(d),
+            Kind::Idle => f.idle += d,
+            Kind::System => {}
+        }
+    }
+    f
+}
+
 /// Everything the Daily view shows for one logical day, without any model call.
 pub fn compute_day(day: &str, cards: &[StoredCard], cats: &[Category], day_start: i64, day_end: i64) -> DayStats {
     let segs = segments(cards, cats, day_start, day_end);
     let normalized = remove_overlaps(&segs);
-
-    let mut captured = 0;
-    let mut focus = 0;
-    let mut distracted = 0;
-    let mut idle = 0;
-    for s in &normalized {
-        let d = s.end - s.start;
-        captured += d;
-        match s.cat.kind {
-            Kind::Focus => {
-                let inside = embedded_secs(s).min(d);
-                focus += d - inside;
-                distracted += inside;
-            }
-            Kind::Distraction => distracted += d,
-            Kind::Idle => idle += d,
-            Kind::System => {}
-        }
-    }
+    let split = focus_split(&normalized);
+    let (captured, focus, distracted, idle, active) = (split.captured, split.focus, split.distracted, split.idle, split.active());
 
     // Chips from DailyWorkflowComputation, over the raw (not de-overlapped) segments.
     let mut switches = 0;
@@ -550,13 +600,14 @@ pub fn compute_day(day: &str, cards: &[StoredCard], cats: &[Category], day_start
         day_end_ts: day_end,
         card_count: segs.len(),
         captured_secs: captured,
+        active_secs: active,
         focus_secs: focus,
         distracted_secs: distracted,
         idle_secs: idle,
         transition_secs: transition,
         context_switches: switches,
         interruptions,
-        distracted_ratio: if captured > 0 { distracted as f64 / captured as f64 } else { 0.0 },
+        distracted_ratio: if active > 0 { distracted as f64 / active as f64 } else { 0.0 },
         totals: category_totals(&normalized),
         grid: grid(&segs, cats),
         distractions: distractions(&segs),
@@ -665,7 +716,39 @@ pub(crate) mod tests {
         // gaps: 10:30-10:32 and 12:00-13:00 (the System card is ignored)
         assert_eq!(st.transition_secs / 60, 62);
         assert_eq!(st.card_count, 6);
-        assert!((st.distracted_ratio - 25.0 / 248.0).abs() < 1e-9);
+        // Percentages use active time: 248 recorded minus 40 idle.
+        assert_eq!(st.active_secs / 60, 208);
+        assert!((st.distracted_ratio - 25.0 / 208.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn counts_as_choice_moves_time_between_focus_distraction_and_neither() {
+        let (s, e) = timeutil::logical_day_bounds("2026-10-14").unwrap();
+        let mut cats = default_categories();
+        // Personal counts as neither, and a renamed distraction category keeps counting.
+        cats[1].counts_as = Some(CountsAs::Neither);
+        cats[2].name = "Scrolling".into();
+        let mut cards = sample();
+        cards[2].category = "Scrolling".into();
+        let st = compute_day("2026-10-14", &cards, &cats, s, e);
+        // Focus: Work 128 minus the 5 noted minutes; Personal (60) is neither.
+        assert_eq!(st.focus_secs / 60, 123);
+        assert_eq!(st.distracted_secs / 60, 25);
+        // Active time still counts Personal: only idle is left out.
+        assert_eq!(st.active_secs / 60, 208);
+        let personal = st.totals.iter().find(|t| t.name == "Personal").unwrap();
+        assert_eq!(personal.kind, Kind::Neither);
+        // Focus blocks only take focus categories: Personal 13:00-14:00 is no longer one, the
+        // Work card after it (trimmed to 14:00-14:10 by the overlap) is.
+        let blocks: Vec<(i64, i64)> = st.focus_blocks.iter().map(|b| (b.start_ts, b.end_ts)).collect();
+        assert_eq!(blocks, vec![(at(D, 9, 0), at(D, 11, 0)), (at(D, 14, 0), at(D, 14, 10))]);
+        assert_eq!(counts_as("scrolling", &cats), CountsAs::Distraction);
+        assert_eq!(counts_as("Gaming", &cats), CountsAs::Focus, "unknown names follow the name rule");
+        assert_eq!(counts_as("System", &cats), CountsAs::Neither);
+        assert_eq!(counts_as("idle", &cats), CountsAs::Neither);
+        // daytrace-mcp's weekly focus minutes follow the same choice.
+        let totals = vec![("Work".to_string(), 120), ("Personal".to_string(), 60), ("Scrolling".to_string(), 30), ("Idle".to_string(), 20), ("Gaming".to_string(), 10)];
+        assert_eq!(focus_minutes(&totals, &cats), 130, "Work and the unknown Gaming; Personal is neither");
     }
 
     #[test]

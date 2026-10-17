@@ -20,6 +20,7 @@ export function SectionCard({
   children,
   className,
   id,
+  headingRef,
 }: {
   title: React.ReactNode;
   description?: React.ReactNode;
@@ -27,13 +28,15 @@ export function SectionCard({
   children: React.ReactNode;
   className?: string;
   id?: string;
+  /** Makes the heading focusable from script, for an action that replaces the focused control. */
+  headingRef?: React.Ref<HTMLHeadingElement>;
 }) {
   const hid = React.useId();
   return (
     <section aria-labelledby={hid} id={id} className={cn("flex min-w-0 flex-col rounded-lg border bg-surface-1", className)}>
       <div className="flex flex-wrap items-start gap-x-3 gap-y-2 px-4 pt-3.5 pb-3">
         <div className="min-w-0 flex-1 basis-56">
-          <h2 id={hid} className="text-body font-semibold">
+          <h2 id={hid} ref={headingRef} tabIndex={headingRef ? -1 : undefined} className="rounded-sm text-body font-semibold">
             {title}
           </h2>
           {description && <p className="mt-0.5 text-meta text-muted-foreground">{description}</p>}
@@ -79,7 +82,7 @@ export function StatTile({
   );
 }
 
-/** A small square in a category's colour: idle is a hatch, failed cards are red stripes. */
+/** A small square in a category's color: idle is a hatch, failed cards are red stripes. */
 export function CategoryMark({ name, kind, colorFor, className }: { name: string; kind: Kind; colorFor: (n: string) => string; className?: string }) {
   if (kind === "idle") return <span aria-hidden="true" data-mark="" className={cn("hatch-idle size-2.5 shrink-0 rounded-[2px] bg-surface-1 ring-1 ring-cat-idle ring-inset", className)} />;
   if (kind === "system") return <span aria-hidden="true" data-mark="" className={cn("stripes-failed size-2.5 shrink-0 rounded-[2px] bg-surface-1", className)} />;
@@ -195,7 +198,7 @@ export interface BarItem {
   key: string;
   name: string;
   secs: number;
-  /** CSS colour of the bar; neutral when absent. */
+  /** CSS color of the bar; neutral when absent. */
   color?: string;
   /** Visible note after the duration ("+20 min on last week"). */
   note?: string;

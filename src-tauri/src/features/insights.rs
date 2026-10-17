@@ -188,10 +188,17 @@ pub struct AutoPlan {
     pub blocked: Option<String>,
 }
 
+/// The model the recap is written with: Settings > Daily recap's model on the same provider, or
+/// the main model when that is empty (Dayflow gives the Daily view its own provider picker).
+pub fn recap_model(s: &Settings) -> String {
+    let m = s.recap_model.trim();
+    if m.is_empty() { s.model.trim().to_string() } else { m.to_string() }
+}
+
 /// Why the configured model cannot write a recap, in plain words (the configuration part of
 /// Dayflow's provider availability check; nothing is sent).
 pub fn provider_problem(s: &Settings) -> Option<String> {
-    if s.model.trim().is_empty() {
+    if recap_model(s).is_empty() {
         return Some("No model is set. Choose one in Settings.".into());
     }
     if crate::llm::chat_api::key_required(s.provider, &s.base_url) && crate::config::stored_key(s.provider, &s.base_url).is_none() {
@@ -280,7 +287,8 @@ async fn generate_claimed(state: &AppState, target: &str, background: bool, _cla
     }
     let api_key = crate::config::stored_key(settings.provider, &settings.base_url);
     let prompt = recap::build_prompt(&source, &cards, recap::prompt_style(settings.provider, &settings.base_url), &settings.output_language);
-    let mut client = LlmClient::new(settings.provider, &settings.base_url, &settings.model, api_key, Some(state.db.clone()))?;
+    let model = recap_model(&settings);
+    let mut client = LlmClient::new(settings.provider, &settings.base_url, &model, api_key, Some(state.db.clone()))?;
     // Only the scheduled recap may wait for the Batch API; a click needs an answer now.
     client.use_batch = background && settings.use_batch_api;
     client.reasoning = settings.reasoning;
@@ -289,7 +297,7 @@ async fn generate_claimed(state: &AppState, target: &str, background: bool, _cla
         .complete(vec![Part::Text(prompt)], CallOpts { op: "daily_recap", batch_id: None, max_tokens: recap::MAX_OUTPUT_TOKENS, system, attempts: 3 })
         .await?;
     let parsed = recap::parse_response(&raw)?;
-    let mut entry = recap::entry_from(parsed, target, &source, recap::provider_label(settings.provider), &settings.model, now_ts())?;
+    let mut entry = recap::entry_from(parsed, target, &source, recap::provider_label(settings.provider), &model, now_ts())?;
     {
         let c = state.db.conn();
         if let Some(old) = recap::load(&c, target)? {
@@ -513,6 +521,30 @@ pub fn spawn(state: Arc<AppState>) {
     });
 }
 
+// ---- chart images ----
+
+const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+const MAX_IMAGE_BYTES: usize = 25 * 1024 * 1024;
+
+/// Writes a chart image the Weekly view drew (Dayflow saves each Weekly chart as an image) to the
+/// path picked in the save dialog. Only PNG data to a full path ending in .png is written.
+pub fn save_image(path: &std::path::Path, png_base64: &str) -> Result<()> {
+    use base64::Engine;
+    if !path.is_absolute() || !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("png")) {
+        bail!("Choose a full path for a .png file.");
+    }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(png_base64.trim()).map_err(|_| anyhow!("The chart image could not be read."))?;
+    if !bytes.starts_with(PNG_SIGNATURE) || bytes.len() > MAX_IMAGE_BYTES {
+        bail!("The chart image could not be read.");
+    }
+    let tmp = path.with_extension("png.tmp");
+    std::fs::write(&tmp, &bytes)?;
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })?;
+    Ok(())
+}
+
 // ---- commands ----
 
 #[tauri::command]
@@ -541,6 +573,12 @@ pub async fn insights_generate_recap(state: S<'_>, day: String) -> CmdResult<Rec
 pub fn insights_save_recap(state: S, day: String, highlights: Vec<String>, tasks: Vec<String>, blockers: Vec<String>) -> CmdResult<RecapView> {
     save_edits(&state, &day, &highlights, &tasks, &blockers).map_err(err)?;
     recap_view(&state, &day).map_err(err)
+}
+
+/// Saves a Weekly chart as a PNG file (`png_base64` without the data: prefix).
+#[tauri::command]
+pub fn insights_save_image(path: String, png_base64: String) -> CmdResult<()> {
+    save_image(std::path::Path::new(path.trim()), &png_base64).map_err(err)
 }
 
 /// Writes the recap file for `day` to `path`, or into the export folder when `path` is empty.
@@ -661,7 +699,7 @@ mod tests {
         let md = std::fs::read_to_string(&file).unwrap();
         assert!(md.contains("- Finished chapter two."));
         assert!(md.contains("**Thesis chapter**"));
-        assert!(md.contains("- Time captured: 4 h"));
+        assert!(md.contains("- Recorded: 4 h"));
         // Once per day: a second check leaves a deleted file alone.
         std::fs::remove_file(&file).unwrap();
         auto_tick(&st).await.unwrap();
@@ -802,6 +840,34 @@ mod tests {
         assert!(check_settings(&Settings::default()).is_ok());
         st.settings.write().unwrap().recap_export_dir = "phone".into();
         assert_eq!(export_day(&st, "2026-10-16", None, None).unwrap_err().to_string(), export::RELATIVE_DIR);
+    }
+
+    #[test]
+    fn recap_model_falls_back_to_the_main_model() {
+        let mut s = Settings { model: "claude-haiku-5-5".into(), ..Default::default() };
+        assert_eq!(recap_model(&s), "claude-haiku-5-5");
+        s.recap_model = "  claude-sonnet-5  ".into();
+        assert_eq!(recap_model(&s), "claude-sonnet-5");
+        s.model = String::new();
+        s.recap_model = String::new();
+        assert_eq!(provider_problem(&s).as_deref(), Some("No model is set. Choose one in Settings."));
+    }
+
+    #[test]
+    fn chart_images_are_png_files_only() {
+        use base64::Engine;
+        let dir = tempfile::tempdir().unwrap();
+        let mut png = Vec::new();
+        image::DynamicImage::new_rgb8(2, 2).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+        let path = dir.path().join("week.PNG");
+        save_image(&path, &b64).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), png);
+        assert!(save_image(&dir.path().join("week.exe"), &b64).is_err(), "only .png");
+        assert!(save_image(std::path::Path::new("week.png"), &b64).is_err(), "only full paths");
+        let text = base64::engine::general_purpose::STANDARD.encode(b"not an image");
+        assert!(save_image(&dir.path().join("x.png"), &text).is_err(), "only PNG data");
+        assert!(!dir.path().join("x.png").exists());
     }
 
     #[test]

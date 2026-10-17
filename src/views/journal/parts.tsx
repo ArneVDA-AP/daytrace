@@ -48,7 +48,7 @@ export function ResultBadge({ met, children }: { met: boolean; children?: React.
   );
 }
 
-/** A small colour key for a legend; the name is always next to it. */
+/** A small color key for a legend; the name is always next to it. */
 export function Swatch({ color, className }: { color: string; className?: string }) {
   return <span aria-hidden="true" data-mark="" className={cn("inline-block size-2 shrink-0 rounded-[2px]", className)} style={{ background: color }} />;
 }

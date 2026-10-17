@@ -86,6 +86,68 @@ export function useSave() {
   }, []);
 }
 
+// ---- switches, selects and radios: show the choice at once, the error next to the control ----
+
+export interface FieldSaves {
+  /** Saves `patch` for the control `field`, which shows `value` until the save is done. */
+  apply: (field: string, value: unknown, patch: Patch) => Promise<boolean>;
+  /** What the control shows: the value being saved, or the saved one. */
+  shown: <T>(field: string, saved: T) => T;
+  /** The refusal of the last save of `field`, as "Couldn’t save: …". */
+  error: (field: string) => string | null;
+}
+
+/**
+ * A switch or select shows the value just chosen while it is saved, instead of the stored value
+ * until the save returns (a select jumped back, and a second quick click on a switch sent the
+ * same value again). Saves go through the write queue in order, so the last choice wins. A failed
+ * save puts the control back and shows the message next to it.
+ */
+export function useFieldSaves(): FieldSaves {
+  const save = useSave();
+  const [pending, setPending] = React.useState<Record<string, { value: unknown; seq: number }>>({});
+  const [errors, setErrors] = React.useState<Record<string, string>>({});
+  const seq = React.useRef(0);
+  const latest = React.useRef<Record<string, number>>({});
+
+  const apply = React.useCallback(
+    async (field: string, value: unknown, patch: Patch) => {
+      const n = ++seq.current;
+      latest.current[field] = n;
+      setPending((p) => ({ ...p, [field]: { value, seq: n } }));
+      setErrors((e) => without(e, field));
+      try {
+        await save(patch);
+        return true;
+      } catch (e) {
+        if (latest.current[field] === n) setErrors((x) => ({ ...x, [field]: `Couldn’t save: ${errorText(e)}` }));
+        return false;
+      } finally {
+        setPending((p) => (p[field]?.seq === n ? without(p, field) : p));
+      }
+    },
+    [save],
+  );
+
+  return {
+    apply,
+    shown: <T,>(field: string, saved: T) => (field in pending ? (pending[field].value as T) : saved),
+    error: (field: string) => errors[field] ?? null,
+  };
+}
+
+function without<T>(o: Record<string, T>, key: string): Record<string, T> {
+  if (!(key in o)) return o;
+  const next = { ...o };
+  delete next[key];
+  return next;
+}
+
+/** A save started when a page is left (a typed key, a draft): its failure is told in a toast. */
+export function reportLeaveFailure(what: string) {
+  return (e: unknown) => toast(`${what} couldn’t be saved`, { description: errorText(e), tone: "error" });
+}
+
 // ---- text fields: edit freely, save on Enter or when focus leaves, and when leaving the page ----
 
 export interface CommitField {
@@ -160,7 +222,7 @@ export function useCommitField(
     () => () => {
       const { draft: d, saved: s, onCommit: save, validate } = live.current;
       if (d === null || d === s || validate?.(d)) return;
-      void save(d).catch((e) => toast("A setting couldn’t be saved", { description: errorText(e), tone: "error" }));
+      void save(d).catch(reportLeaveFailure("A setting"));
     },
     [],
   );

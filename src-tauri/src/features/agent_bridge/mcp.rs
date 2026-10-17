@@ -355,8 +355,7 @@ pub fn weekly_json(source: &Source, w: &q::DayWindow) -> q::QResult<Value> {
     let (start, end) = q::week_window(w)?;
     let activities = q::fetch_range(&source.open()?, start, end)?;
     let totals = q::category_totals(&activities);
-    let idle = source.idle_category();
-    let focus: i64 = totals.iter().filter(|(n, _)| *n != idle).map(|(_, m)| m).sum();
+    let focus = crate::features::insights::stats::focus_minutes(&totals, &source.categories());
     let (tracked, cats) = q::categories_json(&totals);
     Ok(json!({
         "week_start": q::iso(start),

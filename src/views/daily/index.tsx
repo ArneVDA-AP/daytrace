@@ -47,6 +47,8 @@ export default function DailySection() {
   const [recapError, setRecapError] = React.useState<{ day: string; message: string } | null>(null);
   const dayRef = React.useRef(day);
   dayRef.current = day;
+  // The activity grid marks the quarter hours still ahead today; this moves with each refresh.
+  const [nowTs, setNowTs] = React.useState(() => Math.floor(Date.now() / 1000));
 
   const loadDay = React.useCallback(async (d: string) => {
     try {
@@ -71,6 +73,7 @@ export default function DailySection() {
   }, []);
 
   const reload = React.useCallback(() => {
+    setNowTs(Math.floor(Date.now() / 1000));
     void loadDay(day);
     void loadRecap(day);
   }, [day, loadDay, loadRecap]);
@@ -112,9 +115,10 @@ export default function DailySection() {
   const nothingAtAll = !!current && current.cards.length === 0 && !!recap && !entry && !sourceDay && !showDaySkeleton;
   const isToday = day === today;
 
+  const slotNow = isToday ? nowTs : undefined;
   const slots = React.useMemo(
-    () => (current ? quarterSlots(current.day, current.cards, categories, current.stats.distractions) : []),
-    [current, categories],
+    () => (current ? quarterSlots(current.day, current.cards, categories, current.stats.distractions, slotNow) : []),
+    [current, categories, slotNow],
   );
   const failed = React.useMemo(() => (current ? failedSecs(current.day, current.cards) : 0), [current]);
 
@@ -131,7 +135,7 @@ export default function DailySection() {
             <TooltipTrigger asChild>
               <Button variant="outline" size="sm" onClick={() => void actions.exportRecap()} disabled={!!actions.busy || actions.generating}>
                 <FileDown aria-hidden="true" />
-                {actions.busy?.kind === "export" ? "Exporting…" : exportDir ? "Export Markdown" : "Export Markdown…"}
+                {actions.busy?.kind === "export" ? "Exporting…" : exportDir ? "Export as Markdown" : "Export as Markdown…"}
               </Button>
             </TooltipTrigger>
             <TooltipContent>
@@ -156,7 +160,7 @@ export default function DailySection() {
           <Empty className="min-h-full">
             <EmptyHeader>
               <EmptyMedia variant="icon">{isToday ? <Clock3 aria-hidden="true" /> : <Moon aria-hidden="true" />}</EmptyMedia>
-              <EmptyTitle>{isToday ? "No cards yet today" : `No recording on ${formatDayTitle(day)}`}</EmptyTitle>
+              <EmptyTitle>{isToday ? "No cards yet today" : `Nothing recorded on ${formatDayTitle(day)}`}</EmptyTitle>
               <EmptyDescription>
                 {isToday
                   ? "Daytrace writes a card about every 15 minutes while it records. The standup and the day’s numbers are made from those cards."
@@ -210,7 +214,7 @@ export default function DailySection() {
                 <Empty className="border py-10">
                   <EmptyHeader>
                     <EmptyMedia variant="icon">{isToday ? <Clock3 aria-hidden="true" /> : <Moon aria-hidden="true" />}</EmptyMedia>
-                    <EmptyTitle>{isToday ? "No cards yet today" : `No recording on ${formatDayTitle(day)}`}</EmptyTitle>
+                    <EmptyTitle>{isToday ? "No cards yet today" : `Nothing recorded on ${formatDayTitle(day)}`}</EmptyTitle>
                     <EmptyDescription>
                       {isToday ? "The day’s numbers fill in as Daytrace writes cards, about every 15 minutes while it records." : "This day has no cards, so there are no numbers to show."}
                     </EmptyDescription>
@@ -240,7 +244,7 @@ export default function DailySection() {
                         </Button>
                       }
                     >
-                      <ActivityGrid slots={slots} categories={categories} colorFor={colorFor} onOpen={(id) => openTimeline(day, id)} />
+                      <ActivityGrid slots={slots} categories={categories} colorFor={colorFor} onOpen={(id) => openTimeline(day, id)} now={slotNow} />
                     </SectionCard>
                     <SectionCard title={isToday ? "Time by category so far" : "Time by category"}>
                       <CategoryBreakdown
@@ -268,7 +272,7 @@ export default function DailySection() {
                   <div className="grid items-start gap-4 split:grid-cols-2">
                     <DistractionsCard stats={current.stats} day={day} isToday={isToday} />
                     <div className="flex min-w-0 flex-col gap-4">
-                      <FocusCard stats={current.stats} />
+                      <FocusCard stats={current.stats} categories={categories} />
                       <ProgramsCard stats={current.stats} />
                     </div>
                   </div>

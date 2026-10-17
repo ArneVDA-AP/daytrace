@@ -3,7 +3,9 @@
 //! (distribution, top four plus Other), WeeklyDashboardBuilder.swift (app names),
 //! WeeklyDashboardBuilder+HeatmapWorkflow.swift (weekly workflow grid and the focus heat map),
 //! WeeklyDashboardBuilder+Interactions.swift (context shifts and distractions per day) and
-//! WeeklyDashboardBuilder+TreemapSankey.swift (apps per category, change against the week before).
+//! WeeklyDashboardBuilder+TreemapSankey.swift (apps per category, change against the week before)
+//! and Sections/WeeklyFocusHeatmapSection.swift (the focused-against-distracted score, shown here
+//! per clock hour).
 //!
 //! Totals reuse the day statistics, so the Daily and Weekly views agree.
 
@@ -45,6 +47,8 @@ pub struct WeekDaySummary {
     pub day: String,
     pub label: String,
     pub captured_secs: i64,
+    /// Recorded minus idle: the denominator of every percentage of the day.
+    pub active_secs: i64,
     pub focus_secs: i64,
     pub distracted_secs: i64,
     pub idle_secs: i64,
@@ -100,6 +104,21 @@ pub struct Heatmap {
     pub rows: Vec<HeatRow>,
 }
 
+/// One day of the focus heat map by hour.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FocusHourRow {
+    pub day: String,
+    pub label: String,
+    /// Dayflow's focus score per clock hour (index 0 = 4 AM), -1 focused to 1 distracted: the
+    /// 5-minute scores of the hour averaged by their focused and distracted minutes. None for an
+    /// hour without focus or distraction.
+    pub scores: Vec<Option<f64>>,
+    /// Focused and distracted seconds per clock hour (the Daily view's rules, overlaps counted once).
+    pub focus_secs: Vec<i64>,
+    pub distracted_secs: Vec<i64>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HourRow {
@@ -146,12 +165,16 @@ pub struct WeekStats {
     /// Weekly distribution (no Idle or System): top four categories plus Other.
     pub distribution: Vec<CategoryTotal>,
     pub captured_secs: i64,
+    /// Recorded minus idle, the denominator of the week's percentages.
+    pub active_secs: i64,
     pub focus_secs: i64,
     pub distracted_secs: i64,
     pub idle_secs: i64,
     pub workflow: WeekGrid,
     pub heatmap: Heatmap,
     pub distraction_hours: Vec<HourRow>,
+    /// Focused against distracted by hour (Dayflow's focus heat map).
+    pub focus_hours: Vec<FocusHourRow>,
     pub context_insight: String,
     pub focus_blocks: Vec<WeekBlock>,
     pub apps_by_category: Vec<AppCategory>,
@@ -352,7 +375,18 @@ pub fn heat_scores(focus: &[f64], distraction: &[f64], switches: &[f64], bucket:
         .collect()
 }
 
-fn heat_values(facts: &[&Seg], vs: f64, count: usize) -> Vec<f64> {
+/// Focused and distracted minutes and context switches per bucket. Which time is focused or
+/// distracted follows each category's "Counts as" choice (Dayflow's isFullDistractionFact guesses
+/// it from words like "distracted" in the card; Daytrace has the explicit choice): distraction
+/// categories are distracted, focus categories focused except the distractions noted inside them,
+/// neither-categories only add their noted distractions.
+struct HeatInput {
+    focus: Vec<f64>,
+    distraction: Vec<f64>,
+    switches: Vec<f64>,
+}
+
+fn heat_input(facts: &[&Seg], vs: f64, count: usize) -> HeatInput {
     let mut focus = vec![0.0; count];
     let mut distraction = vec![0.0; count];
     let mut switches = vec![0.0; count];
@@ -366,24 +400,63 @@ fn heat_values(facts: &[&Seg], vs: f64, count: usize) -> Vec<f64> {
                 switches[((start - vs) / HEAT_BUCKET) as usize] += 1.0;
             }
         }
-        if is_full_distraction(s) {
-            add_interval(&mut distraction, start, end, vs, HEAT_BUCKET, 1.0);
-        } else {
-            add_interval(&mut focus, start, end, vs, HEAT_BUCKET, 1.0);
-            for d in &s.card.distractions {
-                if let Some((a, b)) = stats::distraction_span(s.card, d) {
-                    let (a, b) = (a.max(s.start), b.min(s.end));
-                    if b > a {
-                        let (x, y) = stats::offsets(a, b);
-                        add_interval(&mut distraction, x, y, vs, HEAT_BUCKET, 1.0);
-                        add_interval(&mut focus, x, y, vs, HEAT_BUCKET, -1.0);
+        match s.cat.kind {
+            Kind::Distraction => add_interval(&mut distraction, start, end, vs, HEAT_BUCKET, 1.0),
+            Kind::Focus | Kind::Neither => {
+                let focused = s.cat.kind == Kind::Focus;
+                if focused {
+                    add_interval(&mut focus, start, end, vs, HEAT_BUCKET, 1.0);
+                }
+                for d in &s.card.distractions {
+                    if let Some((a, b)) = stats::distraction_span(s.card, d) {
+                        let (a, b) = (a.max(s.start), b.min(s.end));
+                        if b > a {
+                            let (x, y) = stats::offsets(a, b);
+                            add_interval(&mut distraction, x, y, vs, HEAT_BUCKET, 1.0);
+                            if focused {
+                                add_interval(&mut focus, x, y, vs, HEAT_BUCKET, -1.0);
+                            }
+                        }
                     }
                 }
             }
+            Kind::Idle | Kind::System => {}
         }
         prev = Some((s, end));
     }
-    heat_scores(&focus, &distraction, &switches, HEAT_BUCKET)
+    HeatInput { focus, distraction, switches }
+}
+
+fn heat_values(facts: &[&Seg], vs: f64, count: usize) -> Vec<f64> {
+    let h = heat_input(facts, vs, count);
+    heat_scores(&h.focus, &h.distraction, &h.switches, HEAT_BUCKET)
+}
+
+/// The focus heat map by clock hour: the 5-minute scores over the whole logical day, averaged
+/// per hour weighted by the focused and distracted minutes of each bucket.
+pub fn focus_hours(day: &str, label: String, normalized: &[Seg]) -> FocusHourRow {
+    let buckets = (stats::DAY_MINUTES / HEAT_BUCKET) as usize;
+    let per_hour = (60.0 / HEAT_BUCKET) as usize;
+    let facts: Vec<&Seg> = normalized.iter().filter(|s| s.cat.kind != Kind::Idle && s.cat.kind != Kind::System).collect();
+    let h = heat_input(&facts, 0.0, buckets);
+    let scores = heat_scores(&h.focus, &h.distraction, &h.switches, HEAT_BUCKET);
+    let mut row = FocusHourRow { day: day.to_string(), label, scores: vec![None; 24], focus_secs: vec![0; 24], distracted_secs: vec![0; 24] };
+    for hour in 0..24 {
+        let (mut weight, mut sum, mut focus, mut distracted) = (0.0, 0.0, 0.0, 0.0);
+        for b in hour * per_hour..(hour + 1) * per_hour {
+            let (f, d) = (h.focus[b].max(0.0), h.distraction[b].max(0.0));
+            focus += f;
+            distracted += d;
+            weight += f + d;
+            sum += scores[b] * (f + d);
+        }
+        row.focus_secs[hour] = (focus * 60.0).round() as i64;
+        row.distracted_secs[hour] = (distracted * 60.0).round() as i64;
+        if weight >= 0.5 {
+            row.scores[hour] = Some(((sum / weight) * 1000.0).round() / 1000.0);
+        }
+    }
+    row
 }
 
 /// weeklyActivityWindow: earliest start and latest end ±30 minutes, snapped to 15 minutes, within
@@ -477,6 +550,7 @@ pub fn compute_week(days: &[DayInput], previous: &[DayInput], cats: &[Category])
     let mut blocks: Vec<WeekBlock> = Vec::new();
     let mut day_segs: Vec<Vec<Seg>> = Vec::new();
     let mut hours: Vec<HourRow> = Vec::new();
+    let mut focus_rows: Vec<FocusHourRow> = Vec::new();
 
     for d in days {
         let st = stats::compute_day(&d.day, &d.cards, cats, d.start, d.end);
@@ -511,7 +585,7 @@ pub fn compute_week(days: &[DayInput], previous: &[DayInput], cats: &[Category])
         for s in &segs {
             if s.cat.kind == Kind::Distraction {
                 spans.push((s.start, s.end));
-            } else if s.cat.kind == Kind::Focus {
+            } else if matches!(s.cat.kind, Kind::Focus | Kind::Neither) {
                 for x in &s.card.distractions {
                     if let Some((a, b)) = stats::distraction_span(s.card, x) {
                         let (a, b) = (a.max(s.start), b.min(s.end));
@@ -527,11 +601,13 @@ pub fn compute_week(days: &[DayInput], previous: &[DayInput], cats: &[Category])
             add_hours(&mut row, a, b);
         }
         hours.push(HourRow { day: d.day.clone(), label: weekday_label(&d.day, false), secs: row });
+        focus_rows.push(focus_hours(&d.day, weekday_label(&d.day, false), &stats::remove_overlaps(&segs)));
 
         summaries.push(WeekDaySummary {
             day: d.day.clone(),
             label: weekday_label(&d.day, false),
             captured_secs: st.captured_secs,
+            active_secs: st.active_secs,
             focus_secs: st.focus_secs,
             distracted_secs: st.distracted_secs,
             idle_secs: st.idle_secs,
@@ -588,12 +664,14 @@ pub fn compute_week(days: &[DayInput], previous: &[DayInput], cats: &[Category])
     });
     let context_insight = match busiest {
         Some(b) if b.context_shifts + b.distraction_count > 0 => format!(
-            "{} had the most interruptions, with {} context shifts and {} distractions.",
+            "{} had the most interruptions, with {} context {} and {} {}.",
             weekday_label(&b.day, true),
             b.context_shifts,
-            b.distraction_count
+            if b.context_shifts == 1 { "switch" } else { "switches" },
+            b.distraction_count,
+            if b.distraction_count == 1 { "distraction" } else { "distractions" },
         ),
-        _ => "No context shift or distraction pattern was detected in this week.".to_string(),
+        _ => "No context switch or distraction pattern was detected in this week.".to_string(),
     };
 
     blocks.sort_by(|a, b| b.secs.cmp(&a.secs).then(a.start_ts.cmp(&b.start_ts)));
@@ -640,12 +718,14 @@ pub fn compute_week(days: &[DayInput], previous: &[DayInput], cats: &[Category])
         days: summaries,
         distribution,
         captured_secs: captured,
+        active_secs: (captured - idle).max(0),
         focus_secs: focus,
         distracted_secs: distracted,
         idle_secs: idle,
         workflow: WeekGrid { start_minute: ws, end_minute: ws + slots as f64 * WORKFLOW_SLOT, slot_minutes: WORKFLOW_SLOT, rows, totals: wf_totals },
         heatmap: Heatmap { start_minute: ws, end_minute: ws + buckets as f64 * HEAT_BUCKET, bucket_minutes: HEAT_BUCKET, rows: heat_rows },
         distraction_hours: hours,
+        focus_hours: focus_rows,
         context_insight,
         focus_blocks: blocks,
         apps_by_category: by_cat,
@@ -701,12 +781,14 @@ mod tests {
         let dist: Vec<(&str, i64)> = st.distribution.iter().map(|t| (t.name.as_str(), t.secs / 60)).collect();
         assert_eq!(dist, vec![("Work", 150), ("Personal", 60), ("Distraction", 30)]);
         assert_eq!(st.idle_secs / 60, 60);
+        assert_eq!(st.active_secs, st.captured_secs - st.idle_secs);
+        assert_eq!(st.days.iter().map(|d| d.active_secs).sum::<i64>(), st.active_secs);
         assert_eq!(st.distracted_secs / 60, 40);
         assert_eq!(st.focus_secs / 60, 150 + 60 - 10);
         assert_eq!(st.days[0].context_shifts, 1, "Work → Distraction (Idle is left out)");
         assert_eq!(st.days[0].distraction_count, 2, "one noted distraction and one Distraction card");
         assert_eq!(st.days[1].context_shifts, 1);
-        assert_eq!(st.context_insight, "Monday had the most interruptions, with 1 context shifts and 2 distractions.");
+        assert_eq!(st.context_insight, "Monday had the most interruptions, with 1 context switch and 2 distractions.");
         assert_eq!(st.focus_blocks[0].secs, 120 * 60);
         assert_eq!(st.focus_blocks[0].day, "2026-10-12");
         // Distraction hours: 9:30-9:40 lands in the 9 AM bucket (index 5), 11:00-11:30 in index 7
@@ -719,7 +801,7 @@ mod tests {
         let mon = (2026, 10, 12);
         let cats: Vec<Category> = ["A", "B", "C", "D", "E", "F"]
             .iter()
-            .map(|n| Category { name: n.to_string(), color: "#000000".into(), description: String::new(), is_idle: false })
+            .map(|n| Category::new(n, "#000000", "", false))
             .collect();
         let cards = (0..6).map(|i| card(i, at(mon, 8 + i as u32, 0), at(mon, 8 + i as u32, 10 + i as u32 * 5), ["A", "B", "C", "D", "E", "F"][i as usize], "x")).collect();
         let st = compute_week(&week(vec![cards]), &[], &cats);
@@ -762,6 +844,35 @@ mod tests {
     }
 
     #[test]
+    fn focus_score_by_hour() {
+        let mon = (2026, 10, 12);
+        let mut work = card(1, at(mon, 9, 0), at(mon, 10, 0), "Work", "Spec");
+        work.distractions = vec![distraction(at(mon, 9, 50), at(mon, 10, 0), "Feeds")];
+        let mut cats = default_categories();
+        cats[1].counts_as = Some(crate::types::CountsAs::Neither);
+        let days = week(vec![vec![
+            work,
+            card(2, at(mon, 11, 0), at(mon, 12, 0), "Distraction", "Videos"),
+            card(3, at(mon, 13, 0), at(mon, 14, 0), "Personal", "Bills"),
+            card(4, at(mon, 15, 0), at(mon, 15, 30), "Idle", "Idle"),
+        ]]);
+        let st = compute_week(&days, &[], &cats);
+        let r = &st.focus_hours[0];
+        assert_eq!(r.scores.len(), 24);
+        // 9 AM is index 5: 50 focused minutes, 10 distracted.
+        assert_eq!((r.focus_secs[5], r.distracted_secs[5]), (3000, 600));
+        let nine = r.scores[5].unwrap();
+        assert!(nine < -0.3, "mostly focused: {nine}");
+        // 11 AM (index 7) is a full hour of Distraction.
+        assert_eq!(r.scores[7], Some(1.0));
+        assert_eq!(r.distracted_secs[7], 3600);
+        // Personal counts as neither: no signal at 1 PM. Idle has none either.
+        assert_eq!((r.scores[9], r.focus_secs[9]), (None, 0));
+        assert_eq!(r.scores[11], None);
+        assert!(st.focus_hours[1].scores.iter().all(Option::is_none), "an empty day");
+    }
+
+    #[test]
     fn apps_with_previous_week() {
         let mon = (2026, 10, 12);
         let prev_mon = (2026, 10, 5);
@@ -797,7 +908,7 @@ mod tests {
     #[test]
     fn empty_week() {
         let st = compute_week(&week(vec![]), &[], &default_categories());
-        assert_eq!(st.context_insight, "No context shift or distraction pattern was detected in this week.");
+        assert_eq!(st.context_insight, "No context switch or distraction pattern was detected in this week.");
         assert_eq!((st.workflow.start_minute, st.workflow.end_minute), (300.0, 1080.0));
         assert!(st.distribution.is_empty() && st.top_apps.is_empty() && st.focus_blocks.is_empty());
     }

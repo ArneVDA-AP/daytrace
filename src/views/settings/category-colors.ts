@@ -2,18 +2,18 @@ import type { Category } from "@/api";
 import { RECOMMENDED } from "@/lib/categories";
 
 /*
- * Colours offered for categories. The three recommended ones are the backend's
+ * Colors offered for categories. The three recommended ones are the backend's
  * default_categories (types.rs) and map to theme-aware tokens (lib/categories.ts). The extra four
  * are stored as given in both themes, so they were picked at oklch lightness ~0.6, where they keep
  * at least 3:1 against every surface of both themes (light: 3.13–3.95, dark: 3.39–4.86, measured
  * with the contrast formula of scripts/contrast.mjs), and away from the hues of the three defaults
- * and of the failure red. These are stored data values, not interface colours.
+ * and of the failure red. These are stored data values, not interface colors.
  */
 
 export interface Swatch {
   name: string;
   hex: string;
-  /** Category this is the recommended colour of. */
+  /** Category this is the recommended color of. */
   forCategory?: string;
 }
 
@@ -38,18 +38,18 @@ export function swatchFor(hex: string): Swatch | undefined {
   return SWATCHES.find((s) => sameHex(s.hex, hex));
 }
 
-/** Words for a stored colour: "Blue", or "custom colour #12AB34". */
+/** Words for a stored color: "Blue", or "custom color #12AB34". */
 export function colorName(hex: string): string {
-  return swatchFor(hex)?.name ?? `custom colour ${hex.toUpperCase()}`;
+  return swatchFor(hex)?.name ?? `custom color ${hex.toUpperCase()}`;
 }
 
-/** The recommended colour of a category, by name (Work, Personal, Distraction; Idle). */
+/** The recommended color of a category, by name (Work, Personal, Distraction; Idle). */
 export function recommendedHex(c: Category): string | null {
   if (c.isIdle) return IDLE_DEFAULT_HEX;
   return RECOMMENDED.find((r) => r.name.toLowerCase() === c.name.trim().toLowerCase())?.hex ?? null;
 }
 
-/** Categories with the recommended colour put back on the default ones; others keep theirs. */
+/** Categories with the recommended color put back on the default ones; others keep theirs. */
 export function withRecommendedColors(categories: Category[]): Category[] {
   return categories.map((c) => {
     const hex = recommendedHex(c);
@@ -64,13 +64,13 @@ export function hasNonRecommendedColors(categories: Category[]): boolean {
   });
 }
 
-/** A colour for a new category: the first offered one no category uses yet. */
+/** A color for a new category: the first offered one no category uses yet. */
 export function unusedColor(categories: Category[]): string {
   const used = new Set(categories.map((c) => c.color.trim().toUpperCase()));
   return (SWATCHES.find((s) => !s.forCategory && !used.has(s.hex)) ?? SWATCHES.find((s) => !used.has(s.hex)) ?? SWATCHES[3]).hex;
 }
 
-// ---- contrast of a custom colour against the content layer of each theme ----
+// ---- contrast of a custom color against the content layer of each theme ----
 
 function luminance(hex: string): number | null {
   const m = hex.trim().match(/^#?([0-9a-f]{6})$/i);
@@ -83,7 +83,7 @@ function luminance(hex: string): number | null {
 /** Relative luminance of --surface-1 in light (white) and dark (oklch 0.21 0.007 260) mode. */
 const SURFACE_LUMINANCE = { light: 1, dark: 0.0091 };
 
-/** Contrast of a colour against the content layer in light and dark mode. */
+/** Contrast of a color against the content layer in light and dark mode. */
 export function surfaceContrast(hex: string): { light: number; dark: number } | null {
   const l = luminance(hex);
   if (l === null) return null;

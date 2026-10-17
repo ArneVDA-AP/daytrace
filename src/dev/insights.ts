@@ -6,7 +6,8 @@
  */
 import type { Card, Category } from "@/api";
 import { dayBounds, shiftDay, weekStart, weekday } from "@/lib/time";
-import type { AppUsage, Block, CategoryTotal, DayStats, DistractionItem, GridRow, Kind, Marker, NamedSecs, RecapEntry, RecapView, WeekStats } from "@/views/insights/api";
+import type { AppUsage, Block, CategoryTotal, DayStats, DistractionItem, FocusHourRow, GridRow, Kind, Marker, NamedSecs, RecapEntry, RecapView, WeekStats } from "@/views/insights/api";
+import { kindOf } from "@/views/insights/format";
 
 const SLOT = 15;
 const FOCUS_GAP = 5 * 60;
@@ -26,7 +27,7 @@ function catInfo(name: string, cats: Category[]) {
   if (key === "system") return { key, name, kind: "system" as Kind, order: 999 };
   const i = cats.findIndex((c) => c.name.trim().toLowerCase() === key);
   const c = cats[i];
-  const kind: Kind = c?.isIdle ? "idle" : key === "distraction" || key === "distractions" ? "distraction" : "focus";
+  const kind: Kind = kindOf(name, cats);
   // The backend also sends a stored hex per category; views colour by name with colorFor().
   return { key, name: c?.name ?? name, kind, order: i < 0 ? 500 : i };
 }
@@ -106,9 +107,13 @@ export function computeDay(day: string, cards: Card[], cats: Category[]): DaySta
   const real = segs.filter((s) => s.kind !== "system");
   const sum = (k: Kind) => real.filter((s) => s.kind === k).reduce((a, s) => a + s.end - s.start, 0);
   const distractions = distractionsOf(real, day);
+  const kindOfCard = new Map(real.map((s) => [s.card.id, s.kind]));
   const embedded = distractions.filter((d) => d.withinCard).reduce((a, d) => a + d.secs, 0);
-  const focusSecs = sum("focus") - embedded;
+  const embeddedInFocus = distractions.filter((d) => d.withinCard && kindOfCard.get(d.cardId) === "focus").reduce((a, d) => a + d.secs, 0);
+  const focusSecs = sum("focus") - embeddedInFocus;
   const distractedSecs = sum("distraction") + embedded;
+  const capturedSecs = real.reduce((a, s) => a + s.end - s.start, 0);
+  const activeSecs = Math.max(0, capturedSecs - sum("idle"));
   let transition = 0;
   let switches = 0;
   for (let i = 1; i < segs.length; i++) {
@@ -159,14 +164,15 @@ export function computeDay(day: string, cards: Card[], cats: Category[]): DaySta
     dayStartTs: ds,
     dayEndTs: de,
     cardCount: segs.length,
-    capturedSecs: real.reduce((a, s) => a + s.end - s.start, 0),
+    capturedSecs,
+    activeSecs,
     focusSecs,
     distractedSecs,
     idleSecs: sum("idle"),
     transitionSecs: transition,
     contextSwitches: switches,
     interruptions: real.filter((s) => s.card.distractions.length > 0).length,
-    distractedRatio: focusSecs + distractedSecs > 0 ? distractedSecs / (focusSecs + distractedSecs) : 0,
+    distractedRatio: activeSecs > 0 ? distractedSecs / activeSecs : 0,
     totals: totals(real),
     grid: { startMinute: gStart, endMinute: gEnd, slotMinutes: SLOT, rows, dominant, markers },
     distractions,
@@ -250,7 +256,30 @@ export function computeWeek(day: string, cardsOf: (d: string) => Card[], cats: C
     });
     return { day: s.day, label: weekday(s.day), secs };
   });
-  const sumOf = (k: "capturedSecs" | "focusSecs" | "distractedSecs" | "idleSecs") => stats.reduce((a, s) => a + s[k], 0);
+  // Focus heat map by hour (simplified: the share of distracted against focused minutes).
+  const focusHours: FocusHourRow[] = stats.map((s, i) => {
+    const [a, b] = dayBounds(days[i]);
+    const focus = new Array<number>(24).fill(0);
+    const distracted = new Array<number>(24).fill(0);
+    const add = (arr: number[], from: number, to: number, sign = 1) => {
+      for (let t = from; t < to; t += 60) {
+        const h = Math.floor((t - s.dayStartTs) / 3600);
+        if (h >= 0 && h < 24) arr[h] += sign * Math.min(60, to - t);
+      }
+    };
+    for (const g of segments(cardsOf(days[i]), cats, a, b)) if (g.kind === "focus") add(focus, g.start, g.end);
+    for (const d of s.distractions) {
+      add(distracted, d.startTs, d.endTs);
+      if (d.withinCard) add(focus, d.startTs, d.endTs, -1);
+    }
+    const scores = focus.map((f, h) => {
+      const d = distracted[h];
+      if (f + d < 30) return null;
+      return Math.round(Math.max(-1, Math.min(1, (d * 1.25 - f) / Math.max(f + d, 1800))) * 1000) / 1000;
+    });
+    return { day: s.day, label: weekday(s.day), scores, focusSecs: focus.map((x) => Math.max(0, x)), distractedSecs: distracted };
+  });
+  const sumOf = (k: "capturedSecs" | "activeSecs" | "focusSecs" | "distractedSecs" | "idleSecs") => stats.reduce((a, s) => a + s[k], 0);
   const busiest = [...stats].sort((a, b) => b.contextSwitches + b.distractions.length - (a.contextSwitches + a.distractions.length))[0];
   return {
     weekStart: start,
@@ -259,6 +288,7 @@ export function computeWeek(day: string, cardsOf: (d: string) => Card[], cats: C
       day: s.day,
       label: weekday(s.day),
       capturedSecs: s.capturedSecs,
+      activeSecs: s.activeSecs,
       focusSecs: s.focusSecs,
       distractedSecs: s.distractedSecs,
       idleSecs: s.idleSecs,
@@ -269,6 +299,7 @@ export function computeWeek(day: string, cardsOf: (d: string) => Card[], cats: C
     })),
     distribution: add(stats.map((s) => s.totals.filter((t) => t.kind !== "idle"))),
     capturedSecs: sumOf("capturedSecs"),
+    activeSecs: sumOf("activeSecs"),
     focusSecs: sumOf("focusSecs"),
     distractedSecs: sumOf("distractedSecs"),
     idleSecs: sumOf("idleSecs"),
@@ -281,10 +312,11 @@ export function computeWeek(day: string, cardsOf: (d: string) => Card[], cats: C
     },
     heatmap: { startMinute: wStart, endMinute: wEnd, bucketMinutes: 5, rows: stats.map((s) => ({ day: s.day, label: weekday(s.day), values: [] })) },
     distractionHours,
+    focusHours,
     contextInsight:
       busiest && busiest.contextSwitches + busiest.distractions.length > 0
-        ? `${new Intl.DateTimeFormat("en-GB", { weekday: "long" }).format(new Date(`${busiest.day}T12:00:00`))} had the most interruptions, with ${busiest.contextSwitches} context shifts and ${busiest.distractions.length} distractions.`
-        : "No context shift or distraction pattern was detected in this week.",
+        ? `${new Intl.DateTimeFormat("en-GB", { weekday: "long" }).format(new Date(`${busiest.day}T12:00:00`))} had the most interruptions, with ${busiest.contextSwitches} context ${busiest.contextSwitches === 1 ? "switch" : "switches"} and ${busiest.distractions.length} ${busiest.distractions.length === 1 ? "distraction" : "distractions"}.`
+        : "No context switch or distraction pattern was detected in this week.",
     focusBlocks: stats
       .flatMap((s) => s.focusBlocks.map((b) => ({ day: s.day, ...b })))
       .sort((a, b) => b.secs - a.secs)

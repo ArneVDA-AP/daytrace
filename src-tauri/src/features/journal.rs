@@ -8,11 +8,14 @@
 //!   minutes and last week's average.
 //! - Views/Components/DayGoalFlowView.swift, DayGoalReviewComponents.swift and
 //!   MainView/Lifecycle.requestDailyGoalPromptIfNeeded: the morning flow (yesterday's review, then
-//!   today's goals), asked only after 3 days with activity and not after 5 skips in a row.
+//!   today's goals), asked only after 3 days with activity and not after 5 skips in a row, and the
+//!   prompt that opens it by itself once a day ("Show daily goal popups"; `take_prompt`).
 //!
-//! Dayflow lets each plan pick its focus and distraction categories. Daytrace uses the categories
-//! the Daily view uses (`insights::stats::cat_info`: a category named Distraction is distraction,
-//! the Idle category is idle, the rest is focus), so there is one setting for both.
+//! Dayflow lets each plan pick its focus and distraction categories. Daytrace uses each
+//! category's "Counts as" choice in Settings > Categories, the same numbers as the Daily view
+//! (`insights::stats::focus_split`: focus minus the distractions noted inside focus cards,
+//! distraction categories plus those noted distractions), so Goals, Daily, Weekly and Your day so
+//! far agree.
 //!
 //! Daytrace addition: a short checklist of things to get done that day, each with the cards that
 //! mention it (keyword match on the card text, no model call).
@@ -50,6 +53,10 @@ CREATE TABLE IF NOT EXISTS day_goal_items (
     updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_day_goal_items_day ON day_goal_items(day, sort_order);
+CREATE TABLE IF NOT EXISTS journal_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 "#;
 
 /// DayGoalPlan.defaultPlan.
@@ -153,7 +160,9 @@ pub struct CategorySecs {
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Progress {
+    /// Time in focus categories, without the distractions noted inside those cards.
     pub focus_secs: i64,
+    /// Time in distraction categories plus the distractions noted inside other cards.
     pub distracted_secs: i64,
     /// Focus categories in settings order, then other focus categories found on cards.
     pub focus_categories: Vec<CategorySecs>,
@@ -161,12 +170,13 @@ pub struct Progress {
     pub distraction_categories: Vec<String>,
 }
 
-/// Focus and distraction time of a day (DaySummaryStats.computeTotalFocusTime /
-/// computeTotalDistractedTime over de-overlapped non-System cards).
+/// Focus and distraction time of a day over de-overlapped non-System cards (Dayflow
+/// DaySummaryStats.computeTotalFocusTime / computeTotalDistractedTime), with the noted
+/// distractions moved from focus to distraction like the Daily view.
 pub fn progress(cards: &[StoredCard], cats: &[Category], day_start: i64, day_end: i64) -> Progress {
     let segs = stats::segments(cards, cats, day_start, day_end);
-    let normalized = stats::remove_overlaps(&segs);
-    let mut p = Progress::default();
+    let split = stats::focus_split(&stats::remove_overlaps(&segs));
+    let mut p = Progress { focus_secs: split.focus, distracted_secs: split.distracted, ..Progress::default() };
     for c in cats {
         let info = stats::cat_info(&c.name, cats);
         match info.kind {
@@ -175,18 +185,10 @@ pub fn progress(cards: &[StoredCard], cats: &[Category], day_start: i64, day_end
             _ => {}
         }
     }
-    for s in &normalized {
-        let d = s.end - s.start;
-        match s.cat.kind {
-            Kind::Focus => {
-                p.focus_secs += d;
-                match p.focus_categories.iter_mut().find(|c| c.name.eq_ignore_ascii_case(&s.cat.name)) {
-                    Some(c) => c.secs += d,
-                    None => p.focus_categories.push(CategorySecs { name: s.cat.name.clone(), color: s.cat.color.clone(), secs: d }),
-                }
-            }
-            Kind::Distraction => p.distracted_secs += d,
-            _ => {}
+    for (key, name, color, secs) in split.focus_by_category {
+        match p.focus_categories.iter_mut().find(|c| c.name.trim().to_lowercase() == key) {
+            Some(c) => c.secs += secs,
+            None => p.focus_categories.push(CategorySecs { name, color, secs }),
         }
     }
     p
@@ -255,6 +257,38 @@ pub fn should_prompt(db: &Db, day: &str, today: &str) -> Result<bool> {
     };
     let streak = flags.iter().take_while(|f| **f != 0).count() as i64;
     Ok(streak < MAX_CONSECUTIVE_SKIPS)
+}
+
+// ---- the prompt that opens by itself ----
+
+fn state_get(c: &Connection, key: &str) -> Result<Option<String>> {
+    Ok(c.query_row("SELECT value FROM journal_state WHERE key = ?", [key], |r| r.get(0)).optional()?)
+}
+
+fn state_set(c: &Connection, key: &str, value: &str) -> Result<()> {
+    c.execute("INSERT INTO journal_state (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value", params![key, value])?;
+    Ok(())
+}
+
+const PROMPT_SHOWN_KEY: &str = "goal_prompt_shown_day";
+
+/// Dayflow's requestDailyGoalPromptIfNeeded and markDailyGoalPromptHandled: the morning flow for
+/// `today` when the setting is on, the flow is due (`should_prompt`: no plan yet, 3 earlier days
+/// with activity, fewer than 5 skips in a row) and it was not opened by itself yet today. Taking
+/// it marks the day, so it opens at most once a day; the Goals tab keeps showing the flow.
+pub fn take_prompt(db: &Db, today: &str, enabled: bool, cats: &[Category]) -> Result<Option<GoalsView>> {
+    if !enabled {
+        return Ok(None);
+    }
+    if state_get(&db.conn(), PROMPT_SHOWN_KEY)?.as_deref() == Some(today) {
+        return Ok(None);
+    }
+    if !should_prompt(db, today, today)? {
+        return Ok(None);
+    }
+    let v = view(db, today, today, cats)?;
+    state_set(&db.conn(), PROMPT_SHOWN_KEY, today)?;
+    Ok(Some(v))
 }
 
 // ---- checklist and evidence ----
@@ -336,7 +370,7 @@ pub fn evidence(goal: &str, cards: &[StoredCard], cats: &[Category]) -> Evidence
     let need = if keys.len() <= 2 { 1 } else { 2 };
     let mut hits: Vec<EvidenceCard> = cards
         .iter()
-        .filter(|c| matches!(stats::cat_info(&c.category, cats).kind, Kind::Focus | Kind::Distraction))
+        .filter(|c| matches!(stats::cat_info(&c.category, cats).kind, Kind::Focus | Kind::Distraction | Kind::Neither))
         .filter_map(|c| {
             let sites = c.app_sites.as_ref().map(|a| format!("{} {}", a.primary.clone().unwrap_or_default(), a.secondary.clone().unwrap_or_default())).unwrap_or_default();
             let text = format!("{} {} {} {} {}", c.title, c.summary, c.subcategory, c.detailed_summary, sites);
@@ -492,6 +526,15 @@ pub fn journal_get(state: S, day: String) -> CmdResult<GoalsView> {
     view_for(&state, &day)
 }
 
+/// The morning flow to open by itself (yesterday's review and today's targets), at most once a
+/// day; None when it is off, not due or already shown. Called on the first use of the window
+/// after the day starts.
+#[tauri::command]
+pub fn journal_take_prompt(state: S) -> CmdResult<Option<GoalsView>> {
+    let settings = state.settings();
+    take_prompt(&state.db, &logical_day(now_ts()), settings.show_goal_prompt, &settings.categories).map_err(err)
+}
+
 /// Confirms the day's targets (Dayflow "Confirm").
 #[tauri::command]
 pub fn journal_save_plan(state: S, day: String, focus_target_minutes: i64, distraction_limit_minutes: i64) -> CmdResult<GoalsView> {
@@ -547,6 +590,48 @@ mod tests {
         assert_eq!((p.focus_target_minutes, p.is_skipped, p.saved, p.carried_from.as_deref()), (200, false, false, Some("2026-10-11")));
         assert!(effective_plan(&db, "2026-10-11").unwrap().is_skipped);
         assert!(save_plan(&db, "not a day", 1, 1, false).is_err());
+    }
+
+    #[test]
+    fn progress_uses_the_daily_numbers_and_counts_as() {
+        let d = (2026, 10, 14);
+        let mut cats = default_categories();
+        let mut work = card(1, at(d, 9, 0), at(d, 10, 0), "Work", "Code");
+        work.distractions = vec![crate::features::insights::stats::tests::distraction(at(d, 9, 20), at(d, 9, 28), "Feeds")];
+        let cards = vec![work, card(2, at(d, 10, 0), at(d, 11, 0), "Personal", "Bills")];
+        let (s, e) = logical_day_bounds("2026-10-14").unwrap();
+        // The 8 noted minutes move from focus to distraction, as on the Daily view.
+        let p = progress(&cards, &cats, s, e);
+        assert_eq!((p.focus_secs, p.distracted_secs), (3600 - 480 + 3600, 480));
+        assert_eq!(p.focus_categories.iter().map(|c| (c.name.as_str(), c.secs)).collect::<Vec<_>>(), vec![("Work", 3120), ("Personal", 3600)]);
+        let daily = crate::features::insights::stats::compute_day("2026-10-14", &cards, &cats, s, e);
+        assert_eq!((p.focus_secs, p.distracted_secs), (daily.focus_secs, daily.distracted_secs));
+        // Personal set to count as neither leaves focus.
+        cats[1].counts_as = Some(crate::types::CountsAs::Neither);
+        let p = progress(&cards, &cats, s, e);
+        assert_eq!(p.focus_secs, 3120);
+        assert_eq!(p.focus_categories.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["Work"]);
+    }
+
+    #[test]
+    fn prompt_opens_by_itself_once_a_day() {
+        let db = Db::memory();
+        let cats = default_categories();
+        for day in 10..=13 {
+            put(&db, at((2026, 10, day), 9, 0), at((2026, 10, day), 11, 0), "Work", "Coding", "");
+        }
+        assert!(take_prompt(&db, "2026-10-14", false, &cats).unwrap().is_none(), "setting off");
+        let v = take_prompt(&db, "2026-10-14", true, &cats).unwrap().expect("due on the first call");
+        assert!(v.prompt && v.is_today && v.day == "2026-10-14");
+        assert!(take_prompt(&db, "2026-10-14", true, &cats).unwrap().is_none(), "once a day");
+        // The next day it is due again, unless that day already has a plan.
+        save_plan(&db, "2026-10-15", 120, 60, false).unwrap();
+        assert!(take_prompt(&db, "2026-10-15", true, &cats).unwrap().is_none());
+        assert!(take_prompt(&db, "2026-10-16", true, &cats).unwrap().is_some());
+        // Not before 3 earlier days with activity.
+        let fresh = Db::memory();
+        put(&fresh, at((2026, 10, 13), 9, 0), at((2026, 10, 13), 10, 0), "Work", "Coding", "");
+        assert!(take_prompt(&fresh, "2026-10-14", true, &cats).unwrap().is_none());
     }
 
     #[test]
