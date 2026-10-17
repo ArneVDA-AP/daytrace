@@ -269,6 +269,16 @@ mod exit_guard {
     pub fn adopt(_child: &std::process::Child) {}
 }
 
+/// The job object and the tree kill above, for a long-running process started outside
+/// `ProcessRunner` (the Agents section's AgentPlayback server, `features/agents.rs`).
+pub(crate) fn adopt_into_job(child: &std::process::Child) {
+    exit_guard::adopt(child);
+}
+pub(crate) fn kill_process_tree(child: &mut std::process::Child) {
+    let pid = child.id();
+    kill_tree(child, pid);
+}
+
 /// Scripted runner for tests: records every spec and answers from a queue.
 #[cfg(test)]
 pub struct FakeRunner {

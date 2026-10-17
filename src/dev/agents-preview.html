@@ -1,0 +1,51 @@
+<!doctype html>
+<!--
+  DEV ONLY: stands in for the AgentPlayback dashboard in the browser preview (src/dev/agents.ts
+  points the Agents frame here). Synthetic data; not part of the production build (Vite builds
+  index.html only).
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AgentPlayback (preview placeholder)</title>
+    <style>
+      :root { color-scheme: light; font-family: system-ui, sans-serif; }
+      body { margin: 0; background: #f3efe6; color: #2b2a33; }
+      main { max-width: 860px; margin: 0 auto; padding: 28px 24px; display: grid; gap: 20px; }
+      header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+      h1 { font-size: 22px; margin: 0; }
+      .note { font-size: 13px; background: #fff8d6; border: 1px solid #d8c56a; border-radius: 6px; padding: 8px 12px; }
+      .row { display: flex; gap: 28px; align-items: center; flex-wrap: wrap; }
+      ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font-size: 14px; }
+      li { display: flex; gap: 8px; align-items: center; }
+      .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+      .muted { color: #5d5b68; font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>AgentPlayback</h1>
+        <span class="muted">Friday, October 16 · 7 sessions · $4.12 at API prices</span>
+      </header>
+      <p class="note">Preview placeholder. In Daytrace this frame shows the AgentPlayback dashboard served on 127.0.0.1.</p>
+      <div class="row">
+        <svg width="300" height="300" viewBox="-150 -150 300 300" role="img" aria-label="24-hour dial with three projects">
+          <circle r="120" fill="none" stroke="#dcd6c8" stroke-width="22" />
+          <!-- arcs: start/end in hours, 0 at top -->
+          <path d="M 0 -120 A 120 120 0 0 1 103.9 -60" fill="none" stroke="#536cff" stroke-width="22" transform="rotate(135)" />
+          <path d="M 0 -120 A 120 120 0 0 1 84.9 -84.9" fill="none" stroke="#33c2df" stroke-width="22" transform="rotate(210)" />
+          <path d="M 0 -120 A 120 120 0 0 1 60 -103.9" fill="none" stroke="#f17bc8" stroke-width="22" transform="rotate(255)" />
+          <text y="-4" text-anchor="middle" font-size="26" font-weight="600" fill="#2b2a33">5 h 10</text>
+          <text y="20" text-anchor="middle" font-size="12" fill="#5d5b68">agents working</text>
+        </svg>
+        <ul>
+          <li><span class="sw" style="background:#536cff"></span>harbor-api · 2 h 40 min · waiting on you</li>
+          <li><span class="sw" style="background:#33c2df"></span>garden-planner · 1 h 30 min</li>
+          <li><span class="sw" style="background:#f17bc8"></span>notes-site · 1 h 0 min</li>
+        </ul>
+      </div>
+    </main>
+  </body>
+</html>
