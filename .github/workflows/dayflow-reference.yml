@@ -1,0 +1,139 @@
+name: dayflow-reference
+
+# Runs the real Dayflow analysis code (macOS, Swift) on the synthetic frames in reference/frames
+# and uploads its observations, cards and request payloads. See reference/README.md.
+
+on:
+  push:
+    branches: [feat/harness]
+    paths:
+      - "reference/**"
+      - ".github/workflows/dayflow-reference.yml"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "dry = canned answers, no network; live = Anthropic Messages API"
+        type: choice
+        options: [dry, live]
+        default: dry
+      model:
+        description: "Model id (live mode)"
+        default: claude-haiku-5-5
+      effort:
+        description: "output_config.effort for live mode (none = leave it out)"
+        default: low
+      tz:
+        description: "Time zone for Dayflow's clock strings"
+        default: Europe/Brussels
+      base_ts:
+        description: "Unix time of the first frame (empty = frames end 10 s before the run)"
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dayflow-reference-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Dayflow commit the harness is pinned to (JerryZLiu/Dayflow, v2.7.1 appcast, 2026-10-15).
+  DAYFLOW_SHA: e90d25dc633fcaa2f433042e82defe4dfbabc5a4
+  HARNESS_MODE: ${{ inputs.mode || 'dry' }}
+
+jobs:
+  reference:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Check out Daytrace
+        uses: actions/checkout@v4
+        with:
+          path: daytrace
+          persist-credentials: false
+
+      - name: Check out Dayflow at the pinned commit
+        uses: actions/checkout@v4
+        with:
+          repository: JerryZLiu/Dayflow
+          ref: ${{ env.DAYFLOW_SHA }}
+          path: dayflow
+          persist-credentials: false
+
+      - name: Select the newest Xcode
+        run: |
+          ls -d /Applications/Xcode*.app
+          XCODE=$(ls -d /Applications/Xcode_*.app | grep -iv beta | sort -V | tail -1)
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+          sw_vers
+
+      - name: Install the harness test into DayflowTests
+        run: |
+          cp daytrace/reference/dayflow-harness/ReplayHarnessTests.swift dayflow/Dayflow/DayflowTests/
+          git -C dayflow rev-parse HEAD
+
+      - name: Turn off Dayflow analytics
+        run: defaults write teleportlabs.com.Dayflow analyticsOptIn -bool false
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: dd/SourcePackages
+          key: dayflow-spm-${{ env.DAYFLOW_SHA }}
+
+      - name: Build Dayflow and run the harness
+        env:
+          TEST_RUNNER_HARNESS_FRAMES: ${{ github.workspace }}/daytrace/reference/frames
+          TEST_RUNNER_HARNESS_OUT: ${{ github.workspace }}/harness-out
+          TEST_RUNNER_HARNESS_MODE: ${{ env.HARNESS_MODE }}
+          TEST_RUNNER_HARNESS_MODEL: ${{ inputs.model || 'claude-haiku-5-5' }}
+          TEST_RUNNER_HARNESS_EFFORT: ${{ inputs.effort || 'low' }}
+          TEST_RUNNER_HARNESS_TZ: ${{ inputs.tz || 'Europe/Brussels' }}
+          TEST_RUNNER_TZ: ${{ inputs.tz || 'Europe/Brussels' }}
+          TEST_RUNNER_HARNESS_BASE_TS: ${{ inputs.base_ts }}
+          TEST_RUNNER_HARNESS_DAYFLOW_SHA: ${{ env.DAYFLOW_SHA }}
+          # Only live runs receive the key; dry runs and push runs never do.
+          TEST_RUNNER_ANTHROPIC_API_KEY: ${{ env.HARNESS_MODE == 'live' && secrets.ANTHROPIC_API_KEY || '' }}
+        run: |
+          set -o pipefail
+          mkdir -p harness-out
+          xcodebuild test \
+            -project dayflow/Dayflow/Dayflow.xcodeproj \
+            -scheme Dayflow \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath dd \
+            -only-testing:DayflowTests/ReplayHarnessTests \
+            -skipPackagePluginValidation -skipMacroValidation \
+            CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= \
+            2>&1 | tee xcodebuild.log \
+            | (grep -E --line-buffered 'error:|ReplayHarness|REPLAY HARNESS|tokens in=|^  [0-9]|Test (Suite|Case)|\*\* (BUILD|TEST)' || true)
+
+      - name: Show harness summary
+        if: always()
+        run: |
+          ls -la harness-out || true
+          if [ -f harness-out/run.json ]; then cat harness-out/run.json; fi
+          tail -n 60 xcodebuild.log || true
+
+      - name: Make sure no secret reached the files
+        if: always() && env.HARNESS_MODE == 'live'
+        env:
+          KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "$KEY" ] && grep -rqF -- "$KEY" harness-out xcodebuild.log 2>/dev/null; then
+            echo "::error::The API key was found in the output; nothing is uploaded."
+            rm -rf harness-out xcodebuild.log
+            exit 1
+          fi
+
+      - name: Upload harness output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dayflow-reference-${{ env.HARNESS_MODE }}-${{ github.run_id }}
+          path: |
+            harness-out/
+            xcodebuild.log
+          retention-days: 3
+          if-no-files-found: warn
