@@ -178,7 +178,7 @@ export function describeFailure(message: string, ctx: { provider: ProviderId; ho
   // The CLI providers' error texts name the service ("Claude"); the copy names the tool.
   const who = ctx.provider === "claude_cli" || ctx.provider === "codex_cli" ? configured : (named ?? configured);
   const nextBatch = ctx.recording ? "with the next batch of screenshots (about every 15 minutes)" : "once recording resumes and the next batch is ready";
-  const afterFix = `Screenshots are kept. Once it works again, Daytrace analyzes the next batch and then rewrites the failed cards by itself.`;
+  const afterFix = "Screenshots are kept: once it works again, Daytrace analyzes the next batch and then rewrites the failed cards by itself.";
   const selfHeal = `Daytrace tries again by itself ${nextBatch} and rewrites the failed cards once a request gets through.`;
   const view = (label: string, body: string, fixes: FixAction[], selfHealing = false): FailureView => ({
     kind: c.kind,
@@ -193,86 +193,63 @@ export function describeFailure(message: string, ctx: { provider: ProviderId; ho
     case "apiKey":
       return view(
         `${who} refused the API key`,
-        `${who} did not accept the stored API key (it may be revoked, expired or mistyped). Add a new key under Settings, Model provider. ${afterFix}`,
+        `It may be revoked, expired or mistyped. Add a new key under Settings, Model provider. ${afterFix}`,
         [{ kind: "settings", label: "Replace API key" }, ...(ctx.provider === "anthropic" ? [{ kind: "link", label: "Open Claude Console", target: "console_keys" } as FixAction] : [])],
       );
     case "noCredits":
       return view(
-        `${who} account is out of credits`,
-        `Your ${who} account has no credits left, so requests are refused. Top it up, or switch providers under Settings, Model provider. ${afterFix}`,
+        `Your ${who} account is out of credits`,
+        `${ctx.provider === "anthropic" ? "Top it up in the Claude Console" : "Top it up"}, or switch providers under Settings, Model provider. ${afterFix}`,
         ctx.provider === "anthropic" ? [{ kind: "link", label: "Open Claude Console", target: "console_billing" }, MODEL] : [MODEL],
       );
     case "usageLimit":
       return view(
         `${who} usage limit reached`,
-        `You have used up your ${who} plan’s usage for now. Daytrace catches up by itself once the limit resets. To keep cards coming meanwhile, set a fallback provider under Settings, Model provider.`,
+        "Daytrace catches up by itself once the limit resets. To keep cards coming meanwhile, set a fallback provider under Settings, Model provider.",
         [MODEL],
       );
     case "loginExpired":
       return view(
         `${who} is signed out`,
         who === "Codex" || named === "ChatGPT"
-          ? `Codex is signed out. Run “codex login” in PowerShell to sign in again, then choose Try again. ${afterFix}`
+          ? `Run “codex login” in PowerShell to sign in again, then choose Try again. ${afterFix}`
           : named === "AWS"
-            ? `AWS is signed out. Run “aws sso login” in PowerShell, then choose Try again. ${afterFix}`
-            : `Claude Code is signed out. Open PowerShell, run “claude”, type “/login” to sign in again, then choose Try again. ${afterFix}`,
+            ? `Run “aws sso login” in PowerShell, then choose Try again. ${afterFix}`
+            : `Open PowerShell, run “claude”, type “/login” to sign in again, then choose Try again. ${afterFix}`,
         [RETRY, MODEL],
       );
     case "cliMissing":
       return view(
         `${who} not found`,
-        `Daytrace can’t find ${who} on this PC. Install it, or set its path under Settings, Model provider.${ctx.provider === "claude_cli" ? " Claude Code on Windows also needs Git for Windows." : ""} ${afterFix}`,
+        `Install it, or set its path under Settings, Model provider.${ctx.provider === "claude_cli" ? " Claude Code on Windows also needs Git for Windows." : ""} ${afterFix}`,
         [MODEL],
       );
     case "cliOutdated":
-      return view(
-        "Codex needs an update",
-        `Your Codex command-line tool is too old for the model Daytrace uses. Run “npm install -g @openai/codex@latest” in PowerShell, then choose Try again. ${afterFix}`,
-        [RETRY, MODEL],
-      );
+      return view("Codex needs an update", `Run “npm install -g @openai/codex@latest” in PowerShell, then choose Try again. ${afterFix}`, [RETRY, MODEL]);
     case "localOffline":
-      return view(
-        `Can’t reach ${configured}`,
-        `Daytrace couldn’t reach ${configured} on this PC. Start it, then choose Try again. ${afterFix}`,
-        [RETRY, MODEL],
-      );
+      return view(`Can’t reach ${configured}`, `Start it on this PC, then choose Try again. ${afterFix}`, [RETRY, MODEL]);
     case "localModelMissing":
-      return view(
-        "The local model isn’t loaded",
-        `Open ${configured} and load the model you picked in Daytrace, then choose Try again. ${afterFix}`,
-        [RETRY, MODEL],
-      );
+      return view("The local model isn’t loaded", `Open ${configured} and load the model you picked in Daytrace, then choose Try again. ${afterFix}`, [RETRY, MODEL]);
     case "modelMissing":
       return view(
         "The model isn’t available",
-        `The model Daytrace is set to use isn’t available on your ${who} account. Pick another one under Settings, Model provider. ${afterFix}`,
+        `Your ${who} account can’t use the model Daytrace is set to. Pick another one under Settings, Model provider. ${afterFix}`,
         [{ kind: "settings", label: "Choose a model" }],
       );
     case "geoBlocked":
-      return view(`${who} isn’t available here`, `${who} isn’t available in your region. Switch to another provider under Settings, Model provider. ${afterFix}`, [MODEL]);
+      return view(`${who} isn’t available here`, `It isn’t offered in your region. Switch to another provider under Settings, Model provider. ${afterFix}`, [MODEL]);
     case "accountBlocked":
-      return view(
-        `${who} blocked this account`,
-        `${who} refused access for this account. A new API key or another provider under Settings, Model provider usually fixes it. ${afterFix}`,
-        [MODEL],
-      );
+      return view(`${who} blocked this account`, `A new API key or another provider under Settings, Model provider usually fixes it. ${afterFix}`, [MODEL]);
     case "notConfigured":
-      return view("No AI provider set up", `Daytrace has no AI provider to write cards with. Set one up under Settings, Model provider. ${afterFix}`, [
-        { kind: "settings", label: "Set up a provider" },
-      ]);
+      return view("No AI provider set up", `Set one up under Settings, Model provider. ${afterFix}`, [{ kind: "settings", label: "Set up a provider" }]);
     case "transient":
       if (/timed out|timeout/i.test(message)) {
-        return view(`${who} took too long to answer`, `${who} didn’t answer in time. ${selfHeal}`, [RETRY], true);
+        return view(`${who} took too long to answer`, selfHeal, [RETRY], true);
       }
-      return view(
-        `${who} is busy`,
-        `${who} turned the request away because its servers are busy or the rate limit was reached. ${selfHeal}`,
-        [RETRY],
-        true,
-      );
+      return view(`${who} is busy`, `Its servers are overloaded or the rate limit was reached. ${selfHeal}`, [RETRY], true);
     case "unreadable":
-      return view("The model’s answer couldn’t be read", `The answer came back in a form Daytrace couldn’t turn into cards. This usually sorts itself out. ${selfHeal}`, [RETRY], true);
+      return view("The model’s answer couldn’t be read", `This usually sorts itself out. ${selfHeal}`, [RETRY], true);
     case "unknown":
-      return view("The last batch failed", `Something went wrong while turning the screenshots into cards. ${selfHeal}`, [RETRY], true);
+      return view("The last batch failed", selfHeal, [RETRY], true);
   }
 }

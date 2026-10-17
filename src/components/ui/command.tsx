@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Command as CommandPrimitive } from "cmdk"
+import { Command as CommandPrimitive, useCommandState } from "cmdk"
 import { cn } from "@/lib/utils"
 import { SearchIcon } from "lucide-react"
 
@@ -129,17 +129,20 @@ function CommandGroup({
   )
 }
 
+/**
+ * A line between groups. Drawn as a hidden div, not cmdk's role="separator": a listbox may only
+ * contain options and groups (axe aria-required-children). Hidden while searching, like cmdk's.
+ */
 function CommandSeparator({
   className,
-  ...props
-}: React.ComponentProps<typeof CommandPrimitive.Separator>) {
-  return (
-    <CommandPrimitive.Separator
-      data-slot="command-separator"
-      className={cn("-mx-1 h-px bg-border", className)}
-      {...props}
-    />
-  )
+  alwaysRender = false,
+}: {
+  className?: string
+  alwaysRender?: boolean
+}) {
+  const searching = useCommandState((s) => s.search !== "")
+  if (searching && !alwaysRender) return null
+  return <div aria-hidden="true" data-slot="command-separator" className={cn("-mx-1 h-px bg-border", className)} />
 }
 
 function CommandItem({

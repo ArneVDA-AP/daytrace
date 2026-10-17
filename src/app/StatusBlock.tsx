@@ -92,7 +92,9 @@ function useRailAnalysis(): AnalysisView {
 function useRecordingActions() {
   const app = useAppSettings();
   const [busy, setBusy] = React.useState(false);
-  // Pause and Resume swap places; the button that appears takes the focus (UX4).
+  // Pause and Resume swap places; the button that appears takes the focus (UX4). The buttons are
+  // disabled while the action runs, so the focus is lost meanwhile; it comes back afterwards, to
+  // the same button when the action failed.
   const focusNext = React.useRef(false);
   const pause = async (choice: string, label: string) => {
     setBusy(true);
@@ -104,7 +106,6 @@ function useRecordingActions() {
         description: end ? `Recording resumes at ${clock(end)}. Resume earlier here or from the tray icon.` : `${label}. Resume here or from the tray icon.`,
       });
     } catch (e) {
-      focusNext.current = false;
       toast("Couldn’t pause recording", { description: errorText(e), tone: "error" });
     } finally {
       setBusy(false);
@@ -117,7 +118,6 @@ function useRecordingActions() {
       await app.resume();
       toast("Recording resumed", { tone: "success" });
     } catch (e) {
-      focusNext.current = false;
       toast("Couldn’t resume recording", { description: errorText(e), tone: "error" });
     } finally {
       setBusy(false);
@@ -135,14 +135,15 @@ function StatusPanel({ analysis, className }: { analysis: AnalysisView; classNam
   const actionRef = React.useRef<HTMLButtonElement>(null);
   const panelRef = React.useRef<HTMLElement>(null);
 
+  // Once the action is done (the buttons are enabled again), the new button takes the focus, if
+  // the focus was lost with the old one or is still in this block.
   React.useEffect(() => {
-    if (!focusNext.current) return;
+    if (!focusNext.current || busy) return;
     focusNext.current = false;
-    // Only when the focus was lost with the old button (or is still in this block).
     const a = document.activeElement;
     if (a && a !== document.body && !panelRef.current?.contains(a)) return;
     actionRef.current?.focus();
-  }, [recorder.userPaused, focusNext]);
+  }, [recorder.userPaused, busy, focusNext]);
 
   return (
     <section ref={panelRef} aria-label="Recording status" className={cn("rounded-lg border bg-surface-1 text-meta shadow-xs", className)}>
@@ -235,7 +236,7 @@ export function StatusBlock() {
             <p>{analysis.label}</p>
           </TooltipContent>
         </Tooltip>
-        <PopoverContent side="right" align="end" className="w-64 border-none bg-transparent p-0 shadow-none">
+        <PopoverContent side="right" align="end" aria-label="Recording status" className="w-64 border-none bg-transparent p-0 shadow-none">
           <StatusPanel analysis={analysis} className="shadow-lg" />
         </PopoverContent>
       </Popover>

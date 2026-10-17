@@ -278,7 +278,7 @@ function CardRow({
             className={cn(
               "flex min-w-0 flex-1 flex-col justify-start rounded-md border border-transparent px-3 py-2 transition-[background-color,border-color,box-shadow] duration-(--dur-fast) focus-visible:-outline-offset-2",
               "hover:bg-surface-2",
-              selected && SELECTED,
+              selected ? SELECTED : "forced-colors:border-[Canvas]",
             )}
           >
             <span className={cn("line-clamp-2 text-body font-medium text-pretty", idle && "font-normal text-muted-foreground")}>{c.title}</span>
@@ -365,7 +365,10 @@ function RunRow({
   );
 }
 
-const SELECTED = "border-border-strong bg-surface-1 shadow-md hover:bg-surface-1 dark:bg-surface-2 dark:hover:bg-surface-2";
+// Contrast themes drop the shadow and color every border: unselected rows get the canvas color
+// (no border), the selected one Highlight (UX6).
+const SELECTED =
+  "border-border-strong bg-surface-1 shadow-md hover:bg-surface-1 dark:bg-surface-2 dark:hover:bg-surface-2 forced-colors:border-2 forced-colors:border-[Highlight]";
 
 /** A failed card or run: the link (title, "Not analyzed") and, below it, Try again and what
  * Daytrace does by itself. Buttons cannot sit inside the link, so the box holds both. */
