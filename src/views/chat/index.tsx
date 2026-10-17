@@ -32,7 +32,7 @@ let lastConversationId: number | null = null;
 let draftInput = "";
 
 export default function ChatSection() {
-  const { today, colorFor, settings } = useViewProps();
+  const { today, colorFor, categories, settings } = useViewProps();
   const { analysis, problems } = useAppState();
   const route = useRoute();
   const cParam = numParam(route.params, "c");
@@ -455,7 +455,7 @@ export default function ChatSection() {
                       ) : m.role === "error" ? (
                         <ErrorMessage m={m} onRetry={i === messages.length - 1 ? retry : undefined} retryDisabled={busy || !!info?.busy || !!blocked} />
                       ) : (
-                        <AssistantMessage m={m} today={today} colorFor={colorFor} onLink={onLink} onCopy={() => void copy(m)} copied={copied === m.id} />
+                        <AssistantMessage m={m} today={today} colorFor={colorFor} categories={categories} onLink={onLink} onCopy={() => void copy(m)} copied={copied === m.id} />
                       )}
                     </li>
                   ))}

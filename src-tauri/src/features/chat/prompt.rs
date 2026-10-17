@@ -8,12 +8,17 @@
 //! - A CITATIONS section (Daytrace): answers link the cards they rely on.
 //! - For chat through the Claude Code CLI (`ToolSet::Mcp`) the tool section, the tool names in
 //!   "Implicit context" and the citation id name daytrace-mcp's read tools instead.
+//! - Dayflow's INLINE CHARTS section and its CHART COLORS section (categoryColorsSection), which
+//!   Dayflow has in its CLI chat prompts (codexSystemPrompt, claudeSystemPrompt) and not in the
+//!   Gemini one, copied verbatim after CITATIONS. The chat view draws the blocks
+//!   (src/views/chat/chart.tsx).
 //!
 //! Dayflow's user-memory and recent-suggestion sections are appended the same way
 //! (ChatService.buildGeminiSystemInstruction), and its language section
 //! (ChatPromptBuilder.languageOverrideSection).
 
 use crate::llm::prompts::language_instruction;
+use crate::types::Category;
 use chrono::{DateTime, Local};
 
 /// Dayflow's welcome prompts (ChatView+State.swift `welcomePrompts`).
@@ -67,11 +72,78 @@ Rules:
 - For large time windows (full week+), use get_time_breakdown or get_weekly instead of listing every activity.
 - Default to get_timeline unless the user needs observation-level detail."####;
 
-pub fn system_prompt(now: DateTime<Local>, logical_today: &str, language: &str, memory: &str, recent_suggestions: &[String]) -> String {
-    build(now, logical_today, language, memory, recent_suggestions, ToolSet::Api)
+/// Dayflow's inline chart section (ChatPromptBuilder.swift, codexSystemPrompt and
+/// claudeSystemPrompt, "## INLINE CHARTS (OPTIONAL)"), verbatim.
+const CHARTS: &str = r####"## INLINE CHARTS (OPTIONAL)
+
+You may include inline charts inside your markdown response. Use fenced chart blocks exactly like this:
+
+```chart type=bar
+{ "title": "Time by activity (today)", "x": ["Research", "YouTube"], "y": [45, 20], "color": "#F96E00" }
+```
+
+```chart type=line
+{ "title": "Focus time by day", "x": ["Mon", "Tue", "Wed"], "y": [2.5, 3.0, 1.8], "color": "#1F6FEB" }
+```
+
+```chart type=stacked_bar
+{ "title": "Work vs Personal by day", "x": ["Mon", "Tue"], "series": [{ "name": "Work", "values": [2.5, 3.1], "color": "#1F6FEB" }, { "name": "Personal", "values": [1.2, 0.8], "color": "#F96E00" }] }
+```
+
+```chart type=donut
+{ "title": "Time split (today)", "labels": ["Work", "Personal"], "values": [3.0, 5.7], "colors": ["#1F6FEB", "#F96E00"] }
+```
+
+```chart type=heatmap
+{ "title": "Focus by daypart", "x": ["Mon", "Tue", "Wed"], "y": ["Morning", "Afternoon", "Evening"], "values": [[1.2, 0.8, 1.5], [2.0, 1.6, 1.1], [0.7, 1.0, 0.9]], "color": "#1F6FEB" }
+```
+
+```chart type=gantt
+{ "title": "Focus blocks (today)", "items": [{ "label": "Research", "start": 9.0, "end": 10.5, "color": "#1F6FEB" }, { "label": "Break", "start": 10.5, "end": 11.0, "color": "#F96E00" }] }
+```
+
+RULES:
+- Allowed chart types: bar, line, stacked_bar, donut, heatmap, gantt
+- JSON must be valid (double quotes, no trailing commas)
+- For donut charts use `type=donut` (not `pie`)
+- x and y must be arrays of the same length
+- Use numbers only for y values
+- Optional: color can be a hex string like "#F96E00" or "F96E00"
+- For stacked_bar: provide x categories and a series array; each series needs name + values (values count must match x); color optional per series
+- For donut: provide labels + values (same length); optional colors array (same length) for slice colors
+- For heatmap: provide x labels, y labels, and values as a 2D array where each row matches y and each row length matches x; optional base color
+- For gantt: provide items with label, start, end (numbers, start < end); optional color per item
+- Place the chart block where you want it to appear in the response
+- If a chart isn't helpful, omit it"####;
+
+/// Dayflow's categoryColorsSection (ChatPromptBuilder.swift): every category of the settings, in
+/// their order, with its color. Empty without categories.
+fn category_colors_section(categories: &[Category]) -> String {
+    if categories.is_empty() {
+        return String::new();
+    }
+    let mut lines = vec!["## CHART COLORS".to_string(), String::new(), "When creating charts based on activity categories, use these exact colors:".to_string()];
+    for c in categories {
+        lines.push(format!("- {}: {}", c.name, c.color));
+    }
+    lines.push(String::new());
+    lines.push("For other charts (not category-based), choose a warm, pastel, harmonious palette.".to_string());
+    lines.join("\n")
 }
 
-pub fn build(now: DateTime<Local>, logical_today: &str, language: &str, memory: &str, recent_suggestions: &[String], tools: ToolSet) -> String {
+pub fn system_prompt(now: DateTime<Local>, logical_today: &str, language: &str, memory: &str, recent_suggestions: &[String], categories: &[Category]) -> String {
+    build(now, logical_today, language, memory, recent_suggestions, categories, ToolSet::Api)
+}
+
+pub fn build(
+    now: DateTime<Local>,
+    logical_today: &str,
+    language: &str,
+    memory: &str,
+    recent_suggestions: &[String],
+    categories: &[Category],
+    tools: ToolSet,
+) -> String {
     let (tools_section, implicit_tools, implicit_screen, citation_lead) = match tools {
         ToolSet::Api => (
             TOOLS_API,
@@ -89,6 +161,9 @@ pub fn build(now: DateTime<Local>, logical_today: &str, language: &str, memory: 
     let current_date = now.format("%A, %B %-d, %Y");
     let current_time = now.format("%-I:%M %p");
     let language_block = language_instruction(language, false).map(|l| format!("\n\n## LANGUAGE\n\n{l}")).unwrap_or_default();
+    // Dayflow puts the color section under the chart rules after a blank line.
+    let colors = category_colors_section(categories);
+    let charts = if colors.is_empty() { CHARTS.to_string() } else { format!("{CHARTS}\n\n{colors}") };
     let mut p = format!(
         r####"You are the AI assistant inside Daytrace, a Windows app that records what people do on their computer and builds a semantic timeline of their day. You have deep visibility into the user's work patterns — what they built, where they got stuck, how they spent their time. Use that context to give answers that feel like a well-informed colleague, not a generic chatbot.
 
@@ -138,6 +213,10 @@ When the user says things like "no, I meant..." or "try again but...", re-read t
 - Only use ids that appeared in tool results in this conversation. Never invent an id.
 - Put the link on a few words of your sentence, not on a time or a number.
 - Do not add a separate list of sources; the app shows one.
+
+---
+
+{charts}
 
 ---
 
@@ -236,11 +315,28 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
 
+    fn cat(name: &str, color: &str, is_idle: bool) -> Category {
+        Category::new(name, color, "", is_idle)
+    }
+
+    const PLACEHOLDERS: [&str; 10] = [
+        "{current_date}",
+        "{current_time}",
+        "{logical_today}",
+        "{tools_section}",
+        "{implicit_tools}",
+        "{implicit_screen}",
+        "{language_block}",
+        "{citation_lead}",
+        "{charts}",
+        "{colors}",
+    ];
+
     #[test]
     fn builds_prompt_with_memory_language_and_recent() {
         let now = Local.with_ymd_and_hms(2026, 10, 17, 2, 5, 0).unwrap();
         let recent: Vec<String> = (0..12).map(|i| format!("Q{i}?")).collect();
-        let p = system_prompt(now, "2026-10-16", "Dutch", "Profile: student\nStyle: default=brief", &recent);
+        let p = system_prompt(now, "2026-10-16", "Dutch", "Profile: student\nStyle: default=brief", &recent, &[]);
         assert!(p.contains("Current date: Saturday, October 17, 2026"));
         assert!(p.contains("Current time: 2:05 AM"));
         assert!(p.contains("Logical day today: 2026-10-16"));
@@ -248,27 +344,55 @@ mod tests {
         assert!(p.ends_with("- Q11?"));
         assert!(!p.contains("- Q2?\n"), "only the last 9 suggestions");
         assert!(p.contains("## User Memory\nProfile: student"));
-        let plain = system_prompt(now, "2026-10-16", "", "", &[]);
+        let plain = system_prompt(now, "2026-10-16", "", "", &[], &[]);
         assert!(!plain.contains("## LANGUAGE") && !plain.contains("## User Memory\n") && !plain.contains("Recent Suggestions"));
         assert!(plain.ends_with("after the main answer."));
         assert!(plain.contains("You have six read-only tools:\n\n1. **fetchTimeline**"));
         assert!(plain.contains("- \"how much time\" → timeByCategory for the relevant days\n- \"was I productive\""));
         assert!(plain.contains("has an `id`. When a point"));
-        assert!(!plain.contains("{"), "no placeholder left");
+        for ph in PLACEHOLDERS {
+            assert!(!plain.contains(ph), "placeholder {ph} left");
+        }
+    }
+
+    #[test]
+    fn has_dayflows_chart_section_and_the_category_colors() {
+        let now = Local.with_ymd_and_hms(2026, 10, 17, 9, 0, 0).unwrap();
+        let cats = [cat("Work", "#407BC5", false), cat("Personal", "#287C42", false), cat("Idle", "#878D94", true)];
+        for tools in [ToolSet::Api, ToolSet::Mcp] {
+            let p = build(now, "2026-10-17", "", "", &[], &cats, tools);
+            // Dayflow's section, verbatim, between the citations and the memory section.
+            let charts = p.find("## INLINE CHARTS (OPTIONAL)\n\nYou may include inline charts inside your markdown response.").unwrap();
+            assert!(p.find("## CITATIONS").unwrap() < charts && charts < p.find("## MEMORY").unwrap());
+            assert!(p.contains("```chart type=bar\n{ \"title\": \"Time by activity (today)\", \"x\": [\"Research\", \"YouTube\"], \"y\": [45, 20], \"color\": \"#F96E00\" }\n```"));
+            assert!(p.contains("- Allowed chart types: bar, line, stacked_bar, donut, heatmap, gantt\n"));
+            assert!(p.contains(
+                "- If a chart isn't helpful, omit it\n\n## CHART COLORS\n\nWhen creating charts based on activity categories, use these exact colors:\n- Work: #407BC5\n- Personal: #287C42\n- Idle: #878D94\n\nFor other charts (not category-based), choose a warm, pastel, harmonious palette.\n\n---\n\n## MEMORY"
+            ));
+            for ph in PLACEHOLDERS {
+                assert!(!p.contains(ph), "placeholder {ph} left");
+            }
+        }
+        // Without categories Dayflow leaves the color section out.
+        let none = build(now, "2026-10-17", "", "", &[], &[], ToolSet::Api);
+        assert!(none.contains("- If a chart isn't helpful, omit it\n\n---\n\n## MEMORY"));
+        assert!(!none.contains("## CHART COLORS"));
     }
 
     #[test]
     fn mcp_variant_names_the_daytrace_mcp_tools() {
         let now = Local.with_ymd_and_hms(2026, 10, 17, 9, 0, 0).unwrap();
-        let p = build(now, "2026-10-17", "", "", &[], ToolSet::Mcp);
+        let p = build(now, "2026-10-17", "", "", &[], &[], ToolSet::Mcp);
         assert!(p.contains("full names start with `mcp__daytrace__`"));
         assert!(p.contains("- \"what did I do\" → get_timeline for the relevant day"));
         assert!(p.contains("- \"show me\" or \"what was on screen\" → get_observations"));
         assert!(p.contains("has a `record_id`."));
         assert!(!p.contains("fetchTimeline") && !p.contains("timeByCategory"));
         // Everything else is the same prompt.
-        let api = build(now, "2026-10-17", "", "", &[], ToolSet::Api);
+        let api = build(now, "2026-10-17", "", "", &[], &[], ToolSet::Api);
         let tail = |t: &str| t[t.find("## RESPONSE STYLE").unwrap()..t.find("## CITATIONS").unwrap()].to_string();
         assert_eq!(tail(&p), tail(&api));
+        let charts = |t: &str| t[t.find("## INLINE CHARTS").unwrap()..].to_string();
+        assert_eq!(charts(&p), charts(&api));
     }
 }

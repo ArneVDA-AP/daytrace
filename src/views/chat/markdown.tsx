@@ -1,4 +1,5 @@
 import { Fragment, type ReactNode } from "react";
+import { chartBody, chartFence, type ChartBlock } from "@/views/chat/chart-spec";
 
 /*
  * A small Markdown renderer for chat answers. Everything becomes React elements and text nodes;
@@ -9,12 +10,17 @@ import { Fragment, type ReactNode } from "react";
  * Citations: a `[words](card:<id>)` link keeps its words as plain text and puts a card chip after
  * the sentence it belongs to (after the next ".", "!" or "?" that ends a sentence, or at the end
  * of the line, list item, table cell or heading).
+ *
+ * Charts: a fenced block opened with ```chart type=… (Dayflow's inline charts) goes to `chart`
+ * with its JSON, which validates and draws it (chart.tsx); without `chart` it stays a code block.
  */
 
 export interface MarkdownOptions {
   /** The chip for a cited card, or null to show only the link words (unknown card). */
   cardChip: (id: number, key: string) => ReactNode | null;
   onExternalLink: (url: string) => void;
+  /** Draws a chart block (index counts the answer's chart blocks from 0). */
+  chart?: (block: ChartBlock, key: string) => ReactNode;
 }
 
 export interface RenderedMarkdown {
@@ -37,6 +43,7 @@ const MAX_DEPTH = 8;
 
 interface Ctx extends MarkdownOptions {
   cardIds: Set<number>;
+  charts: number;
 }
 
 /** One run of inline text (a line, list item, cell or heading) collects its chips here. */
@@ -45,7 +52,7 @@ interface Flow {
 }
 
 export function renderMarkdown(text: string, opts: MarkdownOptions): RenderedMarkdown {
-  const ctx: Ctx = { ...opts, cardIds: new Set() };
+  const ctx: Ctx = { ...opts, cardIds: new Set(), charts: 0 };
   const nodes = blocks(text.replace(/\r\n?|[\u2028\u2029]/g, "\n").split("\n"), ctx, "b");
   return { nodes, cardIds: ctx.cardIds };
 }
@@ -122,6 +129,14 @@ function blocks(lines: string[], ctx: Ctx, keyPrefix: string, depth = 0): ReactN
       continue;
     }
     if (FENCE_RE.test(line)) {
+      const fence = ctx.chart ? chartFence(line.trim().slice(3)) : null;
+      if (fence && ctx.chart) {
+        // Up to the closing fence (or a data line that ends with one); linear in the block.
+        const { body, next } = chartBody(lines, i + 1, fence.inline);
+        out.push(ctx.chart({ type: fence.type, body, raw: lines.slice(i, next).join("\n"), index: ctx.charts++ }, key));
+        i = next;
+        continue;
+      }
       const body: string[] = [];
       i++;
       while (i < lines.length && !FENCE_RE.test(lines[i])) body.push(lines[i++]);

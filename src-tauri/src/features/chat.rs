@@ -457,7 +457,7 @@ pub async fn chat_send(app: tauri::AppHandle, state: S<'_>, conversation_id: Opt
         metadata::push_recent(&mut recent, &m.suggestions);
     }
     let (memory, _) = store::load_memory(&db).map_err(err)?;
-    let system = prompt::system_prompt(chrono::Local::now(), &logical_day(now_ts()), &settings.output_language, &memory, &recent);
+    let system = prompt::system_prompt(chrono::Local::now(), &logical_day(now_ts()), &settings.output_language, &memory, &recent, &settings.categories);
 
     let mut emit = |p: Progress| {
         // {"conversationId", "stage": "thinking" | "toolStarted" | "toolFinished", ...}
@@ -466,7 +466,15 @@ pub async fn chat_send(app: tauri::AppHandle, state: S<'_>, conversation_id: Opt
         let _ = app.emit(PROGRESS_EVENT, v);
     };
     let result = if target.kind == ProviderKind::ClaudeCli {
-        let system = prompt::build(chrono::Local::now(), &logical_day(now_ts()), &settings.output_language, &memory, &recent, prompt::ToolSet::Mcp);
+        let system = prompt::build(
+            chrono::Local::now(),
+            &logical_day(now_ts()),
+            &settings.output_language,
+            &memory,
+            &recent,
+            &settings.categories,
+            prompt::ToolSet::Mcp,
+        );
         let backend = crate::llm::cli::CliBackend::new(crate::llm::cli::CliTool::Claude, &target.base_url, &target.model);
         let chat = cli_chat::CliChat {
             backend: &backend,

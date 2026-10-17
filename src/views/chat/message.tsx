@@ -3,10 +3,12 @@ import { Check, ChevronDown, Copy, RotateCcw, TriangleAlert, X } from "lucide-re
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import type { Category } from "@/api";
 import { cn } from "@/lib/utils";
 import { providerName, type ChatMessage, type Citation } from "@/views/chat-api";
 import { CardChip } from "@/views/chat/card-chip";
-import { formatTokens, whenOf } from "@/views/chat/lib";
+import { ChatChart } from "@/views/chat/chart";
+import { dateTimeOf, formatTokens, whenOf } from "@/views/chat/lib";
 import { renderMarkdown } from "@/views/chat/markdown";
 
 export interface Step {
@@ -80,6 +82,7 @@ export function AssistantMessage({
   m,
   today,
   colorFor,
+  categories,
   onLink,
   onCopy,
   copied,
@@ -87,6 +90,8 @@ export function AssistantMessage({
   m: ChatMessage;
   today: string;
   colorFor: (category: string) => string;
+  /** For the colors of chart series named like a category. */
+  categories: Category[];
   onLink: (url: string) => void;
   onCopy: () => void;
   copied: boolean;
@@ -104,6 +109,7 @@ export function AssistantMessage({
     ),
     [today, colorFor],
   );
+  const chartCtx = React.useMemo(() => ({ colorFor, categories, subtitle: `Daytrace chat, ${dateTimeOf(m.createdAt)}` }), [colorFor, categories, m.createdAt]);
   const rendered = React.useMemo(
     () =>
       renderMarkdown(m.content, {
@@ -112,8 +118,9 @@ export function AssistantMessage({
           return c ? chip(c, key) : null;
         },
         onExternalLink: onLink,
+        chart: (block, key) => <ChatChart key={key} block={block} ctx={chartCtx} />,
       }),
-    [m.content, byId, chip, onLink],
+    [m.content, byId, chip, onLink, chartCtx],
   );
   // Cited cards whose link did not render as a chip (for example inside code) still get one.
   const rest = m.citations.filter((c) => !rendered.cardIds.has(c.citedId));

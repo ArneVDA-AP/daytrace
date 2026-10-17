@@ -1,4 +1,5 @@
 import { providerName, type Conversation } from "@/views/chat-api";
+import { chartsAsText } from "@/views/chat/chart-spec";
 
 const clockFmt = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
 const dateFmt = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short" });
@@ -53,7 +54,7 @@ export function formatTokens(n: number): string {
 // Same link shape as the renderer; the label stops at the next bracket, so this stays linear.
 const CARD_LINK_RE = /\[([^[\]\n]+)\]\(card:\/{0,2}\d+\)/g;
 
-/** Answer text for the clipboard: card links become their words. */
+/** Answer text for the clipboard: card links become their words, charts their tables. */
 export function plainAnswer(text: string): string {
-  return text.replace(CARD_LINK_RE, "$1");
+  return chartsAsText(text).replace(CARD_LINK_RE, "$1");
 }
