@@ -251,7 +251,7 @@ fn not_found(backend: &CliBackend, e: anyhow::Error) -> anyhow::Error {
 }
 
 /// Copies `file` to `<file>.daytrace-backup-<time>` and returns the backup's path.
-fn backup(file: &Path) -> anyhow::Result<PathBuf> {
+pub(super) fn backup(file: &Path) -> anyhow::Result<PathBuf> {
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
     let name = format!("{}.daytrace-backup-{stamp}", file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
     let to = file.with_file_name(name);
@@ -260,11 +260,12 @@ fn backup(file: &Path) -> anyhow::Result<PathBuf> {
 }
 
 /// Writes through a temporary file in the same folder and a rename.
-fn write_atomic(file: &Path, text: &str) -> anyhow::Result<()> {
+pub(super) fn write_atomic(file: &Path, text: &str) -> anyhow::Result<()> {
     if let Some(dir) = file.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let tmp = file.with_extension(format!("json.daytrace-{}.tmp", std::process::id()));
+    let name = file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let tmp = file.with_file_name(format!("{name}.daytrace-{}.tmp", std::process::id()));
     std::fs::write(&tmp, text)?;
     if let Err(e) = std::fs::rename(&tmp, file) {
         let _ = std::fs::remove_file(&tmp);

@@ -367,7 +367,7 @@ pub async fn run(
     })
 }
 
-async fn wait_cancel(flag: &AtomicBool) {
+pub(super) async fn wait_cancel(flag: &AtomicBool) {
     while !flag.load(Ordering::SeqCst) {
         tokio::time::sleep(Duration::from_millis(150)).await;
     }

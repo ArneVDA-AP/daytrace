@@ -433,7 +433,6 @@ export function goalsChatHandlers(ctx: GoalsChatContext): Record<string, (a: Arg
   };
 
   const chatInfo = (): ChatInfo => {
-    const cli = ctx.provider === "codex_cli";
     const label = (
       {
         anthropic: "Anthropic",
@@ -444,11 +443,8 @@ export function goalsChatHandlers(ctx: GoalsChatContext): Record<string, (a: Arg
         codex_cli: "Codex CLI",
       } as const
     )[ctx.provider];
-    const problem = cli
-      ? `Chat does not work with the ${label} yet. Choose the Claude Code CLI, an API or a local model provider in Settings to chat.`
-      : ctx.provider === "anthropic" && !ctx.hasApiKey()
-        ? "Chat needs an API key for Anthropic. Add one in Settings."
-        : null;
+    // Both CLIs can chat (features/chat/cli_chat.rs, codex_chat.rs).
+    const problem = ctx.provider === "anthropic" && !ctx.hasApiKey() ? "Chat needs an API key for Anthropic. Add one in Settings." : null;
     return {
       provider: ctx.provider as ChatInfo["provider"],
       providerLabel: label,

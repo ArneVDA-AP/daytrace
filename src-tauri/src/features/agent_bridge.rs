@@ -9,11 +9,13 @@
 //! edits" is on.
 //!
 //! In the app: the bridge server (`spawn`) and the Settings > AI tools commands (PATH, one-click
-//! setup of Claude Code and Claude Desktop).
+//! setup of Claude Code and Claude Desktop in register.rs, of Codex, Cursor and VS Code in
+//! clients.rs).
 
 pub mod bridge;
 pub mod cli;
 pub mod cli_write;
+pub mod clients;
 pub mod mcp;
 pub mod path;
 pub mod queries;
@@ -134,4 +136,42 @@ pub async fn agent_set_on_path(add: bool) -> CmdResult<String> {
     })
     .await
     .map_err(err)?
+}
+
+/// Settings > AI tools: Codex, Cursor and VS Code (clients.rs).
+#[tauri::command]
+pub async fn agent_clients_status(state: S<'_>) -> CmdResult<clients::AgentClients> {
+    let settings = state.settings();
+    tauri::async_runtime::spawn_blocking(move || clients::status(&settings)).await.map_err(err)
+}
+
+fn client_of(id: &str) -> CmdResult<clients::Client> {
+    clients::Client::from_id(id).ok_or_else(|| format!("Daytrace can't set up \"{id}\"."))
+}
+
+/// Adds daytrace-mcp to Codex, Cursor or VS Code (`client`: "codex", "cursor" or "vsCode").
+#[tauri::command]
+pub async fn agent_client_add(state: S<'_>, client: String) -> CmdResult<String> {
+    let client = client_of(&client)?;
+    let settings = state.settings();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (file, installed) = clients::target(client, &settings);
+        clients::add(client, file.as_deref(), installed, &register::mcp_exe())
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)
+}
+
+#[tauri::command]
+pub async fn agent_client_remove(state: S<'_>, client: String) -> CmdResult<String> {
+    let client = client_of(&client)?;
+    let settings = state.settings();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (file, _) = clients::target(client, &settings);
+        clients::remove(client, file.as_deref())
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)
 }

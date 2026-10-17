@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDelayedLoading } from "@/lib/use-delayed";
 import { errorText } from "@/lib/utils";
+import { AgentClientsGroup } from "./agent-clients";
 import { AgentConnect } from "./agent-connect";
 import { AgentEdits } from "./agent-edits";
 import { ErrorBanner, FieldError, Group, Note, Row } from "./fields";
@@ -29,6 +30,7 @@ export function AiToolsSection() {
         allow them below.
       </Note>
       <AgentConnect />
+      <AgentClientsGroup />
       <AgentEdits />
       {error && (
         <ErrorBanner

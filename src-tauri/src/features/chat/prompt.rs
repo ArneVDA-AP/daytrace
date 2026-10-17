@@ -6,8 +6,9 @@
 //! - The tool list names Daytrace's six tools instead of two, and "how much time" points at
 //!   timeByCategory instead of "fetchTimeline, aggregate by category".
 //! - A CITATIONS section (Daytrace): answers link the cards they rely on.
-//! - For chat through the Claude Code CLI (`ToolSet::Mcp`) the tool section, the tool names in
-//!   "Implicit context" and the citation id name daytrace-mcp's read tools instead.
+//! - For chat through the Claude Code CLI or the Codex CLI (`ToolSet::Mcp`; both name the tools
+//!   `mcp__daytrace__<tool>`) the tool section, the tool names in "Implicit context" and the
+//!   citation id name daytrace-mcp's read tools instead.
 //! - Dayflow's INLINE CHARTS section and its CHART COLORS section (categoryColorsSection), which
 //!   Dayflow has in its CLI chat prompts (codexSystemPrompt, claudeSystemPrompt) and not in the
 //!   Gemini one, copied verbatim after CITATIONS. The chat view draws the blocks
@@ -30,7 +31,7 @@ pub const WELCOME_PROMPTS: [&str; 4] = [
 ];
 
 /// Which tools the model gets: the chat's own (API and local providers) or daytrace-mcp's read
-/// tools (chat through the Claude Code CLI).
+/// tools (chat through the Claude Code CLI or the Codex CLI).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolSet {
     Api,

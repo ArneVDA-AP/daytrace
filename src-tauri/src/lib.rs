@@ -176,6 +176,9 @@ pub fn run() {
             features::agent_bridge::agent_add_to_claude_desktop,
             features::agent_bridge::agent_remove_from_claude_desktop,
             features::agent_bridge::agent_set_on_path,
+            features::agent_bridge::agent_clients_status,
+            features::agent_bridge::agent_client_add,
+            features::agent_bridge::agent_client_remove,
             // shell commands
             features::shell::shell_badges,
             features::shell::shell_recap_opened,

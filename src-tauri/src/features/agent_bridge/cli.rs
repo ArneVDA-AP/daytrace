@@ -271,6 +271,15 @@ pub fn fmt_duration(minutes: i64) -> String {
     }
 }
 
+/// "1 activity", "3 activities": a count with the noun in the right number.
+fn count(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
+fn activities(n: usize) -> String {
+    count(n, "activity", "activities")
+}
+
 fn clock(ts: i64) -> String {
     local(ts).format("%-I:%M %p").to_string()
 }
@@ -343,7 +352,7 @@ fn render_timeline(acts: &[Activity], day: &q::DayWindow, detail: Detail) -> Vec
         out.push(String::new());
         out.push(format!("  {}", totals.iter().map(|(n, m)| format!("{n} {}", fmt_duration(*m))).collect::<Vec<_>>().join(" · ")));
         out.push(String::new());
-        out.push(format!("  {} activities · daytrace-mcp cli timeline --summary for descriptions", acts.len()));
+        out.push(format!("  {} · daytrace-mcp cli timeline --summary for descriptions", activities(acts.len())));
     }
     out
 }
@@ -524,7 +533,7 @@ fn execute(inv: &Invocation, source: &Source) -> Result<Done, QueryError> {
             if matches.is_empty() {
                 lines.push(format!("No activities matching \"{text}\"."));
             } else {
-                lines.push(format!("{} match{}", matches.len(), if matches.len() == 1 { "" } else { "es" }));
+                lines.push(count(matches.len(), "match", "matches"));
                 lines.push(String::new());
                 lines.extend(matches.iter().map(|a| list_line(a, "  ")));
             }
@@ -536,7 +545,7 @@ fn execute(inv: &Invocation, source: &Source) -> Result<Done, QueryError> {
                 vec!["No days with activities yet.".to_string()]
             } else {
                 rows.iter()
-                    .map(|d| format!("  {}  {}  {} tracked", d.day, pad(&format!("{} activities", d.activities), 15), fmt_duration(d.tracked_minutes)))
+                    .map(|d| format!("  {}  {}  {} tracked", d.day, pad(&activities(d.activities as usize), 15), fmt_duration(d.tracked_minutes)))
                     .collect()
             };
             both(q::days_json(&rows), text)
@@ -555,7 +564,7 @@ fn timeline_range(inv: &Invocation, source: &Source) -> Result<Done, QueryError>
         let totals = q::category_totals(&acts);
         let tracked: i64 = totals.iter().map(|t| t.1).sum();
         let mut text = vec![
-            format!("{} → {}  {days} days · {} activities · {} tracked", f.day, t.day, acts.len(), fmt_duration(tracked)),
+            format!("{} → {}  {days} days · {} · {} tracked", f.day, t.day, activities(acts.len()), fmt_duration(tracked)),
             String::new(),
         ];
         bars(&mut text, &totals, tracked, 9);
@@ -565,7 +574,7 @@ fn timeline_range(inv: &Invocation, source: &Source) -> Result<Done, QueryError>
         return both(q::range_aggregate_json(&acts, &f.day, &t.day, days), text);
     }
     let detailed = inv.detail == Detail::Detailed;
-    let mut text = vec![format!("{} activities · {} → {}", acts.len(), f.day, t.day), String::new()];
+    let mut text = vec![format!("{} · {} → {}", activities(acts.len()), f.day, t.day), String::new()];
     text.extend(acts.iter().map(|a| list_line(a, " ")));
     both(json!({"from": f.day, "to": t.day, "cards": acts.iter().map(|a| q::activity_json(a, detailed)).collect::<Vec<_>>()}), text)
 }
@@ -732,6 +741,8 @@ mod tests {
         let (_, out, _) = run_str(&f, "cli categories");
         assert!(out.contains("■ Idle         #A0AEC0  system"), "{out}");
 
+        let (_, out, _) = run_str(&f, "cli days");
+        assert!(!out.contains("1 activities"), "{out}");
         let (_, out, _) = run_str(&f, "cli days --json");
         assert_eq!(serde_json::from_str::<Value>(&out).unwrap()["days"].as_array().unwrap().len(), 2);
 
@@ -755,5 +766,8 @@ mod tests {
         assert_eq!(fmt_duration(125), "2h 05m");
         assert_eq!(wrap("one two three four", 9), ["one two", "three", "four"]);
         assert_eq!(pad("é", 3), "é  ");
+        assert_eq!(activities(1), "1 activity");
+        assert_eq!(activities(0), "0 activities");
+        assert_eq!(count(2, "match", "matches"), "2 matches");
     }
 }
