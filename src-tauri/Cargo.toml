@@ -1,6 +1,6 @@
 [package]
 name = "daytrace"
-version = "0.2.0"
+version = "0.2.1"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2024"
@@ -36,6 +36,7 @@ log = "0.4.34"
 env_logger = "0.11.11"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
 jpeg-encoder = { version = "0.7.1", features = ["simd"] }
+regex = { version = "1.13.1", default-features = false, features = ["std", "unicode-perl"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

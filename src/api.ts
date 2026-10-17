@@ -26,6 +26,7 @@ export interface Settings {
   launchAtLogin: boolean;
   idlePauseSecs: number;
   useBatchApi: boolean;
+  reasoning: "off" | "low" | "default";
 }
 
 export interface SettingsDto {

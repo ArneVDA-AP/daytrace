@@ -866,7 +866,7 @@ dependencies = [
 
 [[package]]
 name = "daytrace"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -875,6 +875,7 @@ dependencies = [
  "image",
  "jpeg-encoder",
  "log",
+ "regex",
  "reqwest",
  "rusqlite",
  "serde",

@@ -52,6 +52,7 @@ pub struct LlmClient {
     db: Option<Db>,
     /// Route Anthropic requests through the Message Batches API.
     pub use_batch: bool,
+    pub reasoning: crate::config::Reasoning,
 }
 
 #[derive(Debug)]
@@ -88,6 +89,7 @@ impl LlmClient {
             api_key: api_key.filter(|k| !k.trim().is_empty()),
             db,
             use_batch: false,
+            reasoning: crate::config::Reasoning::Off,
         })
     }
 
@@ -143,6 +145,20 @@ impl LlmClient {
                 });
                 if let Some(s) = &opts.system {
                     body["system"] = json!(s);
+                }
+                // Older Claude generations do not know these fields.
+                let modern = !self.model.starts_with("claude-3");
+                if modern {
+                    match self.reasoning {
+                        crate::config::Reasoning::Off => {
+                            body["thinking"] = json!({"type": "disabled"});
+                            body["output_config"] = json!({"effort": "low"});
+                        }
+                        crate::config::Reasoning::Low => {
+                            body["output_config"] = json!({"effort": "low"});
+                        }
+                        crate::config::Reasoning::Default => {}
+                    }
                 }
                 (self.messages_url(), body)
             }

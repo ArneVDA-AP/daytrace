@@ -6,7 +6,8 @@ Daytrace is an unofficial port of [Dayflow](https://github.com/JerryZLiu/Dayflow
 
 ## What it does
 
-- **Capture.** One JPEG of the monitor under your mouse every 10 seconds (configurable). Recording pauses while Windows is locked or the screensaver runs. When a password manager or another app on your private list is in front, no screenshot is taken.
+- **Capture.** One JPEG every 10 seconds (configurable) of the monitor that holds the active window; the monitor under the mouse when there is no usable active window. Recording pauses while Windows is locked or the screensaver runs. When a password manager or another app on your private list is in front, no screenshot is taken; when it is visible behind other windows, its window is blanked.
+- **Away from the PC.** After 2 minutes without keyboard or mouse input (configurable), Daytrace stores no images until you are back, unless an app keeps the screen on (a video or call). That time shows as Idle and costs no model calls.
 - **Analysis.** Screenshots are grouped into 15-minute batches. Batches where you were away get an "Idle" card without calling a model. Everything else goes to the model you choose, in one of two modes:
   - *Detailed*: one request with 15 screenshots, then the cards of the last 45 minutes are rewritten as a whole. Use this with Claude or another large model.
   - *Lightweight*: each screenshot is described on its own, then grouped into one card that may be merged with the previous one. Use this with small local vision models such as `qwen3-vl:4b` in Ollama.
@@ -17,7 +18,7 @@ Daytrace is an unofficial port of [Dayflow](https://github.com/JerryZLiu/Dayflow
 
 | Provider | Setting | Notes |
 |---|---|---|
-| Claude | Anthropic API, default `claude-haiku-5-5` | Roughly $0.01 per recorded hour with Haiku. The key is stored in Windows Credential Manager. |
+| Claude | Anthropic API, default `claude-haiku-5-5` | Defaults to low reasoning effort. Optional Batch API halves the price; cards then arrive a few minutes later. The key is stored in Windows Credential Manager. |
 | Ollama | `http://localhost:11434` | Nothing leaves your PC. Use the Lightweight mode. |
 | LM Studio | `http://localhost:1234` | Same as Ollama. |
 | Other | Any OpenAI-compatible endpoint | OpenAI, OpenRouter, or Gemini's `/v1beta/openai` endpoint. |
@@ -26,7 +27,9 @@ Daytrace is an unofficial port of [Dayflow](https://github.com/JerryZLiu/Dayflow
 
 Screenshots, the timeline database and logs stay in `%APPDATA%\dev.daytrace.app`. Screenshots are deleted after the retention period (7 days by default); cards are kept. With a cloud provider, the sampled screenshots of each batch are sent to that provider. With Ollama or LM Studio nothing leaves the machine.
 
-Known limit: Daytrace skips the whole screenshot when a private app is in front, but it cannot blank out a private app's window that is visible behind another window.
+Every request is checked against a ceiling of 90k input tokens (Haiku bills 5× above 100k) and is not sent if it would exceed it.
+
+Known limit: Microsoft Store apps are reported under a shared host process, so they cannot be matched by the private-app list.
 
 ## Building
 

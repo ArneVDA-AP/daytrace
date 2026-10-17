@@ -15,6 +15,20 @@ pub enum ProviderKind {
     OpenaiCompatible,
 }
 
+/// How much hidden reasoning Claude may spend. Haiku 5.5 thinks by default (effort "medium"),
+/// and thinking tokens are billed as output: in real use billed output was 2.4-2.8x the visible
+/// text. Dayflow's prompts already make the model reason in the open (titleEvidence).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Reasoning {
+    /// thinking disabled, effort low
+    Off,
+    /// adaptive thinking, effort low
+    Low,
+    /// the model's default
+    Default,
+}
+
 /// Which of Dayflow's two analysis pipelines to run.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -48,6 +62,8 @@ pub struct Settings {
     /// Send Claude requests through the Message Batches API (50% cheaper, results can take
     /// minutes to an hour). Anthropic provider only.
     pub use_batch_api: bool,
+    /// Hidden reasoning for Claude models (Anthropic provider only).
+    pub reasoning: Reasoning,
 }
 
 impl Default for Settings {
@@ -68,6 +84,7 @@ impl Default for Settings {
             launch_at_login: false,
             idle_pause_secs: 120,
             use_batch_api: false,
+            reasoning: Reasoning::Low,
         }
     }
 }

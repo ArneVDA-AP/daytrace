@@ -715,13 +715,28 @@ pub async fn cards_cloud(ctx: &Ctx<'_>, window_obs: &[Observation], existing: &[
     .await
 }
 
-/// The step-by-step log for a card, built from the transcription lines inside its span.
-pub fn detailed_from_observations(start_ts: i64, end_ts: i64, obs: &[Observation]) -> String {
-    obs.iter()
-        .filter(|o| o.start_ts < end_ts && o.end_ts > start_ts)
-        .map(|o| format!("{} {}", fmt_clock(o.start_ts.max(start_ts)), o.text.trim()))
-        .collect::<Vec<_>>()
-        .join("\n")
+/// Fill each card's step-by-step log from the transcription. Each observation goes to the one
+/// card that contains its midpoint, as "start – end text", with the clip-relative times the
+/// transcription sometimes mentions ("at 00:10:35") removed.
+pub fn assign_detailed(cards: &mut [crate::db::ResolvedCard], obs: &[Observation]) {
+    static CLIP_TIME: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = CLIP_TIME.get_or_init(|| {
+        regex::Regex::new(r"(?i)\s*\(?\b(?:at|by|from|to|until|through|around|after|before)?\s*(?:about\s+)?0\d:[0-5]\d(?::[0-5]\d)?\b\)?").unwrap()
+    });
+    for card in cards.iter_mut() {
+        let lines: Vec<String> = obs
+            .iter()
+            .filter(|o| {
+                let mid = (o.start_ts + o.end_ts) / 2;
+                mid >= card.start_ts && mid < card.end_ts
+            })
+            .map(|o| {
+                let text = re.replace_all(o.text.trim(), "").trim().to_string();
+                format!("{} – {} {}", fmt_clock(o.start_ts.max(card.start_ts)), fmt_clock(o.end_ts.min(card.end_ts)), text)
+            })
+            .collect();
+        card.card.detailed_summary = lines.join("\n");
+    }
 }
 
 #[allow(dead_code)]
@@ -752,6 +767,21 @@ mod tests {
         assert!(validate_coverage(&existing, &[card("2:02 PM", "2:28 PM")]).is_none()); // within flex
         let err = validate_coverage(&existing, &[card("2:00 PM", "2:10 PM"), card("2:20 PM", "2:45 PM")]);
         assert!(err.unwrap().contains("Missing coverage")); // gap minus the 3-min flex
+    }
+
+    #[test]
+    fn detailed_log_by_midpoint() {
+        use crate::db::ResolvedCard;
+        let mk = |s, e| ResolvedCard { start_ts: s, end_ts: e, card: card("1:00 PM", "1:10 PM"), idle_meta: None };
+        let mut cards = vec![mk(0, 600), mk(600, 1200)];
+        let obs = vec![
+            Observation { start_ts: 0, end_ts: 500, text: "VS Code: editing, changes apps at about 00:10:35".into() },
+            Observation { start_ts: 500, end_ts: 900, text: "Browser: docs".into() }, // midpoint 700 -> card 2
+        ];
+        assign_detailed(&mut cards, &obs);
+        assert_eq!(cards[0].card.detailed_summary.lines().count(), 1);
+        assert!(!cards[0].card.detailed_summary.contains("00:10:35"), "{}", cards[0].card.detailed_summary);
+        assert!(cards[1].card.detailed_summary.contains("Browser: docs"));
     }
 
     #[test]

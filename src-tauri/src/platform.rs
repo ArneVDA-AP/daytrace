@@ -7,6 +7,19 @@ pub struct ForegroundApp {
     /// Executable stem, e.g. `chrome`, `Code`, `1Password`.
     pub app: String,
     pub title: String,
+    /// Center of the monitor the window is on, in virtual-screen pixels.
+    pub monitor_center: Option<(i32, i32)>,
+}
+
+/// Windows shell hosts that briefly take the foreground (touch keyboard, Start, search,
+/// notifications). They say nothing about what the user works on.
+const SHELL_HOSTS: &[&str] = &[
+    "textinputhost", "shellexperiencehost", "startmenuexperiencehost", "searchhost", "searchapp",
+    "lockapp", "shellhost",
+];
+
+pub fn is_shell_host(app: &str) -> bool {
+    SHELL_HOSTS.contains(&app.to_lowercase().as_str())
 }
 
 #[cfg(windows)]
@@ -177,10 +190,17 @@ mod imp {
             let n = GetWindowTextW(hwnd, &mut buf);
             let title = String::from_utf16_lossy(&buf[..n.max(0) as usize]);
 
-            Some(ForegroundApp {
-                app: process_name(hwnd),
-                title,
-            })
+            let app = process_name(hwnd);
+            if super::is_shell_host(&app) {
+                return None;
+            }
+            use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
+            let hmon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+            let monitor_center = GetMonitorInfoW(hmon, &mut mi)
+                .as_bool()
+                .then(|| ((mi.rcMonitor.left + mi.rcMonitor.right) / 2, (mi.rcMonitor.top + mi.rcMonitor.bottom) / 2));
+            Some(ForegroundApp { app, title, monitor_center })
         }
     }
 

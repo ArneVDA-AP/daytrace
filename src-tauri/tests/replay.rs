@@ -27,10 +27,15 @@ async fn replay_frames() {
         let mut s = state.settings.write().unwrap();
         s.pipeline = if std::env::var("DAYTRACE_PIPELINE").as_deref() == Ok("local") { Pipeline::Local } else { Pipeline::Cloud };
         s.use_batch_api = std::env::var("DAYTRACE_BATCH").as_deref() == Ok("1");
+        s.reasoning = match std::env::var("DAYTRACE_REASONING").as_deref() {
+            Ok("low") => daytrace_lib::config::Reasoning::Low,
+            Ok("default") => daytrace_lib::config::Reasoning::Default,
+            _ => daytrace_lib::config::Reasoning::Off,
+        };
         if let Ok(m) = std::env::var("DAYTRACE_MODEL") {
             s.model = m;
         }
-        println!("pipeline {:?}, model {}, batch api {}", s.pipeline, s.model, s.use_batch_api);
+        println!("pipeline {:?}, model {}, batch api {}, reasoning {:?}", s.pipeline, s.model, s.use_batch_api, s.reasoning);
     }
     let base = now_ts() - 10 * frames.len() as i64;
     for (i, f) in frames.iter().enumerate() {

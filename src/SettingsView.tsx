@@ -133,6 +133,16 @@ export function SettingsView({ dto, onSaved, onClose }: { dto: SettingsDto; onSa
             </div>
           </fieldset>
           {s.provider === "anthropic" && (
+            <label className="field">
+              <span>Model reasoning</span>
+              <select value={s.reasoning} onChange={(e) => set("reasoning", e.target.value as Settings["reasoning"])}>
+                <option value="low">Low (recommended)</option>
+                <option value="off">Off (cheapest, breaks Dayflow’s card rules more often)</option>
+                <option value="default">Model default (about 1.5× the output cost of Low)</option>
+              </select>
+            </label>
+          )}
+          {s.provider === "anthropic" && (
             <label className="check">
               <input type="checkbox" checked={s.useBatchApi} onChange={(e) => set("useBatchApi", e.target.checked)} />
               Use the Batch API: half the cost, but cards can take from a few minutes up to an hour to appear

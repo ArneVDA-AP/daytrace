@@ -108,7 +108,14 @@ fn run(state: Arc<AppState>) {
     }
 }
 
-fn pick_monitor() -> Result<xcap::Monitor> {
+/// The monitor with the active window (where the user works); without one, the monitor under
+/// the mouse; otherwise the primary monitor.
+fn pick_monitor(fg: &platform::ForegroundApp) -> Result<xcap::Monitor> {
+    if let Some((x, y)) = fg.monitor_center {
+        if let Ok(m) = xcap::Monitor::from_point(x, y) {
+            return Ok(m);
+        }
+    }
     if let Some((x, y)) = platform::cursor_position() {
         if let Ok(m) = xcap::Monitor::from_point(x, y) {
             return Ok(m);
@@ -171,7 +178,7 @@ pub fn capture_once(state: &AppState, settings: &Settings) -> Result<Outcome> {
         return Ok(Outcome::PrivateApp);
     }
 
-    let monitor = pick_monitor()?;
+    let monitor = pick_monitor(&fg)?;
     let mut img = monitor.capture_image().map_err(|e| anyhow!("capture: {e}"))?;
     mask_blocked_windows(&mut img, &monitor, &settings.blocked_apps);
     let rgb = crate::imaging::downscale_rgba(img, settings.capture_height);

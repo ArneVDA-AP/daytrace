@@ -182,6 +182,7 @@ async fn run_pipeline(state: &AppState, batch: &Batch, shots: &[crate::db::Shot]
     let api_key = crate::config::stored_key(settings.provider, &settings.base_url);
     let mut client = LlmClient::new(settings.provider, &settings.base_url, &settings.model, api_key, Some(state.db.clone()))?;
     client.use_batch = settings.use_batch_api;
+    client.reasoning = settings.reasoning;
     let categories = categories_for_llm(&settings.categories);
     let ctx = Ctx {
         client: &client,
@@ -209,7 +210,10 @@ async fn run_pipeline(state: &AppState, batch: &Batch, shots: &[crate::db::Shot]
     let idle_spans: Vec<(i64, i64)> = all_cards.iter().filter(|c| c.is_idle_shortcut).map(|c| (c.start_ts, c.end_ts)).collect();
     let stored: Vec<_> = all_cards.into_iter().filter(|c| !c.is_idle_shortcut).collect();
     let existing: Vec<ActivityCard> = stored.iter().map(|c| c.to_activity()).collect();
-    let window_obs = state.db.observations_in_range(window_start, current)?;
+    // Context for the model: the whole span of the cards it rewrites, not just the last 45 min,
+    // so the part of a long card before the window is not reduced to its summary (capped at 2 h).
+    let context_start = stored.iter().map(|c| c.start_ts).min().unwrap_or(window_start).max(current - 7200).min(window_start);
+    let window_obs = state.db.observations_in_range(context_start, current)?;
     let cards = match settings.pipeline {
         Pipeline::Local => llm::cards_local(&ctx, &obs, &existing).await?,
         Pipeline::Cloud => llm::cards_cloud(&ctx, &window_obs, &existing).await?,
@@ -249,14 +253,22 @@ async fn run_pipeline(state: &AppState, batch: &Batch, shots: &[crate::db::Shot]
                     }
                 }
             }
-            if settings.pipeline == Pipeline::Cloud {
-                r.card.detailed_summary = llm::detailed_from_observations(r.start_ts, r.end_ts, &window_obs);
+            // An Idle category means the user was away; the title should say so.
+            if settings.categories.iter().any(|c| c.is_idle && c.name.eq_ignore_ascii_case(&r.card.category)) {
+                r.card.title = "Idle".into();
+                r.card.subcategory = String::new();
             }
             (r.end_ts > r.start_ts).then_some(r)
         })
         .collect();
     if resolved.is_empty() {
         anyhow::bail!("Model returned no cards with valid times");
+    }
+    let mut resolved = resolved;
+    if settings.pipeline == Pipeline::Cloud {
+        let from = resolved.iter().map(|r| r.start_ts).min().unwrap_or(window_start);
+        let to = resolved.iter().map(|r| r.end_ts).max().unwrap_or(current);
+        llm::assign_detailed(&mut resolved, &state.db.observations_in_range(from, to)?);
     }
     state.db.replace_cards_in_range(window_start, current, &resolved, batch.id, true)
 }
