@@ -121,7 +121,8 @@ export function CardDetail({
   }
 
   const startEdit = () => {
-    setDraft({ title: card.title, category: card.category, subcategory: card.subcategory });
+    const category = catNames.find((n) => n.toLowerCase() === card.category.toLowerCase()) ?? card.category;
+    setDraft({ title: card.title, category, subcategory: card.subcategory });
     setError(null);
     setMode("edit");
   };

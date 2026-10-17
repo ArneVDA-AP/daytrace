@@ -2,6 +2,7 @@ import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Card, Category, Status, formatDuration } from "./api";
 import { BatchProgress, DayExtras, DayPlan, FailedGroup, RetryItem, errorText, retryLine, teApi } from "./timeline-extras-api";
+import { GoalStrip } from "./GoalStrip";
 import "./timeline-extras.css";
 
 const PX_PER_MIN = 1.5;
@@ -378,6 +379,7 @@ export function Timeline({
           </button>
         </div>
       </div>
+      <GoalStrip day={day} refresh={cards} />
       {copyState === "error" && <p className="bad tl-note">Couldn’t copy the timeline to the clipboard.</p>}
       {retryError && <p className="bad tl-note">{retryError}</p>}
       {reprocessPanel}

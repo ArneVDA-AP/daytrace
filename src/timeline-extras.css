@@ -31,6 +31,16 @@
 }
 .tl-group-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding-left: 86px; font-size: 13px; }
 
+/* ---- targets next to the timeline ---- */
+.goalstrip { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; font-size: 12.5px; padding: 2px 0 4px; }
+.goalstrip-item { display: flex; flex-direction: column; gap: 4px; color: var(--muted); }
+.goalstrip-item b { color: var(--ink); font-weight: 600; }
+.goalstrip-bar { height: 6px; border-radius: 3px; background: var(--soft); overflow: hidden; }
+.goalstrip-bar > span { display: block; height: 100%; background: var(--accent); }
+.goalstrip-bar.distraction > span { background: color-mix(in srgb, var(--danger) 70%, var(--surface)); }
+.goalstrip-bar.distraction.over > span { background: var(--danger); }
+.goalstrip-note { margin: 0; font-size: 12.5px; }
+
 /* ---- card detail ---- */
 .cd-actions { display: flex; gap: 10px; margin-top: 8px; font-size: 13px; }
 .cd-actions .link { padding: 0; }
