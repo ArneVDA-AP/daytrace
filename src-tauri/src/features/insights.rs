@@ -446,16 +446,18 @@ pub async fn auto_tick(state: &AppState) -> Result<()> {
         if now < moment + MAX_ANALYSIS_WAIT && analysis_pending(state, &source)? {
             return Ok(());
         }
-        // Dayflow's scheduler checks the provider before it reserves an attempt.
-        if provider_problem(&settings).is_some() {
-            return Ok(());
-        }
         // A Generate from the Daily view may be writing this day's recap. It is not an automatic
         // attempt: leave it alone and look again at the next check.
         let Some(claim) = InFlight::claim(&target) else { return Ok(()) };
         // It may have finished between the first look and the claim.
         entry = recap::load(&state.db.conn(), &target)?;
-        if entry.is_none() {
+        // Dayflow's scheduler checks the provider before it reserves an attempt. Without a usable
+        // one nothing is spent; the day's file is still written, with the reason.
+        let problem = provider_problem(&settings);
+        if let (None, Some(p)) = (&entry, &problem) {
+            note = Some(format!("The recap could not be generated: {p}"));
+        }
+        if entry.is_none() && problem.is_none() {
             let attempt = reserve_attempt(&state.db.conn(), &target)?; // guard dropped before the await
             match attempt {
                 Some(n) => {
@@ -723,12 +725,16 @@ mod tests {
     async fn auto_tick_spends_no_attempt_without_a_usable_provider_or_while_paused() {
         unsafe { std::env::remove_var("DAYTRACE_API_KEY") }; // test-only
         let (dir, st) = state();
-        let (today, _) = yesterday_with(&st, 240);
+        let (today, yesterday) = yesterday_with(&st, 240);
         auto_on(&st, dir.path());
         st.settings.write().unwrap().provider = ProviderKind::Anthropic;
         auto_tick(&st).await.unwrap();
         assert_eq!(attempts(&st), None, "no key: nothing reserved");
         assert_eq!(kv_get(&st.db.conn(), &auto_error_key(&today)).unwrap(), None);
+        let file = export::export_path(&dir.path().join("phone").to_string_lossy(), &yesterday);
+        assert!(std::fs::read_to_string(&file).unwrap().contains("The recap could not be generated: Anthropic needs an API key."));
+        std::fs::remove_dir_all(dir.path().join("phone")).unwrap();
+        kv_del(&st.db.conn(), "auto_export_target").unwrap();
         {
             let mut s = st.settings.write().unwrap();
             s.provider = ProviderKind::Ollama;
