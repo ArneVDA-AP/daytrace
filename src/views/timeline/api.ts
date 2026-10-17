@@ -47,7 +47,13 @@ export interface GoalsLite {
   day: string;
   isToday: boolean;
   plan: { focusTargetMinutes: number; distractionLimitMinutes: number; isSkipped: boolean; saved: boolean; carriedFrom: string | null };
-  progress: { focusSecs: number; distractedSecs: number };
+  progress: {
+    focusSecs: number;
+    distractedSecs: number;
+    /** Time per focus category (for the meter's colors). */
+    focusCategories?: { name: string; secs: number }[];
+    distractionCategories?: string[];
+  };
   /** The morning flow asks for today's goals first. */
   prompt: boolean;
 }

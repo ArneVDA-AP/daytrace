@@ -10,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import type { ReturnFocus } from "@/components/ui/focus-return"
 
 function Command({
   className,
@@ -33,12 +34,15 @@ function CommandDialog({
   children,
   className,
   showCloseButton = false,
+  returnFocus,
   ...props
 }: React.ComponentProps<typeof Dialog> & {
   title?: string
   description?: string
   className?: string
   showCloseButton?: boolean
+  /** Where focus goes on close when the element that opened it is gone. */
+  returnFocus?: ReturnFocus
 }) {
   return (
     <Dialog {...props}>
@@ -49,6 +53,7 @@ function CommandDialog({
       <DialogContent
         className={cn("top-[15%] translate-y-0 overflow-hidden p-0 sm:max-w-xl", className)}
         showCloseButton={showCloseButton}
+        returnFocus={returnFocus}
       >
         <Command className="**:data-[slot=command-input-wrapper]:h-12 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group]]:px-2 [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-input]]:h-12 [&_[cmdk-item]]:px-2.5 [&_[cmdk-item]]:py-2">
           {children}

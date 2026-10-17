@@ -1,6 +1,6 @@
 // Logical days run 4 AM to 4 AM, matching the backend (timeutil.rs logical_day).
 // Days are "YYYY-MM-DD" strings; timestamps are Unix seconds. Formatting goes through Intl so a
-// 24-hour Windows region can be honoured later by passing the region locale from Rust.
+// 24-hour Windows region can be honored later by passing the region locale from Rust.
 
 export const LOCALE = "en-US";
 const clockFmt = new Intl.DateTimeFormat(LOCALE, { hour: "numeric", minute: "2-digit" });

@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, EyeOff, FolderOpen, X } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { Button } from "@/components/ui/button";
 import { DialogOverlay, DialogPortal } from "@/components/ui/dialog";
+import { canFocus, useOpener } from "@/components/ui/focus-return";
 import { Kbd } from "@/components/ui/kbd";
 import { Spinner } from "@/components/ui/spinner";
 import { clock } from "@/lib/time";
@@ -15,6 +16,8 @@ import { fullImage } from "./shots";
  * screenshot is not read against the app behind it. Time and window title, "7 of 21", the card
  * title, "Show in File Explorer" (the backend resolves the file; no path reaches the UI),
  * previous/next buttons and ←/→, Home/End, Esc closes and focus returns to where it came from.
+ * It opens with the focus on Close (UX24). Its keys stay inside it (FE6): the player around it
+ * shares its React tree through the portal and would step and play as well.
  */
 
 export function ShotViewer({
@@ -64,6 +67,9 @@ export function ShotViewer({
   };
 
   const src = shot && img?.id === shot.id ? img.src : undefined;
+  // What had focus when it opened (Full size, the frame) gets it back on close (UX1).
+  const opener = useOpener(index !== null);
+  const closeRef = React.useRef<HTMLButtonElement>(null);
 
   return (
     <DialogPrimitive.Root open={index !== null} onOpenChange={(o) => !o && onIndex(null)}>
@@ -71,7 +77,19 @@ export function ShotViewer({
         <DialogOverlay className="bg-background" />
         <DialogPrimitive.Content
           className="fixed inset-0 z-50 flex flex-col bg-background text-foreground outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0"
+          onOpenAutoFocus={(e) => {
+            e.preventDefault();
+            closeRef.current?.focus();
+          }}
+          onCloseAutoFocus={(e) => {
+            const el = opener.ref.current;
+            if (canFocus(el)) {
+              e.preventDefault();
+              el.focus();
+            }
+          }}
           onKeyDown={(e) => {
+            e.stopPropagation();
             if (index === null) return;
             const t = e.target as HTMLElement;
             if (t.tagName === "BUTTON" && (e.key === "Enter" || e.key === " ")) return;
@@ -109,7 +127,7 @@ export function ShotViewer({
               Show in File Explorer
             </Button>
             <DialogPrimitive.Close asChild>
-              <Button variant="ghost" size="icon-sm" aria-label="Close viewer">
+              <Button ref={closeRef} variant="ghost" size="icon-sm" aria-label="Close viewer">
                 <X aria-hidden="true" />
               </Button>
             </DialogPrimitive.Close>

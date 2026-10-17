@@ -140,6 +140,10 @@ export default function DailySection() {
 
 - `useAppState()`: settings, status (polled every 5 s by the shell), `colorFor`, `recorder` and
   `analysis` wording, `problems`, `reload()`, `setSettings(dto)`. Never poll `get_status` yourself.
+  It re-renders on a status change only when you read a status field (`status`, `today`,
+  `recorder`, `analysis`, `problems`) while rendering. Narrower: `useAppSettings()` (settings,
+  categories, colors, actions; never re-renders on status), `useAppStatusSelect(s => …)` (one
+  value from the status; re-renders when that value changes).
 - `useDay()` / section props: `day`, `today`, `setDay(d)`, `openTimeline(day, cardId?)`.
 - Routes: `#/<section>?day=…&…`. `useRoute()`, `navigate(section, params)`, `setParams(patch)`
   (replaces history: use it for selection, tabs inside a page, open panels; from an effect pass
@@ -147,18 +151,31 @@ export default function DailySection() {
   state worth linking to in the URL (`card`, `tab`, `section`, `view=table`); read it back on load.
 - Shell keys: Ctrl+K, Ctrl+1…5, Ctrl+,, `[` and `]` (DayNav). Timeline adds J/K. Check
   `isTypingTarget(e.target)` (`lib/utils`) before handling a plain key; do not bind Ctrl+F/P/R.
+- Match shortcuts by physical key, `e.code`, with `lib/keys.ts` (`isKey(e, "KeyJ")`, `digitOf`):
+  on a Belgian AZERTY keyboard Ctrl+1 gives `e.key` "&" and `[` needs AltGr. Show the key with
+  `useKeyLabel(code)` (the layout's own character, "^" for BracketLeft on AZERTY). Arrows, Enter,
+  Escape, Space, Home/End can stay on `e.key`.
+- Dialogs (`Dialog`, `AlertDialog`) give focus back to the element that opened them, or to the
+  menu trigger when a menu item opened them. When that element is gone (the dialog opened from a
+  link, or it deleted the thing it was about), pass `returnFocus={() => element}` to the
+  content. A control that replaces itself (Pause → Resume, Edit → Save) moves the focus to its
+  replacement.
+- DayNav's Today / This week button sits right of the title (PageHeader), so the title never
+  moves; keep the `badge` for today only.
 
 ## States
 
 - Loading: show nothing for 150 ms, then a `Skeleton` in the shape of the content; keep it at
   least 300 ms (`useDelayedLoading` in `lib/use-delayed.ts`). Polling refreshes must not show
   loaders or move anything (compare, then set).
-- Empty: `Empty` with what happened and the next step ("No recording on Sunday 11 October" + Go to
-  today). Errors that belong to the view: inline `Banner tone="error"` with the fix as a button
+- Empty: `Empty` with what happened and the next step ("Nothing recorded on Sunday 11 October" + Go
+  to today). Errors that belong to the view: inline `Banner tone="error"` with the fix as a button
   and the raw message in `details` (a collapsed "Error details"). Toasts only confirm finished actions
   ("Exported", "Copied") and offer Undo; never for errors that need action.
-- Global problems (no key, provider unreachable, capture failing) are already shown under every
-  PageHeader and in the rail. Do not repeat them inside views.
+- Global problems (capture failing, no key, provider unreachable, and every other reason the
+  last batch failed: "Timeline cards can’t be written" with the cause, its fix and the raw error,
+  `app/failure.ts`) are already shown under every PageHeader and in the rail. Do not repeat them
+  inside views.
 
 ## Focus and accessibility
 
@@ -187,3 +204,24 @@ Every settings change goes through `savePatch()` in `app/settings-writes.ts` (Se
 `get_settings`. Put the returned settings into the app state with `setSettings(dto)`; the app
 state applies reads and writes in order, so a refetch that started before a save cannot show the
 old value again.
+
+## Words (glossary)
+
+US English everywhere, aria-labels and code comments included: color, colored, license, analyze,
+canceled, behavior, gray. Plain literal words, sentence case. Use these terms and no variants:
+
+| Thing | Say | Not |
+|---|---|---|
+| Recorder state | "Recording", "Paused", "Not recording" (recorder off) | "Capturing", "Stopped" |
+| Time without screenshots | "Not recorded" | "No recording", "Not recording" |
+| Time with screenshots | "Recorded" | "Time captured", "Captured" |
+| Recorded minus idle | "Active time" | "Active" alone |
+| Percentages of the day | "… of active time", with active time as the denominator | "of captured", "of recorded" |
+| A failed card | "Not analyzed" | "Failed", "Error" |
+| Retry action | "Try again" | "Retry", "Try now" (except the capture and network banners' "Try now") |
+| Goal targets | "Focus target", "Distraction limit" | "Distraction budget" |
+| Focus streak | "Longest focus block" | "Longest focus" |
+| Switches between apps | "Context switches" | "Context shifts", "Context switched" |
+| Rating prompt | "Rate the next card" | "Review the next card" |
+| Zero durations | "0 min" | "–", "None" |
+| Export | header button "Export…"; dialog primary "Export as Markdown", secondary "Copy day as text" | "Export Markdown…" |

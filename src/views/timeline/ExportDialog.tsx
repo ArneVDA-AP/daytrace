@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import type { ReturnFocus } from "@/components/ui/focus-return";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toast";
 import { formatDayShort, formatDayTitle, monthDay, shiftDay, weekStart } from "@/lib/time";
@@ -17,7 +18,20 @@ import { timelineApi } from "./api";
  * category and subcategory, summary, step-by-step log and interruptions.
  */
 
-export function ExportDialog({ open, onOpenChange, day, today }: { open: boolean; onOpenChange: (open: boolean) => void; day: string; today: string }) {
+export function ExportDialog({
+  open,
+  onOpenChange,
+  day,
+  today,
+  returnFocus,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  day: string;
+  today: string;
+  /** Focus on close when the opener is gone (opened from a link or the command menu). */
+  returnFocus?: ReturnFocus;
+}) {
   const [from, setFrom] = React.useState(shiftDay(day, -6));
   const [to, setTo] = React.useState(day);
   const [busy, setBusy] = React.useState<"export" | "copy" | null>(null);
@@ -80,6 +94,7 @@ export function ExportDialog({ open, onOpenChange, day, today }: { open: boolean
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className="gap-5 sm:max-w-[30rem]"
+        returnFocus={returnFocus}
         onOpenAutoFocus={(e) => {
           e.preventDefault();
           document.getElementById("export-from")?.focus();
@@ -88,7 +103,8 @@ export function ExportDialog({ open, onOpenChange, day, today }: { open: boolean
         <DialogHeader>
           <DialogTitle className="font-display text-title font-semibold">Export</DialogTitle>
           <DialogDescription className="text-meta">
-            Each card comes with its category and subcategory, summary, step-by-step log and interruptions.
+            Each card comes with its category and subcategory, summary, step-by-step log and interruptions. Copy day as text copies{" "}
+            {day === today ? "today" : formatDayTitle(day)} to the clipboard.
           </DialogDescription>
         </DialogHeader>
 
@@ -149,11 +165,11 @@ export function ExportDialog({ open, onOpenChange, day, today }: { open: boolean
         <DialogFooter className="gap-2 sm:justify-between">
           <Button type="button" variant="outline" onClick={() => void copyDay()} disabled={busy !== null}>
             {busy === "copy" ? <Spinner className="size-4" aria-hidden="true" role="presentation" /> : <ClipboardCopy aria-hidden="true" />}
-            Copy {day === today ? "today" : formatDayShort(day)} as text
+            Copy day as text
           </Button>
           <Button type="submit" form="export-form" disabled={invalid || busy !== null}>
             {busy === "export" ? <Spinner className="size-4" aria-hidden="true" role="presentation" /> : <FileDown aria-hidden="true" />}
-            Export as Markdown…
+            Export as Markdown
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -1,8 +1,9 @@
-import { CalendarClock, Download, FolderOpen, Images, Laptop, Moon, Pause, Play, RotateCcw, Sun } from "lucide-react";
+import * as React from "react";
+import { CalendarClock, CalendarSearch, Download, FolderOpen, Images, Laptop, Moon, Pause, Play, RotateCcw, Sun } from "lucide-react";
 import { api } from "@/api";
 import { isDaySection, useDay } from "@/app/day";
-import { NAV, SETTINGS_NAV } from "@/app/Shell";
-import { useAppState } from "@/app/state";
+import { NAV, SECTION_TITLES, SETTINGS_NAV } from "@/app/Shell";
+import { useAppSettings } from "@/app/state";
 import {
   CommandDialog,
   CommandEmpty,
@@ -14,18 +15,27 @@ import {
   CommandShortcut,
 } from "@/components/ui/command";
 import { toast } from "@/components/ui/toast";
-import { navigate } from "@/lib/router";
-import { clock, formatDayTitle, shiftDay } from "@/lib/time";
+import { navigate, useRoute } from "@/lib/router";
+import { clock, formatDayTitle, parseDayQuery, shiftDay } from "@/lib/time";
 import type { Appearance } from "@/lib/theme";
 import { errorText } from "@/lib/utils";
 import { OPEN_ONBOARDING_EVENT, pauseOptions, platformApi } from "@/views/platform-api";
 import { SETTINGS_SECTION_META } from "@/views/settings/sections";
 
-/** Ctrl+K: every section, recent days and the frequent actions, reachable without the mouse. */
+/**
+ * Ctrl+K: every section, days (typed as "12 oct", "monday", "yesterday", "2026-10-12") and the
+ * frequent actions, reachable without the mouse. A day opens in the day section you are in, else
+ * in the Timeline.
+ */
 export function CommandMenu({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
-  const app = useAppState();
+  const app = useAppSettings();
   const { day, today } = useDay();
+  const { section } = useRoute();
   const s = app.settings.settings;
+  const [search, setSearch] = React.useState("");
+  React.useEffect(() => {
+    if (!open) setSearch("");
+  }, [open]);
 
   const run = (fn: () => void | Promise<void>) => {
     onOpenChange(false);
@@ -35,12 +45,33 @@ export function CommandMenu({ open, onOpenChange }: { open: boolean; onOpenChang
   };
 
   const theme = (a: Appearance) => run(() => app.saveAppearance(a));
+  const daySection = isDaySection(section) ? section : "timeline";
+  const openDay = (d: string) => run(() => navigate(daySection, { day: d }));
+  const typed = parseDayQuery(search, today);
+  const relative = (d: string) => (d === today ? "Today" : d === shiftDay(today, -1) ? "Yesterday" : null);
 
   return (
-    <CommandDialog open={open} onOpenChange={onOpenChange} title="Jump to" description="Go to a section or a day, or run an action">
-      <CommandInput placeholder="Type a section, a day or an action…" />
+    <CommandDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Jump to"
+      description="Go to a section or a day, or run an action"
+      returnFocus={() => document.getElementById("content")}
+    >
+      <CommandInput value={search} onValueChange={setSearch} placeholder="Type a section, a day (12 Oct, Monday) or an action…" />
       <CommandList className="max-h-[min(24rem,60vh)]">
-        <CommandEmpty>Nothing matches.</CommandEmpty>
+        <CommandEmpty>{search.trim() ? "Nothing matches. Days work as “12 Oct”, “Monday” or “2026-10-12”." : "Nothing matches."}</CommandEmpty>
+        {typed && (
+          <CommandGroup heading="Day" forceMount>
+            <CommandItem forceMount value={`typed day ${typed}`} onSelect={() => openDay(typed)}>
+              <CalendarSearch aria-hidden="true" />
+              {formatDayTitle(typed)}
+              {typed.slice(0, 4) !== today.slice(0, 4) && <span className="text-muted-foreground">{typed.slice(0, 4)}</span>}
+              {relative(typed) && <span className="text-muted-foreground">{relative(typed)}</span>}
+              <CommandShortcut>{SECTION_TITLES[daySection]}</CommandShortcut>
+            </CommandItem>
+          </CommandGroup>
+        )}
         <CommandGroup heading="Go to">
           {[...NAV, SETTINGS_NAV].map((n) => (
             <CommandItem key={n.id} value={`go ${n.label}`} onSelect={() => run(() => navigate(n.id, isDaySection(n.id) ? { day } : {}))}>
@@ -54,10 +85,10 @@ export function CommandMenu({ open, onOpenChange }: { open: boolean; onOpenChang
           {[0, 1, 2, 3].map((i) => {
             const d = shiftDay(today, -i);
             return (
-              <CommandItem key={d} value={`day ${formatDayTitle(d)} ${i === 0 ? "today" : i === 1 ? "yesterday" : ""}`} onSelect={() => run(() => navigate("timeline", { day: d }))}>
+              <CommandItem key={d} value={`day ${formatDayTitle(d)} ${i === 0 ? "today" : i === 1 ? "yesterday" : ""}`} onSelect={() => openDay(d)}>
                 <CalendarClock aria-hidden="true" />
                 {formatDayTitle(d)}
-                {i < 2 && <span className="text-muted-foreground">{i === 0 ? "Today" : "Yesterday"}</span>}
+                {relative(d) && <span className="text-muted-foreground">{relative(d)}</span>}
               </CommandItem>
             );
           })}
@@ -98,9 +129,10 @@ export function CommandMenu({ open, onOpenChange }: { open: boolean; onOpenChang
         </CommandGroup>
         <CommandSeparator />
         <CommandGroup heading="Actions">
-          <CommandItem value="export day markdown" onSelect={() => run(() => navigate("timeline", { day, export: 1 }))}>
+          <CommandItem value="export markdown copy day as text" onSelect={() => run(() => navigate("timeline", { day, export: 1 }))}>
             <Download aria-hidden="true" />
-            Export {day === today ? "today" : formatDayTitle(day)} as Markdown…
+            Export…
+            <span className="text-muted-foreground">{day === today ? "Today" : formatDayTitle(day)}</span>
           </CommandItem>
           <CommandItem value="open screenshots folder" onSelect={() => run(() => platformApi.openScreenshots())}>
             <Images aria-hidden="true" />

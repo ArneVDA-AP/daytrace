@@ -7,7 +7,7 @@ import type { FailedGroup } from "./api";
  * or fitted to the recorded hours), and the rows of the card list. No React here.
  */
 
-/** Gaps of this length or more show as "Not recording" (list rows, hatched spans on the trace). */
+/** Gaps of this length or more show as "Not recorded" (list rows, hatched spans on the trace). */
 export const GAP_MIN_SECS = 5 * 60;
 /** In "Fit to recorded hours", stretches without recording of at least this length are cut out. */
 export const BREAK_MIN_SECS = 60 * 60;
@@ -228,7 +228,7 @@ export type Row =
 
 /**
  * Rows of the card list: cards in time order, runs of two or more failed cards collapsed into one
- * row (Dayflow TimelineActivityLoader), and "Not recording" rows for gaps of 5 minutes or more.
+ * row (Dayflow TimelineActivityLoader), and "Not recorded" rows for gaps of 5 minutes or more.
  */
 export function buildRows(cards: Card[], groups: FailedGroup[]): Row[] {
   const groupOf = new Map<number, FailedGroup>();
@@ -289,4 +289,20 @@ export function cardText(c: Card): string {
     c.distractions.forEach((d) => lines.push(`- ${d.startTime} – ${d.endTime} ${d.title}${d.summary ? `: ${d.summary}` : ""}`));
   }
   return lines.join("\n");
+}
+
+/** Dayflow's coverage threshold: a card counts as rated when 80 % of it is (review.rs). */
+export const RATED_COVERAGE = 0.8;
+
+/**
+ * The next card to rate after `fromId` (by start time, wrapping round), or null when every card is
+ * rated. Failed cards are left out, like the backend's count of unrated cards.
+ */
+export function nextUnrated(cards: Card[], coverage: Map<number, number>, fromId: number | null): number | null {
+  const list = [...cards].filter((c) => !isFailed(c)).sort((a, b) => a.startTs - b.startTs);
+  const unrated = list.filter((c) => (coverage.get(c.id) ?? 0) < RATED_COVERAGE);
+  if (!unrated.length) return null;
+  const from = fromId === null ? null : list.find((c) => c.id === fromId);
+  if (!from) return unrated[0].id;
+  return (unrated.find((c) => c.startTs > from.startTs || (c.startTs === from.startTs && c.id > from.id)) ?? unrated[0]).id;
 }

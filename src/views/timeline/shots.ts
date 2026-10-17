@@ -66,11 +66,19 @@ function pump() {
   }
 }
 
-/** Loads these thumbnails first (nearest first), a few at a time. */
+/**
+ * Loads these thumbnails (nearest first), a few at a time. The list replaces what was wanted
+ * before, so frames the player has moved past are not fetched any more (FE11); requests already
+ * running finish and are cached.
+ */
 export function wantThumbs(ids: number[]) {
-  const fresh = ids.filter((id) => !thumbs.has(id));
-  queue = [...fresh, ...queue.filter((id) => !fresh.includes(id))];
+  queue = ids.filter((id, i) => !thumbs.has(id) && !inflight.has(id) && ids.indexOf(id) === i);
   pump();
+}
+
+/** Nothing is wanted any more (the player closed). */
+export function clearWantedThumbs() {
+  queue = [];
 }
 
 /** Re-renders the caller when any thumbnail arrives. */
