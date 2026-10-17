@@ -745,6 +745,9 @@ pub(crate) mod tests {
         assert_eq!(counts_as("Gaming", &cats), CountsAs::Focus, "unknown names follow the name rule");
         assert_eq!(counts_as("System", &cats), CountsAs::Neither);
         assert_eq!(counts_as("idle", &cats), CountsAs::Neither);
+        // daytrace-mcp's weekly focus minutes follow the same choice.
+        let totals = vec![("Work".to_string(), 120), ("Personal".to_string(), 60), ("Scrolling".to_string(), 30), ("Idle".to_string(), 20), ("Gaming".to_string(), 10)];
+        assert_eq!(focus_minutes(&totals, &cats), 130, "Work and the unknown Gaming; Personal is neither");
     }
 
     #[test]
