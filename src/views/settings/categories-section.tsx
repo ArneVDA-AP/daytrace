@@ -206,13 +206,13 @@ function CategoryRow({
       <ColorButton category={c} onPick={(hex) => update({ color: hex })} />
       <div className="min-w-0">
         <label htmlFor={`${id}-name`} className="sr-only">
-          Name
+          Category name
         </label>
         <Input id={`${id}-name`} data-name={c.name} {...name.bind} autoComplete="off" aria-describedby={`${id}-err`} />
       </div>
       <div className="min-w-0 max-split:col-start-2 max-split:row-start-2">
         <label htmlFor={`${id}-desc`} className="sr-only">
-          Description for the model
+          Description of {c.name} for the model
         </label>
         <Input id={`${id}-desc`} {...description.bind} placeholder="What belongs in it, for the model" autoComplete="off" aria-describedby={`${id}-err`} />
       </div>
@@ -315,7 +315,7 @@ function ColorButton({ category: c, onPick }: { category: Category; onPick: (hex
                 data-swatch={on ? "on" : undefined}
                 data-mark
                 onClick={() => void pick(s.hex)}
-                className={cn("size-7 rounded-md", on && "ring-2 ring-foreground ring-offset-2 ring-offset-popover")}
+                className={cn("size-7 rounded-md", on && "ring-2 ring-foreground ring-offset-2 ring-offset-popover forced-colors:outline-2 forced-colors:outline-offset-2 forced-colors:outline-[Highlight]")}
                 style={{ background: categoryColor({ name: "", color: s.hex, description: "", isIdle: false }) }}
               />
             );
