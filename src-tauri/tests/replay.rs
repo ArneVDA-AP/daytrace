@@ -32,6 +32,14 @@ async fn replay_frames() {
             Ok("default") => daytrace_lib::config::Reasoning::Default,
             _ => daytrace_lib::config::Reasoning::Off,
         };
+        // DAYTRACE_PROVIDER=claude_cli|codex_cli|ollama|... switches provider (CLI path in
+        // DAYTRACE_BASE_URL, empty = auto-detect).
+        if let Ok(p) = std::env::var("DAYTRACE_PROVIDER") {
+            let kind: daytrace_lib::config::ProviderKind = serde_json::from_str(&format!("\"{p}\"")).expect("unknown DAYTRACE_PROVIDER");
+            s.provider = kind;
+            s.base_url = std::env::var("DAYTRACE_BASE_URL").unwrap_or_else(|_| daytrace_lib::config::default_base_url(kind).into());
+            s.model = daytrace_lib::config::default_model(kind).into();
+        }
         if let Ok(m) = std::env::var("DAYTRACE_MODEL") {
             s.model = m;
         }
