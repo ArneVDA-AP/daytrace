@@ -168,4 +168,7 @@ times line up:
 - cards side by side (offsets, clock strings, category, title), minute coverage, how many covered
   minutes agree on the category, the card boundaries, and each card's summary, subcategory, sites,
   distractions and detailed-summary length
+- for the first transcription and the first card request: whether the system message, the
+  prompt (for cards, the instructions after `</observations>`), the image count and the image
+  labels match, with a line diff where they do not, and the request parameters each side sent
 - requests and token usage per operation, with a cost estimate at Claude Haiku 5.5 list prices

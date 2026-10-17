@@ -13,6 +13,7 @@ clock times and in different time zones line up. Standard library only.
 """
 
 import argparse
+import difflib
 import json
 import os
 import sys
@@ -56,6 +57,8 @@ def load_dayflow(directory):
                 "output_tokens": usage.get("output_tokens"),
                 "error": item.get("error"),
                 "images": len(item.get("images") or []),
+                "request": item.get("request"),
+                "sent": item.get("anthropic_request"),
             }
         )
     return {
@@ -120,6 +123,88 @@ def load_daytrace(path):
         "usage": data.get("usage") or {},
         "notes": [],
     }
+
+
+def request_view(request):
+    """System text, first text part (the prompt), other text parts, image count and parameters."""
+    if isinstance(request, str):
+        try:
+            request = json.loads(request)
+        except ValueError:
+            return None
+    if not isinstance(request, dict):
+        return None
+
+    def text_of(content):
+        if isinstance(content, str):
+            return content
+        return "\n\n".join(p.get("text", "") for p in content or [] if p.get("type") == "text")
+
+    system = request.get("system")
+    system = text_of(system) if system is not None else None
+    parts = []
+    for message in request.get("messages", []):
+        if message.get("role") == "system":
+            system = text_of(message.get("content"))
+        elif message.get("role") == "user":
+            content = message.get("content")
+            parts = [{"type": "text", "text": content}] if isinstance(content, str) else content or []
+    texts = [p.get("text", "") for p in parts if p.get("type") == "text"]
+    keys = ("max_tokens", "max_completion_tokens", "temperature", "output_config", "thinking", "reasoning")
+    return {
+        "system": system,
+        "prompt": texts[0] if texts else "",
+        "labels": texts[1:],
+        "images": sum(1 for p in parts if p.get("type") in ("image", "image_url")),
+        "params": {k: request[k] for k in keys if k in request},
+    }
+
+
+def first_request(side, operation):
+    for call in side["calls"]:
+        if call.get("operation") == operation and call.get("request") is not None:
+            view = request_view(call["request"])
+            sent = request_view(call.get("sent")) if call.get("sent") else None
+            if view and sent:
+                view["params"] = sent["params"]  # what actually went over the wire (live mode)
+            return view
+    return None
+
+
+def print_prompt_diff(a, b, names, width):
+    if a == b:
+        print("    identical")
+        return
+    for line in difflib.unified_diff(a.splitlines(), b.splitlines(), names[0], names[1], lineterm="", n=0):
+        print("    " + clip(line, width))
+
+
+def print_prompts(sides, width):
+    print("PROMPTS (first request of each operation)")
+    names = [s["name"] for s in sides]
+    for operation in ("transcribe_screenshots", "generate_cards"):
+        views = [first_request(s, operation) for s in sides]
+        if not all(views):
+            missing = [n for n, v in zip(names, views) if not v]
+            print(f"  {operation}: no stored request on {', '.join(missing)}")
+            continue
+        a, b = views
+        print(f"  {operation}:")
+        print(f"    system message {'identical' if a['system'] == b['system'] else 'differs'}: {clip(a['system'], 60)!r}")
+        print(f"    images {names[0]}={a['images']} {names[1]}={b['images']}; "
+              f"labels {'identical' if a['labels'] == b['labels'] else 'differ'}")
+        print(f"    parameters {names[0]}={json.dumps(a['params'])} {names[1]}={json.dumps(b['params'])}")
+        prompt_a, prompt_b = a["prompt"], b["prompt"]
+        if operation == "generate_cards":
+            # previous cards and observations differ by nature; compare the instructions after them
+            marker = "</observations>"
+            prompt_a = prompt_a[prompt_a.find(marker):] if marker in prompt_a else prompt_a
+            prompt_b = prompt_b[prompt_b.find(marker):] if marker in prompt_b else prompt_b
+            print("    prompt after </observations>:")
+        else:
+            print("    prompt:")
+        print_prompt_diff(prompt_a, prompt_b, names, width)
+    print()
 
 
 def minute_categories(cards, last_minute):
@@ -256,6 +341,7 @@ def main():
     print_batches(sides)
     print_observations(sides, args.width, args.full)
     print_cards(sides, args.width)
+    print_prompts(sides, args.width)
     print_usage(sides)
     if not sides[0]["real"]:
         print("NOTE: the Dayflow side is a dry run; its observations and cards are canned placeholders.")

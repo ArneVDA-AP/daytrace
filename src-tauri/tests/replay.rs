@@ -111,12 +111,16 @@ fn write_json(state: &AppState, path: &str, base: i64, frame_count: usize) {
     let calls: Vec<serde_json::Value> = {
         let conn = state.db.conn();
         let mut st = conn
-            .prepare("SELECT batch_id, operation, model, latency_ms, error, input_tokens, output_tokens FROM llm_calls ORDER BY id")
+            .prepare("SELECT batch_id, operation, model, latency_ms, error, input_tokens, output_tokens, request FROM llm_calls ORDER BY id")
             .unwrap();
         st.query_map([], |r| {
+            // The stored request has its base64 images already replaced by their length.
+            let request: Option<String> = r.get(7)?;
+            let request = request.map(|t| serde_json::from_str::<serde_json::Value>(&t).unwrap_or(serde_json::Value::String(t)));
             Ok(json!({"batch_id": r.get::<_, Option<i64>>(0)?, "operation": r.get::<_, String>(1)?, "model": r.get::<_, Option<String>>(2)?,
                       "latency_ms": r.get::<_, Option<i64>>(3)?, "error": r.get::<_, Option<String>>(4)?,
-                      "input_tokens": r.get::<_, Option<i64>>(5)?, "output_tokens": r.get::<_, Option<i64>>(6)?}))
+                      "input_tokens": r.get::<_, Option<i64>>(5)?, "output_tokens": r.get::<_, Option<i64>>(6)?,
+                      "request": request}))
         })
         .unwrap()
         .flatten()
