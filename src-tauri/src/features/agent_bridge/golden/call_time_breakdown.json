@@ -1,0 +1,33 @@
+{
+  "id": 4,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"categories\":[{\"minutes\":165,\"name\":\"Work\",\"share\":0.8462},{\"minutes\":30,\"name\":\"Personal\",\"share\":0.1538}],\"hint\":\"For individual activities, call get_timeline for a specific day.\",\"range\":{\"from\":\"2026-03-10\",\"to\":\"2026-03-11\"},\"schema_version\":1,\"tracked_minutes\":195}",
+        "type": "text"
+      }
+    ],
+    "structuredContent": {
+      "categories": [
+        {
+          "minutes": 165,
+          "name": "Work",
+          "share": 0.8462
+        },
+        {
+          "minutes": 30,
+          "name": "Personal",
+          "share": 0.1538
+        }
+      ],
+      "hint": "For individual activities, call get_timeline for a specific day.",
+      "range": {
+        "from": "2026-03-10",
+        "to": "2026-03-11"
+      },
+      "schema_version": 1,
+      "tracked_minutes": 195
+    }
+  }
+}

@@ -73,6 +73,9 @@ pub struct Settings {
     pub recap_time: String,
     /// Model for chat, on the same provider; empty uses `model`.
     pub chat_model: String,
+    /// Maximum disk space for screenshots in GB (10^9 bytes); the oldest are deleted first when
+    /// they take more. 0 turns the limit off (retention_days still applies).
+    pub storage_limit_gb: u32,
 }
 
 impl Default for Settings {
@@ -98,6 +101,7 @@ impl Default for Settings {
             recap_auto: true,
             recap_time: "08:00".into(),
             chat_model: String::new(),
+            storage_limit_gb: 0,
         }
     }
 }
@@ -160,6 +164,7 @@ impl Settings {
         self.capture_height = if self.capture_height <= 720 { 720 } else { 1080 };
         self.jpeg_quality = self.jpeg_quality.clamp(30, 95);
         self.retention_days = self.retention_days.clamp(1, 365);
+        self.storage_limit_gb = self.storage_limit_gb.min(1000);
         if self.idle_pause_secs != 0 {
             self.idle_pause_secs = self.idle_pause_secs.clamp(30, 3600);
         }

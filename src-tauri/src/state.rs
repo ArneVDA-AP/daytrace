@@ -26,6 +26,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(paths: Paths) -> anyhow::Result<AppState> {
+        crate::features::storage::backup::check_database(&paths.root, &paths.db);
         let db = Db::open(&paths.db)?;
         let settings = Settings::load(&paths.settings);
         Ok(AppState {
