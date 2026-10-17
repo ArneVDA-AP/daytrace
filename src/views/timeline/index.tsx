@@ -4,11 +4,12 @@ import { api, type Card } from "@/api";
 import { useDay } from "@/app/day";
 import { LegacyFrame } from "@/app/LegacyFrame";
 import { useAppState } from "@/app/state";
-import { isTypingTarget, DayNav } from "@/components/day-nav";
+import { DayNav } from "@/components/day-nav";
 import { PageHeader, TitleBadge } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { numParam, setParams, useRoute } from "@/lib/router";
 import { formatDayTitle } from "@/lib/time";
+import { isTypingTarget } from "@/lib/utils";
 import { CardDetail } from "@/CardDetail";
 import { DayRibbon } from "@/DayRibbon";
 import { ExportPanel } from "@/ExportPanel";
@@ -53,9 +54,9 @@ export default function TimelineSection() {
   React.useEffect(() => {
     if (!cards) return;
     if (cards.length === 0) {
-      if (selected !== null) setParams({ card: null });
+      if (selected !== null) setParams({ card: null }, { section: "timeline" });
     } else if (selected === null || !cards.some((c) => c.id === selected)) {
-      setParams({ card: cards[cards.length - 1].id });
+      setParams({ card: cards[cards.length - 1].id }, { section: "timeline" });
     }
   }, [cards, selected]);
 
@@ -68,7 +69,7 @@ export default function TimelineSection() {
       const i = cards.findIndex((c) => c.id === selected);
       const next = k === "j" ? Math.min(cards.length - 1, i + 1) : Math.max(0, i - 1);
       e.preventDefault();
-      setParams({ card: cards[next].id });
+      setParams({ card: cards[next].id }, { section: "timeline" });
     };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);

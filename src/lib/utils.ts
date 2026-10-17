@@ -22,3 +22,12 @@ export function errorText(e: unknown): string {
   if (e instanceof Error) return e.message;
   return "Something went wrong.";
 }
+
+/** True when a key press belongs to a text field, a slider or an open dialog/menu/grid. */
+export function isTypingTarget(t: EventTarget | null): boolean {
+  const el = t as HTMLElement | null;
+  if (!el || typeof el.closest !== "function") return false;
+  return !!el.closest(
+    'input, textarea, select, [contenteditable=""], [contenteditable="true"], [role="slider"], [role="dialog"], [role="menu"], [role="listbox"], [role="grid"]',
+  );
+}

@@ -216,10 +216,12 @@
   }
 
   /* Windows Contrast themes (designer-fluent): data marks keep their own colour and get a system
-     outline, so a category segment never disappears into the forced Canvas colour. Mark elements
-     carry data-mark (or set their colour inline). */
+     outline, so a category segment never disappears into the forced Canvas colour. Marks carry
+     data-mark or set their colour inline (style="background…"); default category tokens become
+     CanvasText there (tokens.css), so labels and texture carry identity. */
   @media (forced-colors: active) {
-    [data-mark] {
+    [data-mark],
+    [style*="background"] {
       forced-color-adjust: none;
       outline: 1px solid CanvasText;
       outline-offset: -1px;

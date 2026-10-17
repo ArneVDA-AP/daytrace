@@ -7,13 +7,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { shiftDay, weekStart } from "@/lib/time";
-
-/** True when a key press belongs to a text field, a slider or an open dialog/menu. */
-export function isTypingTarget(t: EventTarget | null): boolean {
-  const el = t as HTMLElement | null;
-  if (!el || !el.closest) return false;
-  return !!el.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"], [role="slider"], [role="dialog"], [role="menu"], [role="listbox"], [role="grid"]');
-}
+import { isTypingTarget } from "@/lib/utils";
 
 /**
  * Previous day, next day, "Go to a day" (month calendar) and Today, for the page header of the

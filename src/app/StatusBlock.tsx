@@ -30,6 +30,7 @@ function Dot({ tone, className }: { tone: RecorderView["tone"]; className?: stri
   return (
     <span
       aria-hidden="true"
+      data-mark=""
       className={cn(
         "size-2 shrink-0 rounded-full",
         tone === "live" && "bg-live motion-safe:animate-pulse-live",
@@ -47,7 +48,7 @@ function RecorderGlyph({ tone }: { tone: RecorderView["tone"] }) {
   if (tone === "paused") return <Pause className="size-[1.125rem]" aria-hidden="true" />;
   return (
     <span aria-hidden="true" className="grid size-[1.125rem] place-items-center rounded-full border-2 border-current">
-      <span className="size-2 rounded-full bg-live motion-safe:animate-pulse-live" />
+      <span data-mark="" className="size-2 rounded-full bg-live motion-safe:animate-pulse-live" />
     </span>
   );
 }
@@ -107,9 +108,11 @@ function StatusPanel({ className }: { className?: string }) {
   return (
     <section aria-label="Recording status" className={cn("rounded-lg border bg-surface-1 text-meta shadow-xs", className)}>
       <div className="px-3 pt-2">
-        <div className="flex min-h-7 items-center gap-2">
-          <Dot tone={recorder.tone} />
-          <p role="status" className={cn("min-w-0 flex-1 font-semibold", recorder.tone === "error" && "text-destructive")}>
+        <div className="flex items-start gap-2">
+          <span className="grid h-7 shrink-0 place-items-center">
+            <Dot tone={recorder.tone} />
+          </span>
+          <p role="status" className={cn("min-w-0 flex-1 py-[0.3125rem] font-semibold", recorder.tone === "error" && "text-destructive")}>
             {recorder.label}
           </p>
           {recorder.userPaused ? (
@@ -177,7 +180,7 @@ export function StatusBlock() {
               >
                 <RecorderGlyph tone={recorder.tone} />
                 {attention && (
-                  <span aria-hidden="true" className="absolute top-1.5 right-2.5 size-2 rounded-full bg-destructive ring-2 ring-background" />
+                  <span aria-hidden="true" data-mark="" className="absolute top-1.5 right-2.5 size-2 rounded-full bg-destructive ring-2 ring-background" />
                 )}
               </button>
             </PopoverTrigger>

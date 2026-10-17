@@ -71,13 +71,18 @@ export function navigate(section: Section, params: Params = {}, opts: { replace?
   }
 }
 
-/** Changes some params of the current route (null removes one). Replaces history by default. */
-export function setParams(patch: Params, opts: { replace?: boolean } = { replace: true }) {
+/**
+ * Changes some params of the current route (null removes one). Replaces history by default.
+ * Pass `section` from effects: the change is dropped when that section is no longer showing (an
+ * effect can still run while the next section loads).
+ */
+export function setParams(patch: Params, opts: { replace?: boolean; section?: Section } = {}) {
   const r = snapshot();
+  if (opts.section && r.section !== opts.section) return;
   const next: Params = {};
   r.params.forEach((v, k) => (next[k] = v));
   for (const [k, v] of Object.entries(patch)) next[k] = v;
-  navigate(r.section, next, opts);
+  navigate(r.section, next, { replace: opts.replace ?? true });
 }
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;

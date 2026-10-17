@@ -68,7 +68,7 @@ function Root() {
     inSettings: route.section === "settings",
     setDay: (d) => setDay(d, { replace: true }),
     onReset: () => {
-      if (route.section === "timeline") setParams({ card: null });
+      setParams({ card: null }, { section: "timeline" });
     },
   });
 
