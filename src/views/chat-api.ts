@@ -103,6 +103,8 @@ export function providerName(id: string | null): string {
       return "LM Studio";
     case "openai_compatible":
       return "OpenAI-compatible";
+    case "claude_cli":
+      return "Claude Code CLI";
     default:
       return "";
   }

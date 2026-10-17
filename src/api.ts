@@ -58,6 +58,9 @@ export interface Settings {
   checkUpdates: boolean;
   /** Maximum disk space for screenshots in GB (10^9 bytes); 0 turns the limit off. */
   storageLimitGb: number;
+  // agent_bridge
+  /** AI tools (daytrace-mcp) may change categories, activities and day goals through the app. */
+  allowAgentEdits: boolean;
 }
 
 export interface NotificationPrefs {
