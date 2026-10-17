@@ -225,7 +225,12 @@ function Onboarding({ dto, firstRun, onDone }: { dto: SettingsDto; firstRun: boo
           aria-label="Setup"
           className="flex min-h-0 flex-1 flex-col rounded-xl border bg-surface-1 shadow-md outline-none split:h-[min(46rem,calc(100dvh-3rem))]"
         >
-          <div ref={scroller} className="scroll-thin flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto overscroll-contain px-7 py-6 max-split:px-5">
+          {/* Focusable, so the step can be scrolled with the keyboard when it has no control (a narrow window). */}
+          <div
+            ref={scroller}
+            tabIndex={0}
+            className="scroll-thin flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto overscroll-contain px-7 py-6 focus-visible:-outline-offset-2 max-split:px-5"
+          >
             <div className="flex flex-col gap-1.5">
               <p className="text-caption text-muted-foreground">
                 Step {step + 1} of {STEPS.length} · {STEPS[step]}

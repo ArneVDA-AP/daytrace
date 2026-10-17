@@ -100,6 +100,7 @@ export default function GoalPromptDialog({ view, onClose }: { view: GoalsView; o
             onSkip={() => void answer(() => journalApi.skip(view.day), "Goals skipped for today")}
             onCancel={onClose}
             cancelLabel="Not now"
+            settingsLink={false}
           />
         )}
 

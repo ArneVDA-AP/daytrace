@@ -632,11 +632,13 @@ function HourHeatmap({
 }: {
   rows: { day: string }[];
   hours: number[];
-  cell: (row: number, hour: number) => { fill: string; text: string };
+  /** `hatched`: a texture over the color, so the direction of a diverging scale is not color only. */
+  cell: (row: number, hour: number) => { fill: string; text: string; hatched?: boolean };
   label: string;
   legend: React.ReactNode;
 }) {
   const [ref, width] = useWidth<HTMLDivElement>();
+  const hatchId = `${React.useId().replace(/:/g, "")}h`;
   const labelW = 40;
   const gap = 3;
   const top = 18;
@@ -649,6 +651,11 @@ function HourHeatmap({
       <div ref={ref} className="w-full" style={{ height: h }}>
         {width > 0 && (
           <svg width={width} height={h} role="img" aria-label={label} className="block">
+            <defs>
+              <pattern id={hatchId} width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                <rect width="1.25" height="4" style={{ fill: "var(--surface-1)", fillOpacity: 0.55 }} />
+              </pattern>
+            </defs>
             {hours.map((hr, i) =>
               (hr - hours[0]) % every === 0 ? (
                 <text key={hr} x={labelW + i * (cw + gap)} y={11} className={AXIS_TEXT} style={axisStyle}>
@@ -665,10 +672,14 @@ function HourHeatmap({
                   </text>
                   {hours.map((hr, i) => {
                     const c = cell(ri, hr);
+                    const x = labelW + i * (cw + gap);
                     return (
-                      <rect key={hr} x={labelW + i * (cw + gap)} y={y} width={Math.max(1, cw)} height={HEAT_CELL_H} rx={3} style={{ fill: c.fill }}>
-                        <title>{`${formatDayTitle(r.day)}, ${hourLabel(4 + hr)} to ${hourLabel(5 + hr)}: ${c.text}`}</title>
-                      </rect>
+                      <g key={hr}>
+                        <rect x={x} y={y} width={Math.max(1, cw)} height={HEAT_CELL_H} rx={3} style={{ fill: c.fill }}>
+                          <title>{`${formatDayTitle(r.day)}, ${hourLabel(4 + hr)} to ${hourLabel(5 + hr)}: ${c.text}`}</title>
+                        </rect>
+                        {c.hatched && <rect x={x} y={y} width={Math.max(1, cw)} height={HEAT_CELL_H} rx={3} pointerEvents="none" style={{ fill: `url(#${hatchId})` }} />}
+                      </g>
                     );
                   })}
                 </g>
@@ -689,8 +700,11 @@ function heatStep(secs: number, max: number): number {
   return Math.min(4, Math.max(1, Math.ceil((secs / max) * 4)));
 }
 
-function HeatKey({ fill }: { fill: string }) {
-  return <span aria-hidden="true" data-mark="" className="h-2.5 w-4 rounded-[2px]" style={{ background: fill }} />;
+/** The texture of distraction-leaning cells, for legend keys (the SVG uses a pattern). */
+const HATCH = "repeating-linear-gradient(135deg, color-mix(in oklab, var(--surface-1) 55%, transparent) 0 1px, transparent 1px 3px)";
+
+function HeatKey({ fill, hatched }: { fill: string; hatched?: boolean }) {
+  return <span aria-hidden="true" data-mark="" className="h-2.5 w-4 rounded-[2px]" style={{ background: hatched ? `${HATCH}, ${fill}` : fill }} />;
 }
 
 export function DistractionHeatmap({ week, summary }: { week: WeekStats; summary: string }) {
@@ -770,19 +784,20 @@ export function FocusHeatmap({ week, summary }: { week: WeekStats; summary: stri
         const f = r.focusSecs[hr] ?? 0;
         const d = r.distractedSecs[hr] ?? 0;
         const text = score === null ? "no focus or distraction" : `${leaning(score).toLowerCase()}, ${formatDuration(f)} focused, ${formatDuration(d)} distracted`;
-        return { fill: focusFill(focusStep(score)), text };
+        const step = focusStep(score);
+        return { fill: focusFill(step), text, hatched: step !== null && step > 0 };
       }}
       legend={
         <>
           Focused
           {[-4, -3, -2, -1, 0, 1, 2, 3, 4].map((s) => (
-            <HeatKey key={s} fill={focusFill(s)} />
+            <HeatKey key={s} fill={focusFill(s)} hatched={s > 0} />
           ))}
           Distracted
           <span className="ml-3 inline-flex items-center gap-1.5">
             <HeatKey fill={focusFill(null)} /> No focus or distraction
           </span>
-          <span className="sr-only">. Blue squares lean to focus, plum squares to distraction, gray ones are mixed; the stronger the color, the clearer the hour.</span>
+          <span className="sr-only">. Blue squares lean to focus, hatched plum squares to distraction, gray ones are mixed; the stronger the color, the clearer the hour.</span>
         </>
       }
     />
@@ -829,7 +844,7 @@ export function FocusHourTable({ week }: { week: WeekStats }) {
             <td className="py-1.5 text-right tnum">{durationOrDash(x.d)}</td>
             <td className="py-1.5 pl-3">
               <span className="inline-flex items-center gap-1.5">
-                <HeatKey fill={focusFill(focusStep(x.score))} />
+                <HeatKey fill={focusFill(focusStep(x.score))} hatched={(focusStep(x.score) ?? 0) > 0} />
                 {leaning(x.score)}
               </span>
             </td>

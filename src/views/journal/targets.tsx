@@ -270,6 +270,7 @@ export function GoalSetup({
   cancelLabel = "Cancel",
   idPrefix = "goal",
   onDirty,
+  settingsLink = true,
 }: {
   plan: Plan;
   progress: Progress;
@@ -284,6 +285,8 @@ export function GoalSetup({
   idPrefix?: string;
   /** The targets differ from the plan (unsaved choices). */
   onDirty?: (dirty: boolean) => void;
+  /** "Change in Settings" after the note (not in the prompt dialog, which would stay open). */
+  settingsLink?: boolean;
 }) {
   const [focus, setFocus] = React.useState(plan.focusTargetMinutes);
   const [distraction, setDistraction] = React.useState(plan.distractionLimitMinutes);
@@ -325,7 +328,7 @@ export function GoalSetup({
         </div>
       </div>
       <p className="text-caption text-muted-foreground">
-        What counts as focus or distraction is set per category in Settings, the same for Daily and Weekly. <OpenCategories />
+        What counts as focus or distraction is set per category in Settings, the same for Daily and Weekly. {settingsLink && <OpenCategories />}
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <Button type="submit" disabled={busy}>
