@@ -51,6 +51,8 @@ reqwest = { version = "0.13.5", default-features = false, features = ["json", "r
 jpeg-encoder = { version = "0.7.1", features = ["simd"] }
 regex = { version = "1.13.1", default-features = false, features = ["std", "unicode-perl"] }
 iana-time-zone = "0.1.65"
+# Codex's config.toml is edited in place (comments and order kept); already in Cargo.lock.
+toml_edit = "0.25.17"
 tauri-plugin-updater = "2.14.0"
 
 
