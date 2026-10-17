@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDelayedLoading } from "@/lib/use-delayed";
 import { errorText } from "@/lib/utils";
+import { AgentConnect } from "./agent-connect";
+import { AgentEdits } from "./agent-edits";
 import { ErrorBanner, FieldError, Group, Note, Row } from "./fields";
 import { storageApi, type AgentSetup } from "./storage-api";
 
@@ -23,8 +25,11 @@ export function AiToolsSection() {
     <>
       <Note>
         daytrace-mcp lets Claude Code, Claude Desktop and other MCP clients read your timeline: activities, time per category, daily recaps and the notes
-        behind each activity. It only reads, works while Daytrace is closed, and never sees screenshots or the names of private apps.
+        behind each activity. Reading works while Daytrace is closed and never sees screenshots or the names of private apps. Changes are off unless you
+        allow them below.
       </Note>
+      <AgentConnect />
+      <AgentEdits />
       {error && (
         <ErrorBanner
           title="Couldn’t find daytrace-mcp"

@@ -167,6 +167,10 @@ pub struct Settings {
     /// Open yesterday's review and today's goal setup by itself on the first use of the window
     /// after the day starts (Dayflow's "Show daily goal popups"; paced in features/journal.rs).
     pub show_goal_prompt: bool,
+    // ---- agent_bridge ----
+    /// Let AI tools (daytrace-mcp's write tools and CLI commands) change categories, activities
+    /// and day goals through the running app. Off by default; reads never need it.
+    pub allow_agent_edits: bool,
 }
 
 impl Default for Settings {
@@ -206,6 +210,7 @@ impl Default for Settings {
             auto_install_updates: true,
             recap_model: String::new(),
             show_goal_prompt: true,
+            allow_agent_edits: false,
         }
     }
 }

@@ -2,7 +2,10 @@
 //! with read-only tools over the stored cards, observations and screenshot metadata. Answers
 //! link the cards they rely on. Ports Dayflow's dashboard chat (ChatService.swift and the Gemini
 //! function-calling path, MIT, © Jerry Liu); see the submodules for what comes from where.
+//! With the Claude Code CLI as provider, the CLI answers with daytrace-mcp's read tools
+//! (cli_chat.rs); the Codex CLI is not supported.
 
+mod cli_chat;
 mod engine;
 mod metadata;
 mod prompt;
@@ -126,8 +129,8 @@ impl Target {
         if self.model.is_empty() {
             return Some("No model is set. Choose one in Settings.".into());
         }
-        if self.kind.is_cli() {
-            return Some(format!("Chat does not work with the {} yet. Choose an API or local model provider in Settings to chat.", self.kind.label()));
+        if self.kind == ProviderKind::CodexCli {
+            return Some(format!("Chat does not work with the {} yet. Choose the Claude Code CLI, an API or a local model provider in Settings to chat.", self.kind.label()));
         }
         if crate::llm::chat_api::key_required(self.kind, &self.base_url) && self.key.is_none() {
             return Some(format!("Chat needs an API key for {}. Add one in Settings.", self.provider_label()));
@@ -157,6 +160,21 @@ fn friendly_error(e: &anyhow::Error, t: &Target) -> (String, Option<String>) {
             _ => "The model provider refused the request.".into(),
         };
         return (msg, detail);
+    }
+    if let Some(c) = e.chain().find_map(|c| c.downcast_ref::<crate::llm::cli::CliFailed>()) {
+        use crate::llm::failure::{classify, FailureKind};
+        let msg = match classify(&c.message).kind {
+            FailureKind::ProviderLoginExpired => "Claude Code is signed out. Open PowerShell, run claude, then type /login to sign back in.".to_string(),
+            FailureKind::UsageLimitHit => "You've used up your Claude plan's usage for now. Try again when the limit resets, or switch the chat to an API provider in Settings.".to_string(),
+            FailureKind::OutOfCredits => "Your Claude account is out of credits.".to_string(),
+            FailureKind::ModelMisconfigured => format!("The model \"{}\" isn't available in Claude Code. Choose another chat model.", t.model),
+            FailureKind::CliNotInstalled => c.message.clone(),
+            _ => "The Claude Code CLI couldn't answer. Try again in a moment.".to_string(),
+        };
+        return (msg, detail);
+    }
+    if crate::llm::cli::is_timeout(e) {
+        return ("The Claude Code CLI took too long to answer. Try a narrower question.".into(), detail);
     }
     if let Some(r) = e.downcast_ref::<reqwest::Error>() {
         if r.is_timeout() {
@@ -390,6 +408,15 @@ fn history_from(prior: &[MessageRow]) -> Vec<Msg> {
         .collect()
 }
 
+/// Earlier turns for the CLI prompt, as (role, text): user and assistant text only.
+fn cli_history(prior: &[MessageRow]) -> Vec<(String, String)> {
+    prior
+        .iter()
+        .filter(|m| !m.content.trim().is_empty() && (m.role == ROLE_USER || m.role == ROLE_ASSISTANT))
+        .map(|m| (m.role.clone(), m.content.clone()))
+        .collect()
+}
+
 /// Asks a question in a conversation (a new one when `conversation_id` is None) and returns
 /// the whole conversation with the answer, or with a plain-words error message in its place.
 #[tauri::command]
@@ -432,22 +459,42 @@ pub async fn chat_send(app: tauri::AppHandle, state: S<'_>, conversation_id: Opt
     let (memory, _) = store::load_memory(&db).map_err(err)?;
     let system = prompt::system_prompt(chrono::Local::now(), &logical_day(now_ts()), &settings.output_language, &memory, &recent);
 
-    let mut client = LlmClient::new(target.kind, &target.base_url, &target.model, target.key.clone(), Some(db.clone())).map_err(err)?;
-    client.reasoning = settings.reasoning;
-    client.use_batch = false; // interactive: never the Batch API
-    let api = ChatApi::new(client);
-    let ctx = tools::ToolContext {
-        db: db.clone(),
-        capture_interval_secs: settings.capture_interval_secs,
-        idle_category: settings.categories.iter().find(|c| c.is_idle).map(|c| c.name.clone()).unwrap_or_else(|| "Idle".into()),
-    };
     let mut emit = |p: Progress| {
         // {"conversationId", "stage": "thinking" | "toolStarted" | "toolFinished", ...}
         let mut v = serde_json::to_value(&p).unwrap_or_default();
         v["conversationId"] = serde_json::json!(conv_id);
         let _ = app.emit(PROGRESS_EVENT, v);
     };
-    let result = engine::run(&api, &ctx, &system, history_from(&prior), &question, &CANCEL, &mut emit).await;
+    let result = if target.kind == ProviderKind::ClaudeCli {
+        let system = prompt::build(chrono::Local::now(), &logical_day(now_ts()), &settings.output_language, &memory, &recent, prompt::ToolSet::Mcp);
+        let backend = crate::llm::cli::CliBackend::new(crate::llm::cli::CliTool::Claude, &target.base_url, &target.model);
+        let chat = cli_chat::CliChat {
+            backend: &backend,
+            mcp_exe: crate::features::agent_bridge::register::mcp_exe(),
+            data_dir: state.paths.root.clone(),
+            timeout: crate::llm::cli::DEFAULT_TIMEOUT,
+        };
+        let started = std::time::Instant::now();
+        let r = cli_chat::run(&chat, &system, &cli_history(&prior), &question, &CANCEL, &mut emit).await;
+        // The call log, as the API chat keeps one (op "chat"); the text goes when retention ends.
+        let (answer, error, usage) = match &r {
+            Ok(o) => (Some(o.text.as_str()), None, (Some(o.input_tokens), Some(o.output_tokens))),
+            Err(e) => (None, Some(format!("{e:#}")), (None, None)),
+        };
+        db.log_llm_call(None, "chat", &format!("claude_cli:{}", target.model), started.elapsed().as_millis() as i64, &question, answer, error.as_deref(), usage);
+        r
+    } else {
+        let mut client = LlmClient::new(target.kind, &target.base_url, &target.model, target.key.clone(), Some(db.clone())).map_err(err)?;
+        client.reasoning = settings.reasoning;
+        client.use_batch = false; // interactive: never the Batch API
+        let api = ChatApi::new(client);
+        let ctx = tools::ToolContext {
+            db: db.clone(),
+            capture_interval_secs: settings.capture_interval_secs,
+            idle_category: settings.categories.iter().find(|c| c.is_idle).map(|c| c.name.clone()).unwrap_or_else(|| "Idle".into()),
+        };
+        engine::run(&api, &ctx, &system, history_from(&prior), &question, &CANCEL, &mut emit).await
+    };
 
     let row = match result {
         Ok(out) => {
@@ -540,6 +587,19 @@ mod tests {
         assert_eq!(friendly_error(&e, &t), ("Stopped before the answer was finished.".into(), None));
         let e = anyhow::anyhow!(engine::ROUNDS_EXCEEDED);
         assert_eq!(friendly_error(&e, &t).0, engine::ROUNDS_EXCEEDED);
+        // The Claude Code CLI's own errors.
+        let cli = Target { kind: ProviderKind::ClaudeCli, base_url: String::new(), model: "haiku".into(), key: None };
+        let failed = |m: &str| -> anyhow::Error { crate::llm::cli::CliFailed { tool: crate::llm::cli::CliTool::Claude, message: m.into(), usage: None }.into() };
+        assert!(friendly_error(&failed("Not logged in · Please run /login"), &cli).0.starts_with("Claude Code is signed out."));
+        assert!(friendly_error(&failed("You've hit your limit · resets 3pm"), &cli).0.starts_with("You've used up your Claude plan's usage"));
+        assert_eq!(friendly_error(&failed("boom"), &cli).1.as_deref(), Some("Claude Code CLI: boom"));
+    }
+
+    #[test]
+    fn only_the_codex_cli_is_refused() {
+        let cli = |kind| Target { kind, base_url: String::new(), model: "m".into(), key: None };
+        assert_eq!(cli(ProviderKind::ClaudeCli).problem(), None);
+        assert!(cli(ProviderKind::CodexCli).problem().unwrap().starts_with("Chat does not work with the Codex CLI yet."));
     }
 
     #[test]

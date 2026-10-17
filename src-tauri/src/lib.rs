@@ -71,6 +71,7 @@ pub fn run() {
             capture::spawn(state.clone());
             features::insights::spawn(state.clone());
             features::storage::spawn(state.clone());
+            features::agent_bridge::spawn(app.handle().clone(), state.clone());
             analysis::spawn(state);
             if !start_hidden {
                 tray::show_main(app.handle());
@@ -159,6 +160,13 @@ pub fn run() {
             features::platform_extras::platform_whats_new_seen,
             features::platform_extras::platform_debug_info,
             features::platform_extras::platform_open_link,
+            // agent_bridge commands
+            features::agent_bridge::agent_access_status,
+            features::agent_bridge::agent_add_to_claude_code,
+            features::agent_bridge::agent_remove_from_claude_code,
+            features::agent_bridge::agent_add_to_claude_desktop,
+            features::agent_bridge::agent_remove_from_claude_desktop,
+            features::agent_bridge::agent_set_on_path,
             // provider commands
             llm::provider_cmds::provider_prompt_defaults,
             llm::provider_cmds::provider_key_status,

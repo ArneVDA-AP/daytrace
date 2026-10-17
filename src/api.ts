@@ -69,6 +69,9 @@ export interface Settings {
   recapModel: string;
   /** Open yesterday's review and today's goal setup by itself once a day. */
   showGoalPrompt: boolean;
+  // agent_bridge
+  /** AI tools (daytrace-mcp) may change categories, activities and day goals through the app. */
+  allowAgentEdits: boolean;
 }
 
 export interface NotificationPrefs {

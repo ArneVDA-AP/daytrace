@@ -4,13 +4,13 @@
   "result": {
     "content": [
       {
-        "text": "{\"error\":\"Unknown tool: delete_activity\",\"schema_version\":1}",
+        "text": "{\"error\":\"Unknown tool: rename_everything\",\"schema_version\":1}",
         "type": "text"
       }
     ],
     "isError": true,
     "structuredContent": {
-      "error": "Unknown tool: delete_activity",
+      "error": "Unknown tool: rename_everything",
       "schema_version": 1
     }
   }

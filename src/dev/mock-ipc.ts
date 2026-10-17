@@ -32,6 +32,7 @@ import { applySettingsMock } from "@/dev/settings";
 import { applyF4Mock } from "@/dev/f4";
 import { applyF2Mock } from "@/dev/w4-f2";
 import { agentsMock } from "@/dev/agents";
+import { applyAgentAccessMock } from "@/dev/w4-f3";
 
 export const DEV_MOCK_MARKER = "DAYTRACE_DEV_MOCK_IPC";
 
@@ -81,6 +82,7 @@ function defaultSettings(provider: ProviderKind): Settings {
     autoInstallUpdates: true,
     recapModel: "",
     showGoalPrompt: true,
+    allowAgentEdits: false,
   };
 }
 
@@ -302,6 +304,7 @@ export function installMockIpc() {
   applyF4Mock(handlers, { q, now }); // update install, What's new, debug info (src/dev/f4.ts)
   applyF2Mock(handlers, { q, settings, today: ds.today }); // wave 4 views (src/dev/w4-f2.ts)
   Object.assign(handlers, agentsMock(q, now)); // Agents section (src/dev/agents.ts)
+  applyAgentAccessMock(handlers, { q, settings }); // Settings > AI tools one-click setup (src/dev/w4-f3.ts)
 
   mockWindows("main");
   mockIPC(

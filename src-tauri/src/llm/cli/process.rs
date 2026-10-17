@@ -65,8 +65,23 @@ impl std::fmt::Display for SpawnFailed {
 }
 impl std::error::Error for SpawnFailed {}
 
+/// Receives stdout one line at a time while the process runs (without the line ending).
+pub type LineSender = tokio::sync::mpsc::UnboundedSender<String>;
+
 pub trait ProcessRunner: Send + Sync {
     fn run(&self, spec: ProcessSpec) -> BoxFuture<'_, Result<ProcessOutput>>;
+
+    /// `run`, also sending each stdout line to `lines` as it arrives (the chat's stream-json
+    /// events). The default sends the lines after the process ended.
+    fn run_lines(&self, spec: ProcessSpec, lines: LineSender) -> BoxFuture<'_, Result<ProcessOutput>> {
+        Box::pin(async move {
+            let out = self.run(spec).await?;
+            for l in out.stdout.lines() {
+                let _ = lines.send(l.trim_end_matches('\r').to_string());
+            }
+            Ok(out)
+        })
+    }
 }
 
 /// Runs real processes.
@@ -74,7 +89,11 @@ pub struct SystemRunner;
 
 impl ProcessRunner for SystemRunner {
     fn run(&self, spec: ProcessSpec) -> BoxFuture<'_, Result<ProcessOutput>> {
-        Box::pin(run_system(spec))
+        Box::pin(run_system(spec, None))
+    }
+
+    fn run_lines(&self, spec: ProcessSpec, lines: LineSender) -> BoxFuture<'_, Result<ProcessOutput>> {
+        Box::pin(run_system(spec, Some(lines)))
     }
 }
 
@@ -86,12 +105,12 @@ impl Drop for CancelOnDrop {
     }
 }
 
-async fn run_system(spec: ProcessSpec) -> Result<ProcessOutput> {
+async fn run_system(spec: ProcessSpec, lines: Option<LineSender>) -> Result<ProcessOutput> {
     let cancel = Arc::new(AtomicBool::new(false));
     let _guard = CancelOnDrop(cancel.clone());
     let (tx, rx) = tokio::sync::oneshot::channel();
     std::thread::Builder::new().name("daytrace-cli".into()).spawn(move || {
-        let _ = tx.send(run_blocking(spec, &cancel));
+        let _ = tx.send(run_blocking(spec, &cancel, lines));
     })?;
     rx.await.map_err(|_| anyhow!("The CLI runner stopped unexpectedly"))?
 }
@@ -99,7 +118,7 @@ async fn run_system(spec: ProcessSpec) -> Result<ProcessOutput> {
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-fn run_blocking(spec: ProcessSpec, cancel: &AtomicBool) -> Result<ProcessOutput> {
+fn run_blocking(spec: ProcessSpec, cancel: &AtomicBool, lines: Option<LineSender>) -> Result<ProcessOutput> {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
@@ -130,7 +149,7 @@ fn run_blocking(spec: ProcessSpec, cancel: &AtomicBool) -> Result<ProcessOutput>
 
     let out_buf = Arc::new(Mutex::new(Vec::new()));
     let err_buf = Arc::new(Mutex::new(Vec::new()));
-    let readers = [spawn_reader(child.stdout.take(), out_buf.clone()), spawn_reader(child.stderr.take(), err_buf.clone())];
+    let readers = [spawn_reader(child.stdout.take(), out_buf.clone(), lines), spawn_reader(child.stderr.take(), err_buf.clone(), None)];
     if let Some(mut stdin) = child.stdin.take() {
         let data = spec.stdin.clone();
         // A process that exits without reading stdin makes this write fail; that is fine.
@@ -162,15 +181,33 @@ fn run_blocking(spec: ProcessSpec, cancel: &AtomicBool) -> Result<ProcessOutput>
     Ok(ProcessOutput { code: status.code(), stdout: lossy(&out_buf), stderr: lossy(&err_buf) })
 }
 
-fn spawn_reader<R: std::io::Read + Send + 'static>(pipe: Option<R>, buf: Arc<Mutex<Vec<u8>>>) -> Option<std::thread::JoinHandle<()>> {
+fn spawn_reader<R: std::io::Read + Send + 'static>(pipe: Option<R>, buf: Arc<Mutex<Vec<u8>>>, lines: Option<LineSender>) -> Option<std::thread::JoinHandle<()>> {
     let mut pipe = pipe?;
     Some(std::thread::spawn(move || {
         let mut chunk = [0u8; 64 * 1024];
+        let mut pending: Vec<u8> = Vec::new();
+        let send = |line: &[u8]| {
+            if let Some(tx) = &lines {
+                let _ = tx.send(String::from_utf8_lossy(line).trim_end_matches('\r').to_string());
+            }
+        };
         loop {
             match pipe.read(&mut chunk) {
                 Ok(0) | Err(_) => break,
-                Ok(n) => buf.lock().unwrap().extend_from_slice(&chunk[..n]),
+                Ok(n) => {
+                    buf.lock().unwrap().extend_from_slice(&chunk[..n]);
+                    if lines.is_some() {
+                        pending.extend_from_slice(&chunk[..n]);
+                        while let Some(at) = pending.iter().position(|b| *b == b'\n') {
+                            send(&pending[..at]);
+                            pending.drain(..=at);
+                        }
+                    }
+                }
             }
+        }
+        if !pending.is_empty() {
+            send(&pending);
         }
     }))
 }
@@ -349,6 +386,24 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(10));
         let t = err.downcast_ref::<TimedOut>().expect("timeout error");
         assert_eq!(t.stdout.trim(), "started");
+    }
+
+    #[tokio::test]
+    async fn streams_stdout_lines_while_running() {
+        let spec = ProcessSpec {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), "printf 'one\\ntw'; sleep 0.2; printf 'o\\r\\nthree'".into()],
+            timeout: Duration::from_secs(10),
+            ..Default::default()
+        };
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let out = SystemRunner.run_lines(spec, tx).await.unwrap();
+        assert_eq!(out.stdout, "one\ntwo\r\nthree");
+        let mut got = Vec::new();
+        while let Ok(l) = rx.try_recv() {
+            got.push(l);
+        }
+        assert_eq!(got, ["one", "two", "three"]);
     }
 
     #[tokio::test]

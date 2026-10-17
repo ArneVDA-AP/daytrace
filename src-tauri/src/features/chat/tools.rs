@@ -613,7 +613,7 @@ fn time_by_category(ctx: &ToolContext, args: &Value) -> R {
     Ok(ToolOutput { content: out.to_string(), summary, ok: true, card_ids: vec![] })
 }
 
-fn fmt_minutes(m: i64) -> String {
+pub(crate) fn fmt_minutes(m: i64) -> String {
     match (m / 60, m % 60) {
         (0, m) => format!("{m} min"),
         (h, 0) => format!("{h} h"),

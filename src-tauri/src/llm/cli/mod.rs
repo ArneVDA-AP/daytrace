@@ -165,6 +165,11 @@ impl CliBackend {
         &self.work_root
     }
 
+    /// The process runner (a fake in tests).
+    pub fn runner(&self) -> &Arc<dyn ProcessRunner> {
+        &self.runner
+    }
+
     pub fn is_windows(&self) -> bool {
         self.windows
     }
@@ -353,6 +358,24 @@ impl CliBackend {
         Ok((reply.text, reply.usage))
     }
 
+    /// Runs the CLI with `args` and `stdin` in the working directory, sending stdout lines to
+    /// `lines` as they arrive (chat). The exit code and output are returned as they are.
+    pub async fn run_streaming(&self, args: Vec<String>, stdin: String, timeout: Duration, lines: process::LineSender) -> Result<process::ProcessOutput> {
+        let program = self.executable()?;
+        std::fs::create_dir_all(&self.work_root)?;
+        let spec = ProcessSpec { program: program.clone(), args, cwd: Some(self.work_root.clone()), stdin: stdin.into_bytes(), timeout, ..Default::default() };
+        log::info!("running {} for chat (model {})", program.display(), if self.model.is_empty() { "default" } else { &self.model });
+        match self.runner.run_lines(spec, lines).await {
+            Ok(out) => Ok(out),
+            Err(e) => {
+                if e.downcast_ref::<SpawnFailed>().is_some_and(|s| s.not_found) {
+                    bail!(discover::not_found_message(self.tool, Some(&program.display().to_string())));
+                }
+                Err(e)
+            }
+        }
+    }
+
     /// `claude --version` / `codex --version`, for the Settings check.
     pub async fn version(&self) -> Result<(PathBuf, String)> {
         let program = self.executable()?;
@@ -443,7 +466,7 @@ pub fn sweep_work_root(root: &Path, claude_config: Option<&Path>) -> usize {
             if std::fs::remove_file(&path).is_ok() {
                 removed += 1;
             }
-        } else if name.starts_with("frames-") || name.starts_with("images-") || name.starts_with("codex-last-") {
+        } else if name.starts_with("frames-") || name.starts_with("images-") || name.starts_with("codex-last-") || name.starts_with("chat-") {
             let done = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
             if done.is_ok() {
                 removed += 1;

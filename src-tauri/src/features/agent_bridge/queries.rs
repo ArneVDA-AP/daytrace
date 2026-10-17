@@ -153,6 +153,15 @@ impl Source {
             .unwrap_or_else(default_categories)
     }
 
+    /// Whether "Allow edits" is on in settings.json (the app checks again for every write).
+    pub fn edits_enabled(&self) -> bool {
+        std::fs::read_to_string(self.data_dir.join("settings.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .and_then(|v| v.get("allowAgentEdits").and_then(Value::as_bool))
+            .unwrap_or(false)
+    }
+
     pub fn idle_category(&self) -> String {
         self.categories().into_iter().find(|c| c.is_idle).map(|c| c.name).unwrap_or_else(|| "Idle".into())
     }
@@ -527,6 +536,10 @@ pub struct Status {
     pub last_capture_at: Option<i64>,
     pub pending_batches: i64,
     pub failed_batches: i64,
+    /// "Allow edits" (settings.json); filled in by the caller.
+    pub edits_enabled: bool,
+    /// The app answers on the write bridge; None when not checked.
+    pub app_running: Option<bool>,
 }
 
 pub fn fetch_status(conn: &Connection) -> QResult<Status> {
@@ -537,7 +550,14 @@ pub fn fetch_status(conn: &Connection) -> QResult<Status> {
         [],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
-    Ok(Status { today: today_window().day, last_capture_at: last, pending_batches: pending.unwrap_or(0), failed_batches: failed.unwrap_or(0) })
+    Ok(Status {
+        today: today_window().day,
+        last_capture_at: last,
+        pending_batches: pending.unwrap_or(0),
+        failed_batches: failed.unwrap_or(0),
+        edits_enabled: false,
+        app_running: None,
+    })
 }
 
 pub fn status_json(s: &Status) -> Value {
@@ -547,10 +567,13 @@ pub fn status_json(s: &Status) -> Value {
         "day_boundary_hour": DAY_START_HOUR,
         "pending_batches": s.pending_batches,
         "failed_batches": s.failed_batches,
-        "edits_enabled": false,
+        "edits_enabled": s.edits_enabled,
     });
     if let Some(t) = s.last_capture_at {
         v["last_capture_at"] = json!(iso(t));
+    }
+    if let Some(r) = s.app_running {
+        v["app_running"] = json!(r);
     }
     v
 }
@@ -753,6 +776,10 @@ mod tests {
         .unwrap();
         assert_eq!(f.source.categories().iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Deep work", "Away"]);
         assert_eq!(f.source.idle_category(), "Away");
+        // "Allow edits" is off unless settings.json says otherwise.
+        assert!(!f.source.edits_enabled());
+        std::fs::write(f.dir.path().join("settings.json"), r#"{"allowAgentEdits":true}"#).unwrap();
+        assert!(f.source.edits_enabled());
     }
 
     #[test]

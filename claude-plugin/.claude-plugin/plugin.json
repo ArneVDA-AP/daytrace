@@ -1,0 +1,13 @@
+{
+  "name": "daytrace",
+  "displayName": "Daytrace",
+  "description": "Ask about your day. Daytrace's timeline of what you worked on, read locally from your Windows PC.",
+  "author": {
+    "name": "ArneVDA-AP",
+    "url": "https://github.com/ArneVDA-AP"
+  },
+  "homepage": "https://github.com/ArneVDA-AP/daytrace",
+  "repository": "https://github.com/ArneVDA-AP/daytrace",
+  "license": "MIT",
+  "keywords": ["time tracking", "timeline", "productivity", "standup"]
+}

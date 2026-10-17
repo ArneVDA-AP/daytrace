@@ -232,7 +232,8 @@ function CategoryRow({
       const to = v.trim();
       onRename.renaming(c.name, to);
       try {
-        await update({ name: to });
+        // Pin what it counts as: a choice derived from the old name must not follow the new one.
+        await update({ name: to, countsAs: countsAsOf(c) });
       } finally {
         onRename.renamed(to);
       }

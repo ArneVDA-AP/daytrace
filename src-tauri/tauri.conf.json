@@ -31,7 +31,8 @@
     "copyright": "MIT. Based on Dayflow by Jerry Liu.",
     "windows": {
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "installerHooks": "./windows/installer-hooks.nsh"
       }
     }
   },
