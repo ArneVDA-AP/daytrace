@@ -92,6 +92,10 @@ ROUTES = [
     ("shell-failure-signed-out", f"/?provider=claude_cli&fail=login#/daily?day={DAY}", "w=760"),
     ("shell-recap-badge", f"/?badge=recap#/timeline?day={DAY}", ""),
     ("shell-recap-badge", f"/?badge=recap#/timeline?day={DAY}", "w=760"),
+    ("agents-stopped", "/#/agents", ""),
+    ("agents-running", "/?agents=running#/agents", "wait=800"),
+    ("agents-running", "/?agents=running#/agents", "w=760|wait=800"),
+    ("agents-no-node", "/?agents=nonode#/agents", ""),
 ]
 
 # One face per weight, so semibold and bold render as Inter SemiBold and Bold, not synthesized.

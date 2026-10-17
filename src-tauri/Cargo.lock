@@ -910,6 +910,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tempfile",
  "tokio",
+ "webview2-com",
  "windows",
  "xcap",
 ]

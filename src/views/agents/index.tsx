@@ -1,5 +1,6 @@
 import * as React from "react";
 import { ExternalLink, Play, RefreshCw, RotateCcw, Square } from "lucide-react";
+import { shellApi } from "@/app/shell-api";
 import { Banner } from "@/components/banner";
 import { PageHeader, TitleBadge } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -8,6 +9,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { useDelayedLoading } from "@/lib/use-delayed";
 import { errorText } from "@/lib/utils";
 import { agentsApi, frameUrl, type AgentsStatus } from "@/views/agents/api";
+import { AgentsFrame, agentsFrame } from "@/views/agents/frame-host";
 
 /*
  * Agents: Dayflow's Agents tab (Views/UI/Agents/AgentPlaybackView.swift). Start runs the
@@ -17,8 +19,9 @@ import { agentsApi, frameUrl, type AgentsStatus } from "@/views/agents/api";
  *
  * The frame holds a page from http://127.0.0.1:<port>, another origin than Daytrace's. Tauri
  * rejects IPC calls from it (remote origin, no capability for it), and the sandbox keeps it from
- * opening windows or navigating Daytrace itself. Its links to websites therefore do nothing here;
- * "Open in browser" shows the same dashboard with working links.
+ * navigating Daytrace itself. Its links that open a new window go to the backend's new-window
+ * handler, which opens web links in the default browser (tray.rs, features/agents.rs). The frame
+ * itself lives in the shell (frame-host.tsx), so switching sections does not reload it.
  */
 
 const POLL_STARTING_MS = 1000;
@@ -81,6 +84,12 @@ export default function AgentsSection() {
   const showSkeleton = useDelayedLoading(status === null && loadError === null);
   const running = status?.state === "running" ? status : null;
 
+  // The frame stays loaded across section switches while the dashboard runs; once it is known
+  // to have stopped, it goes.
+  React.useEffect(() => {
+    if (status && status.state !== "running") agentsFrame.drop();
+  }, [status]);
+
   return (
     <>
       <PageHeader
@@ -140,10 +149,7 @@ function Announcer({ status }: { status: AgentsStatus | null }) {
 }
 
 function Dashboard({ url }: { url: string }) {
-  const src = frameUrl(url);
-  const [loaded, setLoaded] = React.useState(false);
-  const showLoading = useDelayedLoading(!loaded);
-  if (!src) {
+  if (!frameUrl(url)) {
     return (
       <div className="px-(--page-x) py-5">
         <Banner tone="error" title="Daytrace won’t show this address" details={url}>
@@ -152,24 +158,7 @@ function Dashboard({ url }: { url: string }) {
       </div>
     );
   }
-  return (
-    <div className="relative flex min-h-0 flex-1 flex-col">
-      {showLoading && (
-        <p className="absolute inset-x-0 top-6 flex items-center justify-center gap-2 text-meta text-muted-foreground">
-          <Spinner aria-hidden="true" role={undefined} aria-label={undefined} /> Loading the dashboard…
-        </p>
-      )}
-      <iframe
-        title="AgentPlayback dashboard"
-        src={src}
-        // Scripts and its own storage on its own origin; no popups, no navigating Daytrace.
-        sandbox="allow-scripts allow-same-origin"
-        referrerPolicy="no-referrer"
-        onLoad={() => setLoaded(true)}
-        className="min-h-0 w-full flex-1 border-0"
-      />
-    </div>
-  );
+  return <AgentsFrame url={url} />;
 }
 
 function IntroSkeleton() {
@@ -204,9 +193,14 @@ function Intro({
             tone="warn"
             title="Node.js is needed"
             actions={
-              <Button onClick={onRecheck} disabled={busy !== null}>
-                {busy === "recheck" ? <Spinner aria-hidden="true" role={undefined} aria-label={undefined} /> : <RefreshCw aria-hidden="true" />} Re-check
-              </Button>
+              <>
+                <Button onClick={onRecheck} disabled={busy !== null}>
+                  {busy === "recheck" ? <Spinner aria-hidden="true" role={undefined} aria-label={undefined} /> : <RefreshCw aria-hidden="true" />} Re-check
+                </Button>
+                <Button variant="ghost" onClick={() => void shellApi.openLink("nodejs").catch(() => undefined)}>
+                  <ExternalLink aria-hidden="true" /> Open nodejs.org
+                </Button>
+              </>
             }
           >
             <p>{status.reason}</p>
