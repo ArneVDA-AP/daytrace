@@ -103,6 +103,12 @@ pub const SKIP_IDLE: &str = "idle";
 pub const SYSTEM_CATEGORY: &str = "System";
 pub const ERROR_TITLE: &str = "Processing failed";
 
+/// Metadata key set on cards the user renamed or recategorized. Such cards are never rewritten
+/// by the analysis window (see `replace_cards_in_range`); the key holds `{at, fields}`.
+pub const USER_EDITED_KEY: &str = "userEdited";
+/// SQL condition that is true for cards without the user-edited mark.
+const NOT_USER_EDITED: &str = "instr(coalesce(metadata, ''), '\"userEdited\":') = 0";
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Shot {
@@ -508,12 +514,13 @@ impl Db {
             .optional()?)
     }
 
-    /// The most recent live card ending at or before `ts`.
+    /// The most recent live card ending at or before `ts`. Cards the user edited are skipped, so
+    /// an Idle card is never stretched over them.
     pub fn last_card_ending_by(&self, ts: i64) -> Result<Option<StoredCard>> {
         Ok(self
             .c()
             .query_row(
-                &format!("SELECT {CARD_COLS} FROM timeline_cards WHERE is_deleted = 0 AND end_ts <= ? ORDER BY end_ts DESC LIMIT 1"),
+                &format!("SELECT {CARD_COLS} FROM timeline_cards WHERE is_deleted = 0 AND end_ts <= ? AND {NOT_USER_EDITED} ORDER BY end_ts DESC LIMIT 1"),
                 [ts],
                 card_from_row,
             )
@@ -523,14 +530,18 @@ impl Db {
     /// Dayflow's replaceTimelineCardsInRange: soft-delete every live card overlapping [from, to)
     /// except System cards owned by other batches, then insert `cards` under `batch_id`.
     /// With `keep_idle`, idle-shortcut cards (never shown to the model) are left in place.
+    /// Cards the user edited (`USER_EDITED_KEY`) are always left in place.
     pub fn replace_cards_in_range(&self, from: i64, to: i64, cards: &[ResolvedCard], batch_id: i64, keep_idle: bool) -> Result<usize> {
         let mut c = self.c();
         let tx = c.transaction()?;
         tx.execute(
-            "UPDATE timeline_cards SET is_deleted = 1 WHERE is_deleted = 0
-             AND ((start_ts < ?1 AND end_ts > ?2) OR (start_ts >= ?2 AND start_ts < ?1))
-             AND (category != 'System' OR batch_id = ?3)
-             AND (?4 = 0 OR instr(coalesce(metadata, ''), '\"idle\":') = 0)",
+            &format!(
+                "UPDATE timeline_cards SET is_deleted = 1 WHERE is_deleted = 0
+                 AND ((start_ts < ?1 AND end_ts > ?2) OR (start_ts >= ?2 AND start_ts < ?1))
+                 AND (category != 'System' OR batch_id = ?3)
+                 AND (?4 = 0 OR instr(coalesce(metadata, ''), '\"idle\":') = 0)
+                 AND {NOT_USER_EDITED}"
+            ),
             params![to, from, batch_id, keep_idle as i64],
         )?;
         let mut n = 0;
@@ -572,6 +583,17 @@ impl Db {
         }
         tx.commit()?;
         Ok(n)
+    }
+
+    /// Ids of live cards overlapping [from, to) that carry the user-edited mark.
+    pub fn user_edited_card_ids(&self, from: i64, to: i64) -> Result<std::collections::HashSet<i64>> {
+        let c = self.c();
+        let mut st = c.prepare(&format!(
+            "SELECT id FROM timeline_cards WHERE is_deleted = 0
+             AND ((start_ts < ?1 AND end_ts > ?2) OR (start_ts >= ?2 AND start_ts < ?1)) AND NOT ({NOT_USER_EDITED})"
+        ))?;
+        let rows = st.query_map([to, from], |r| r.get::<_, i64>(0))?.collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
     }
 
     // ---- llm call log ----
