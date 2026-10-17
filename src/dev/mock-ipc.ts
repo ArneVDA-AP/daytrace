@@ -24,11 +24,12 @@ import type { ChatInfo, ChatMessage, Conversation, ConversationDetail } from "@/
 import type { GoalItem, GoalsView } from "@/views/journal-api";
 import type { RecapView } from "@/views/insights-api";
 import type { DayExtras } from "@/timeline-extras-api";
-import type { StorageUsage } from "@/settings/storage-api";
+import type { StorageUsage } from "@/views/settings/storage-api";
 import { at, dayBounds, shiftDay } from "@/lib/time";
 import { allCards, DEFAULT_CATEGORIES, fmtClock, makeDataset } from "@/dev/fixtures";
 import { computeDay, computeWeek } from "@/dev/insights";
 import { screenSvg } from "@/dev/screens";
+import { applySettingsMock } from "@/dev/settings";
 
 export const DEV_MOCK_MARKER = "DAYTRACE_DEV_MOCK_IPC";
 
@@ -530,6 +531,8 @@ export function installMockIpc() {
     "plugin:dialog|save": () => "C:\\Users\\Preview\\Documents\\daytrace-export.md",
     "plugin:dialog|open": () => "C:\\Users\\Preview\\OneDrive\\Daytrace",
   };
+
+  applySettingsMock(handlers, { q, flags, settings, now, dataDir: dto().dataDir });
 
   mockWindows("main");
   mockIPC(
