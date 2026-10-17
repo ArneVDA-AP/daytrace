@@ -151,7 +151,6 @@ def main():
                     if "keys" in o:
                         page.keyboard.press(o["keys"])
                     page.wait_for_timeout(int(o.get("wait", 250)))
-                    page.mouse.move(0, 0) if "click" not in o else None
                     file = os.path.join(a.out, f"{name}-{theme}.png")
                     page.screenshot(path=file, full_page=o.get("full") == "1")
                     print(file)
