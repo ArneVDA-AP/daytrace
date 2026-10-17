@@ -11,6 +11,8 @@ export interface ChatInfo {
   timelineModel: string;
   problem: string | null;
   busy: boolean;
+  /** The conversation being answered, once it has an id. */
+  busyConversationId: number | null;
   welcomePrompts: string[];
 }
 
@@ -104,6 +106,24 @@ export function providerName(id: string | null): string {
     default:
       return "";
   }
+}
+
+/**
+ * The question shown before a link from an answer opens. Answers are shaped by text read from
+ * the screen, so a link may point somewhere other than its label says (or carry data in its
+ * address); the full host and address are shown. Returns null for a link that is not http(s).
+ */
+export function linkConfirmText(url: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+  // URL.host is the punycode form, so look-alike letters from other scripts stay visible.
+  const address = u.href.length > 400 ? `${u.href.slice(0, 400)}…` : u.href;
+  return `Open this link in your browser?\n\nWebsite: ${u.host}\n\nFull address:\n${address}\n\nLinks in answers can come from text on your screen. Open it only if you know this website.`;
 }
 
 /** Errors from invoke arrive as strings. */

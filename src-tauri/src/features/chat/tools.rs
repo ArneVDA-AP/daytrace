@@ -23,8 +23,6 @@ const SEARCH_DEFAULT_DAYS: i64 = 90;
 
 pub struct ToolContext {
     pub db: Db,
-    /// Observations (screen transcriptions) are deleted after this many days; cards stay.
-    pub retention_days: u32,
     pub capture_interval_secs: u64,
     pub idle_category: String,
 }
@@ -475,12 +473,7 @@ fn fetch_observations(ctx: &ToolContext, args: &Value) -> R {
         "items": groups.into_iter().map(|(day, observations)| json!({"day": day, "observations": observations})).collect::<Vec<_>>(),
     });
     if total == 0 {
-        let retention_start = now_ts() - ctx.retention_days as i64 * 86400;
-        out["note"] = json!(if range.to <= retention_start {
-            format!("Observations are kept for {} days and these days are older. Timeline cards are kept; use fetchTimeline instead.", ctx.retention_days)
-        } else {
-            "No observations found. Recording may not have been active on these days.".to_string()
-        });
+        out["note"] = json!("No observations found. Recording may not have been active on these days.");
     }
     Ok(ToolOutput { content: out.to_string(), summary, ok: true, card_ids: vec![] })
 }
@@ -753,9 +746,6 @@ fn card_details(ctx: &ToolContext, args: &Value) -> R {
         }
         observations.push(v);
     }
-    if all_obs.is_empty() && card.end_ts < now_ts() - ctx.retention_days as i64 * 86400 {
-        item.insert("observationsNote".into(), json!(format!("Observations are kept for {} days; this card is older.", ctx.retention_days)));
-    }
     item.insert("observations".into(), json!(observations));
     if let Some(n) = note {
         item.insert("note".into(), json!(n));
@@ -825,7 +815,7 @@ pub(crate) mod tests {
             Some("m"),
         )
         .unwrap();
-        ToolContext { db, retention_days: 7, capture_interval_secs: 10, idle_category: "Idle".into() }
+        ToolContext { db, capture_interval_secs: 10, idle_category: "Idle".into() }
     }
 
     fn parse(o: &ToolOutput) -> Value {
@@ -893,7 +883,7 @@ pub(crate) mod tests {
         assert_eq!(v["items"][0]["day"], "2026-10-16");
         assert_eq!(v["items"][0]["observations"][1]["observation"], "Reading a thread on x.com");
         let old = parse(&execute(&c, "fetchObservations", &json!({"date": "2020-01-01"})));
-        assert!(old["note"].as_str().unwrap().contains("kept for 7 days"));
+        assert!(old["note"].as_str().unwrap().starts_with("No observations found."));
     }
 
     #[test]

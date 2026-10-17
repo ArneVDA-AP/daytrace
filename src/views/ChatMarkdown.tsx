@@ -13,17 +13,38 @@ export interface MarkdownProps {
   onExternalLink: (url: string) => void;
 }
 
+// Every pattern here must stay linear on long lines (no two adjacent quantifiers that can match
+// the same characters): answers are model output and can contain thousands of spaces or
+// brackets. Trailing heading markers and table separators are handled with string operations.
+// Lines are split on every line terminator, so `.` matches any character of a line.
 const LIST_RE = /^(\s*)([-*+]|\d{1,3}[.)])\s+(.*)$/;
 const FENCE_RE = /^\s*```/;
-const HEADING_RE = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
+const HEADING_RE = /^\s{0,3}(#{1,6})\s+(.*)$/;
 const RULE_RE = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
-const TABLE_SEP_RE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+const TABLE_CELL_SEP_RE = /^:?-{2,}:?$/;
+/** Quotes and inline markup nested deeper than this are shown as plain text. */
+const MAX_DEPTH = 8;
 
 type Ctx = Omit<MarkdownProps, "text">;
 
 export function ChatMarkdown({ text, renderCard, onExternalLink }: MarkdownProps) {
   const ctx: Ctx = { renderCard, onExternalLink };
-  return <div className="chat-md">{blocks(text.replace(/\r\n?/g, "\n").split("\n"), ctx, "b")}</div>;
+  return <div className="chat-md">{blocks(text.replace(/\r\n?|[\u2028\u2029]/g, "\n").split("\n"), ctx, "b")}</div>;
+}
+
+/** Heading text without the optional closing run of `#` (which must follow a space) and trailing spaces. */
+export function headingText(raw: string): string {
+  const t = raw.trimEnd();
+  let i = t.length;
+  while (i > 0 && t[i - 1] === "#") i--;
+  if (i < t.length && (i === 0 || t[i - 1] === " " || t[i - 1] === "\t")) return t.slice(0, i).trimEnd();
+  return t;
+}
+
+/** A table's separator row, such as `| --- | :--: |`. */
+export function isTableSep(line: string): boolean {
+  const c = cells(line);
+  return c.length > 0 && c.every((x) => TABLE_CELL_SEP_RE.test(x));
 }
 
 function startsBlock(line: string, next: string | undefined): boolean {
@@ -33,7 +54,7 @@ function startsBlock(line: string, next: string | undefined): boolean {
     RULE_RE.test(line) ||
     LIST_RE.test(line) ||
     /^\s*>/.test(line) ||
-    (line.includes("|") && next !== undefined && TABLE_SEP_RE.test(next))
+    (line.includes("|") && next !== undefined && isTableSep(next))
   );
 }
 
@@ -42,7 +63,7 @@ function indentOf(line: string): number {
   return m ? m[1].replace(/\t/g, "    ").length : 0;
 }
 
-function blocks(lines: string[], ctx: Ctx, keyPrefix: string): ReactNode[] {
+function blocks(lines: string[], ctx: Ctx, keyPrefix: string, depth = 0): ReactNode[] {
   const out: ReactNode[] = [];
   let i = 0;
   while (i < lines.length) {
@@ -68,7 +89,7 @@ function blocks(lines: string[], ctx: Ctx, keyPrefix: string): ReactNode[] {
     if (h) {
       const level = Math.min(6, h[1].length + 2);
       const Tag = `h${level}` as "h3" | "h4" | "h5" | "h6";
-      out.push(<Tag key={key}>{inline(h[2], ctx, key)}</Tag>);
+      out.push(<Tag key={key}>{inline(headingText(h[2]), ctx, key)}</Tag>);
       i++;
       continue;
     }
@@ -77,13 +98,13 @@ function blocks(lines: string[], ctx: Ctx, keyPrefix: string): ReactNode[] {
       i++;
       continue;
     }
-    if (/^\s*>/.test(line)) {
+    if (/^\s*>/.test(line) && depth < MAX_DEPTH) {
       const body: string[] = [];
       while (i < lines.length && /^\s*>/.test(lines[i])) body.push(lines[i++].replace(/^\s*>\s?/, ""));
-      out.push(<blockquote key={key}>{blocks(body, ctx, key)}</blockquote>);
+      out.push(<blockquote key={key}>{blocks(body, ctx, key, depth + 1)}</blockquote>);
       continue;
     }
-    if (line.includes("|") && i + 1 < lines.length && TABLE_SEP_RE.test(lines[i + 1])) {
+    if (line.includes("|") && i + 1 < lines.length && isTableSep(lines[i + 1])) {
       const header = cells(line);
       i += 2;
       const rows: string[][] = [];
@@ -202,55 +223,64 @@ function cells(line: string): string[] {
   return t.split("|").map((c) => c.trim());
 }
 
+// Link labels and targets stop at the next bracket, so a run of `[` or `[a](` cannot make every
+// start position scan to the end of the line.
 const INLINE: { re: RegExp; kind: "code" | "link" | "strong" | "em" | "del" }[] = [
-  { re: /`([^`]+)`/, kind: "code" },
-  { re: /\[([^\]\n]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/, kind: "link" },
-  { re: /\*\*(.+?)\*\*|__(.+?)__/, kind: "strong" },
-  { re: /~~(.+?)~~/, kind: "del" },
-  { re: /\*([^*\s](?:[^*]*[^*\s])?)\*|(?<![\w])_([^_\s](?:[^_]*[^_\s])?)_(?![\w])/, kind: "em" },
+  { re: /`([^`]+)`/g, kind: "code" },
+  { re: /\[([^[\]\n]+)\]\(([^\s)[\]]+)(?:\s+"[^"]*")?\)/g, kind: "link" },
+  { re: /\*\*(.+?)\*\*|__(.+?)__/g, kind: "strong" },
+  { re: /~~(.+?)~~/g, kind: "del" },
+  { re: /\*([^*\s](?:[^*]*[^*\s])?)\*|(?<![\w])_([^_\s](?:[^_]*[^_\s])?)_(?![\w])/g, kind: "em" },
 ];
 
-function inline(text: string, ctx: Ctx, key: string): ReactNode[] {
+function inline(text: string, ctx: Ctx, key: string, depth = 0): ReactNode[] {
+  if (depth >= MAX_DEPTH) return [text];
   const out: ReactNode[] = [];
-  let rest = text;
+  // Each pattern's next match is searched once and reused until the text before it is consumed,
+  // so a pattern that does not occur again is not searched again for every other match.
+  const next = INLINE.map((p) => ({ kind: p.kind, re: new RegExp(p.re.source, "g"), m: undefined as RegExpExecArray | null | undefined }));
+  let pos = 0;
   let n = 0;
-  while (rest) {
-    let best: { m: RegExpExecArray; kind: (typeof INLINE)[number]["kind"] } | null = null;
-    for (const p of INLINE) {
-      const m = p.re.exec(rest);
-      if (m && (!best || m.index < best.m.index)) best = { m, kind: p.kind };
+  while (pos < text.length) {
+    let best: (typeof next)[number] | null = null;
+    for (const p of next) {
+      if (p.m === undefined || (p.m !== null && p.m.index < pos)) {
+        p.re.lastIndex = pos;
+        p.m = p.re.exec(text);
+      }
+      if (p.m && (!best || p.m.index < best.m!.index)) best = p;
     }
-    if (!best) {
-      out.push(rest);
+    if (!best || !best.m) {
+      out.push(text.slice(pos));
       break;
     }
-    const { m, kind } = best;
-    if (m.index > 0) out.push(rest.slice(0, m.index));
+    const m = best.m;
+    if (m.index > pos) out.push(text.slice(pos, m.index));
     const k = `${key}-${n++}`;
-    switch (kind) {
+    switch (best.kind) {
       case "code":
         out.push(<code key={k}>{m[1]}</code>);
         break;
       case "strong":
-        out.push(<strong key={k}>{inline(m[1] ?? m[2], ctx, k)}</strong>);
+        out.push(<strong key={k}>{inline(m[1] ?? m[2], ctx, k, depth + 1)}</strong>);
         break;
       case "em":
-        out.push(<em key={k}>{inline(m[1] ?? m[2], ctx, k)}</em>);
+        out.push(<em key={k}>{inline(m[1] ?? m[2], ctx, k, depth + 1)}</em>);
         break;
       case "del":
-        out.push(<del key={k}>{inline(m[1], ctx, k)}</del>);
+        out.push(<del key={k}>{inline(m[1], ctx, k, depth + 1)}</del>);
         break;
       case "link":
-        out.push(link(m[1], m[2], ctx, k));
+        out.push(link(m[1], m[2], ctx, k, depth + 1));
         break;
     }
-    rest = rest.slice(m.index + m[0].length);
+    pos = m.index + m[0].length;
   }
   return out;
 }
 
-function link(label: string, target: string, ctx: Ctx, key: string): ReactNode {
-  const children = inline(label, ctx, key);
+function link(label: string, target: string, ctx: Ctx, key: string, depth: number): ReactNode {
+  const children = inline(label, ctx, key, depth);
   const card = /^card:\/{0,2}(\d+)$/.exec(target);
   if (card) {
     return ctx.renderCard(Number(card[1]), children, key) ?? <Fragment key={key}>{children}</Fragment>;
@@ -260,10 +290,13 @@ function link(label: string, target: string, ctx: Ctx, key: string): ReactNode {
       <a
         key={key}
         href={target}
+        title={target}
         onClick={(e) => {
           e.preventDefault();
           ctx.onExternalLink(target);
         }}
+        // A middle click would ask the web view to open the address itself, without the question.
+        onAuxClick={(e) => e.preventDefault()}
       >
         {children}
       </a>

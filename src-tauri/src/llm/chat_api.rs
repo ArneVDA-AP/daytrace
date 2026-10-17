@@ -63,7 +63,10 @@ pub struct Reply {
     pub calls: Vec<ToolCall>,
     pub stop: Stop,
     pub raw: Value,
+    /// Input and output tokens as billed (Anthropic: uncached input only).
     pub usage: (Option<i64>, Option<i64>),
+    /// Every input token of the request, cached ones included; compared with the estimate.
+    pub prompt_tokens: Option<i64>,
 }
 
 pub struct ChatRequest<'a> {
@@ -78,27 +81,33 @@ pub trait ChatTransport: Sync {
     fn send(&self, req: &ChatRequest<'_>) -> impl Future<Output = Result<Reply>> + Send;
 }
 
-/// Provider-neutral input-token estimate for a request (conservative: counts JSON of tool
-/// definitions, tool inputs and echoed assistant blocks as text).
+/// Provider-neutral input-token estimate for a request. Prose (system prompt, questions,
+/// answers, tool descriptions) counts 3.5 characters per token like `estimate_tokens`; JSON
+/// (tool results, tool schemas, tool calls and echoed assistant blocks) counts 3, because quotes,
+/// braces, keys and numbers split into more tokens. The chat loop also scales this estimate by
+/// what the provider reported for the previous round.
 pub fn estimate_request_tokens(req: &ChatRequest<'_>) -> usize {
-    let mut chars = req.system.chars().count();
+    let mut prose = req.system.chars().count();
+    let mut json = 0;
     for t in req.tools {
-        chars += t.name.len() + t.description.chars().count() + t.parameters.to_string().len() + 20;
+        prose += t.name.len() + t.description.chars().count();
+        json += t.parameters.to_string().chars().count() + 20;
     }
     for m in req.messages {
-        chars += 20;
+        json += 20;
         match m {
-            Msg::User(s) => chars += s.chars().count(),
-            Msg::Assistant { text, calls, raw } => {
-                chars += match raw {
-                    Some(r) => r.to_string().chars().count(),
-                    None => text.chars().count() + calls.iter().map(|c| c.name.len() + c.input.to_string().len() + 30).sum::<usize>(),
-                };
-            }
-            Msg::ToolResults(rs) => chars += rs.iter().map(|r| r.content.chars().count() + 40).sum::<usize>(),
+            Msg::User(s) => prose += s.chars().count(),
+            Msg::Assistant { text, calls, raw } => match raw {
+                Some(r) => json += r.to_string().chars().count(),
+                None => {
+                    prose += text.chars().count();
+                    json += calls.iter().map(|c| c.name.len() + c.input.to_string().chars().count() + 30).sum::<usize>();
+                }
+            },
+            Msg::ToolResults(rs) => json += rs.iter().map(|r| r.content.chars().count() + 40).sum::<usize>(),
         }
     }
-    estimate_tokens(&[Part::Text(String::new())], None) + chars * 2 / 7
+    estimate_tokens(&[Part::Text(String::new())], None) + (prose * 2).div_ceil(7) + json.div_ceil(3)
 }
 
 pub struct ChatApi {
@@ -292,13 +301,11 @@ fn anthropic_reply(v: &Value) -> Result<Reply> {
         Some("refusal") => Stop::Refusal,
         _ => Stop::Other,
     };
-    Ok(Reply {
-        text,
-        calls,
-        stop,
-        raw: v["content"].clone(),
-        usage: (v["usage"]["input_tokens"].as_i64(), v["usage"]["output_tokens"].as_i64()),
-    })
+    let u = &v["usage"];
+    let input = u["input_tokens"].as_i64();
+    // With prompt caching, input_tokens leaves out the cached part of the prompt.
+    let prompt_tokens = input.map(|i| i + u["cache_creation_input_tokens"].as_i64().unwrap_or(0) + u["cache_read_input_tokens"].as_i64().unwrap_or(0));
+    Ok(Reply { text, calls, stop, raw: v["content"].clone(), usage: (input, u["output_tokens"].as_i64()), prompt_tokens })
 }
 
 // ---- OpenAI-compatible chat completions ----
@@ -399,13 +406,8 @@ fn openai_reply(v: &Value) -> Result<Reply> {
             _ => Stop::Other,
         }
     };
-    Ok(Reply {
-        text,
-        calls,
-        stop,
-        raw: json!({"tool_calls": raw_calls}),
-        usage: (v["usage"]["prompt_tokens"].as_i64(), v["usage"]["completion_tokens"].as_i64()),
-    })
+    let input = v["usage"]["prompt_tokens"].as_i64();
+    Ok(Reply { text, calls, stop, raw: json!({"tool_calls": raw_calls}), usage: (input, v["usage"]["completion_tokens"].as_i64()), prompt_tokens: input })
 }
 
 pub fn parse_reply(kind: ProviderKind, v: &Value) -> Result<Reply> {
@@ -520,7 +522,12 @@ mod tests {
         assert_eq!(r.calls[0].id, "toolu_9");
         assert_eq!(r.calls[0].input["date"], "2026-10-16");
         assert_eq!(r.usage, (Some(1200), Some(40)));
+        assert_eq!(r.prompt_tokens, Some(1200));
         assert_eq!(r.raw.as_array().unwrap().len(), 3, "thinking block kept for the echo");
+        let cached = json!({"content": [], "stop_reason": "end_turn",
+            "usage": {"input_tokens": 50, "cache_creation_input_tokens": 1000, "cache_read_input_tokens": 9000, "output_tokens": 5}});
+        let r = parse_reply(ProviderKind::Anthropic, &cached).unwrap();
+        assert_eq!((r.usage, r.prompt_tokens), ((Some(50), Some(5)), Some(10_050)), "cached input counts toward the prompt size");
 
         let done = json!({"content": [{"type": "text", "text": "Done"}], "stop_reason": "end_turn", "usage": {}});
         let r = parse_reply(ProviderKind::Anthropic, &done).unwrap();
@@ -557,6 +564,7 @@ mod tests {
         assert_eq!(r.raw["tool_calls"][1]["id"], "call_1");
         assert!(r.raw["tool_calls"][1]["function"]["arguments"].is_string());
         assert_eq!(r.usage, (Some(900), Some(30)));
+        assert_eq!(r.prompt_tokens, Some(900));
 
         // The echoed assistant message carries the raw calls with matching ids.
         let msgs = vec![
@@ -585,6 +593,13 @@ mod tests {
         let req2 = ChatRequest { system: "s", messages: &big, tools: &[], max_tokens: 10 };
         let b = estimate_request_tokens(&req2);
         assert!(a < 100 && b > MAX_INPUT_TOKENS, "{a} {b}");
+        // The same number of characters as a JSON tool result counts at 3 per token, not 3.5.
+        let text = vec![Msg::User("x".repeat(42_000))];
+        let tool = vec![Msg::ToolResults(vec![ToolResult { call_id: "t".into(), content: "x".repeat(42_000), is_error: false }])];
+        let as_text = estimate_request_tokens(&ChatRequest { system: "", messages: &text, tools: &[], max_tokens: 0 });
+        let as_json = estimate_request_tokens(&ChatRequest { system: "", messages: &tool, tools: &[], max_tokens: 0 });
+        assert!((11_990..12_100).contains(&as_text), "{as_text}");
+        assert!((13_990..14_100).contains(&as_json), "{as_json}");
 
         // The transport refuses an oversize request before any network I/O.
         let client = LlmClient::new(ProviderKind::Ollama, "http://127.0.0.1:9", "m", None, None).unwrap();

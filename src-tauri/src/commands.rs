@@ -37,7 +37,8 @@ pub fn get_settings(state: S) -> SettingsDto {
 
 #[tauri::command]
 pub fn save_settings(app: tauri::AppHandle, state: S, settings: Settings, api_key: Option<String>) -> CmdResult<SettingsDto> {
-    let settings = settings.sanitized();
+    let mut settings = settings.sanitized();
+    crate::features::chat::clear_model_on_provider_change(&state.settings(), &mut settings);
     settings.save(&state.paths.settings).map_err(err)?;
     if let Some(k) = api_key.filter(|k| !k.trim().is_empty()) {
         let slot = crate::config::key_slot(settings.provider, &settings.base_url).ok_or("This provider does not use an API key")?;

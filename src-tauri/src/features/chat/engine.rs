@@ -18,10 +18,21 @@ pub const MAX_TOOL_ROUNDS: usize = 8;
 pub const MAX_OUTPUT_TOKENS: u32 = 8192;
 /// Earlier messages of the conversation sent with a new question (oldest dropped first).
 pub const MAX_HISTORY_MESSAGES: usize = 40;
-/// Target for the estimated input of one request. The estimate counts 3.5 characters per token;
-/// JSON tool results tokenize denser, so the loop aims 20% under the 90k hard ceiling that
-/// `ChatApi` enforces.
+/// Target for the estimated input of one request: 20% under the 90k hard ceiling that `ChatApi`
+/// enforces. The estimate counts JSON at 3 characters per token and prose at 3.5; after each
+/// round the loop scales it by what the provider reported (`calibrate`).
 pub const INPUT_BUDGET: usize = MAX_INPUT_TOKENS * 4 / 5;
+/// The largest correction applied to the estimate.
+const MAX_SCALE: f64 = 3.0;
+
+/// The factor to apply to later estimates: the largest ratio of reported to estimated input
+/// tokens seen so far, never below 1 (the estimate is never trusted to shrink).
+pub fn calibrate(scale: f64, estimated: usize, reported: Option<i64>) -> f64 {
+    match reported {
+        Some(r) if r > 0 && estimated > 0 => scale.max(r as f64 / estimated as f64).clamp(1.0, MAX_SCALE),
+        _ => scale,
+    }
+}
 
 pub const ELIDED: &str = "[This earlier tool result was removed to keep the request small. Call the tool again if you still need it.]";
 pub const ROUNDS_EXCEEDED: &str = "The assistant exceeded the maximum tool-call rounds. Please try a narrower query.";
@@ -155,17 +166,20 @@ pub async fn run<T: ChatTransport>(
     let mut out = Outcome::default();
     let mut interim_text: Vec<String> = Vec::new();
     let mut round = 0;
+    let mut scale = 1.0;
     loop {
         if cancel.load(Ordering::SeqCst) {
             return Err(Cancelled.into());
         }
-        fit_to_budget(system, &specs, &mut messages, &mut history_len, INPUT_BUDGET)?;
+        fit_to_budget(system, &specs, &mut messages, &mut history_len, (INPUT_BUDGET as f64 / scale) as usize)?;
         on_progress(Progress::Thinking);
         let req = ChatRequest { system, messages: &messages, tools: &specs, max_tokens: MAX_OUTPUT_TOKENS };
+        let estimated = estimate_request_tokens(&req);
         let reply = tokio::select! {
             r = transport.send(&req) => r?,
             _ = wait_cancel(cancel) => return Err(Cancelled.into()),
         };
+        scale = calibrate(scale, estimated, reply.prompt_tokens);
         out.requests += 1;
         out.input_tokens += reply.usage.0.unwrap_or(0);
         out.output_tokens += reply.usage.1.unwrap_or(0);
@@ -295,7 +309,7 @@ mod tests {
     }
 
     fn text(t: &str) -> Reply {
-        Reply { text: t.into(), calls: vec![], stop: Stop::EndTurn, raw: json!([{"type": "text", "text": t}]), usage: (Some(100), Some(10)) }
+        Reply { text: t.into(), calls: vec![], stop: Stop::EndTurn, raw: json!([{"type": "text", "text": t}]), usage: (Some(100), Some(10)), prompt_tokens: None }
     }
 
     fn call(id: &str, name: &str, input: Value) -> Reply {
@@ -305,6 +319,7 @@ mod tests {
             stop: Stop::ToolUse,
             raw: json!([]),
             usage: (Some(200), Some(20)),
+            prompt_tokens: None,
         }
     }
 
@@ -350,13 +365,13 @@ mod tests {
     fn empty_and_cut_off_answers() {
         let c = ctx();
         let flag = AtomicBool::new(false);
-        let cut = Reply { text: String::new(), calls: vec![], stop: Stop::MaxTokens, raw: json!([]), usage: (None, None) };
+        let cut = Reply { text: String::new(), calls: vec![], stop: Stop::MaxTokens, raw: json!([]), usage: (None, None), prompt_tokens: None };
         let err = rt().block_on(run(&Script::new(vec![cut]), &c, "s", vec![], "q", &flag, &mut |_| {})).unwrap_err();
         assert!(err.to_string().contains("cut off"));
         // Text written before a final tool call is used when the last reply is empty.
         let mut first = call("t1", "daySummary", json!({"date": "2026-10-16"}));
         first.text = "Here is your day.".into();
-        let empty = Reply { text: String::new(), calls: vec![], stop: Stop::EndTurn, raw: json!([]), usage: (None, None) };
+        let empty = Reply { text: String::new(), calls: vec![], stop: Stop::EndTurn, raw: json!([]), usage: (None, None), prompt_tokens: None };
         let out = rt().block_on(run(&Script::new(vec![first, empty]), &c, "s", vec![], "q", &flag, &mut |_| {})).unwrap();
         assert_eq!(out.text, "Here is your day.");
     }
@@ -419,6 +434,39 @@ mod tests {
         let mut h = 0;
         let err = fit_to_budget("s", &[], &mut huge, &mut h, MAX_INPUT_TOKENS).unwrap_err();
         assert!(err.to_string().contains("too large"));
+    }
+
+    #[test]
+    fn calibration_only_grows_the_estimate() {
+        assert_eq!(calibrate(1.0, 1000, Some(1300)), 1.3);
+        assert_eq!(calibrate(1.3, 1000, Some(800)), 1.3, "a smaller report does not shrink it");
+        assert_eq!(calibrate(1.0, 1000, Some(500)), 1.0);
+        assert_eq!(calibrate(1.0, 1000, None), 1.0);
+        assert_eq!(calibrate(1.0, 100, Some(10_000)), MAX_SCALE);
+    }
+
+    #[test]
+    fn reported_usage_shrinks_the_next_request() {
+        // The first reply reports twice the estimated input; the second request must then fit
+        // under half the budget, so the big tool result of round one is elided before round two.
+        let c = ctx();
+        let flag = AtomicBool::new(false);
+        // History big enough to fit the budget unscaled but not at twice the size.
+        let history = vec![Msg::User("old".into()), Msg::Assistant { text: "y".repeat(INPUT_BUDGET * 7 / 2 * 2 / 3), calls: vec![], raw: None }];
+        let mut first_request = history.clone();
+        first_request.push(Msg::User("q".into()));
+        let estimated = estimate_request_tokens(&ChatRequest { system: "s", messages: &first_request, tools: &tools::specs(), max_tokens: 0 });
+        assert!(estimated < INPUT_BUDGET && estimated * 2 > INPUT_BUDGET);
+        let mut first = call("t1", "fetchTimeline", json!({"date": "2026-10-16"}));
+        first.prompt_tokens = Some(estimated as i64 * 2);
+        let mut second = call("t2", "fetchObservations", json!({"date": "2026-10-16"}));
+        second.prompt_tokens = Some(1);
+        let script = Script::new(vec![first, second, text("done")]);
+        let out = rt().block_on(run(&script, &c, "s", history, "q", &flag, &mut |_| {})).unwrap();
+        assert_eq!(out.text, "done");
+        let seen = script.seen.lock().unwrap();
+        assert_eq!(seen[0].len(), 3, "first request keeps the history");
+        assert!(matches!(&seen[1][0], Msg::User(q) if q == "q"), "history dropped once usage showed the estimate was low");
     }
 
     #[test]

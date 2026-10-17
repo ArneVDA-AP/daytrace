@@ -3,6 +3,7 @@ import type { ViewProps } from "./types";
 import {
   chatApi,
   errorText,
+  linkConfirmText,
   providerName,
   type ChatInfo,
   type ChatMemory,
@@ -218,7 +219,14 @@ export function ChatView(props: ViewProps) {
     }
   };
 
+  const openLink = (url: string) => {
+    const question = linkConfirmText(url);
+    if (!question || !window.confirm(question)) return;
+    chatApi.openLink(url).catch((e) => setError(errorText(e)));
+  };
+
   const remove = async (c: Conversation) => {
+    if (busy || c.id === info?.busyConversationId) return;
     if (!window.confirm(`Delete the chat "${c.title}"?`)) return;
     try {
       await chatApi.remove(c.id);
@@ -289,7 +297,13 @@ export function ChatView(props: ViewProps) {
                       <span className="chat-conv-title">{c.title}</span>
                       <span className="chat-conv-when">{conversationWhen(c)}</span>
                     </button>
-                    <button className="chat-conv-delete" onClick={() => remove(c)} disabled={busy} aria-label={`Delete conversation: ${c.title}`} title="Delete conversation">
+                    <button
+                      className="chat-conv-delete"
+                      onClick={() => remove(c)}
+                      disabled={busy || c.id === info?.busyConversationId}
+                      aria-label={`Delete conversation: ${c.title}`}
+                      title={c.id === info?.busyConversationId ? "This chat is still being answered" : "Delete conversation"}
+                    >
                       ×
                     </button>
                   </li>
@@ -388,7 +402,7 @@ export function ChatView(props: ViewProps) {
           ) : (
             <ol className="chat-log">
               {messages.map((m) => (
-                <MessageItem key={m.id} m={m} copied={copied === m.id} onCopy={() => copy(m)} onCitation={openCitation} />
+                <MessageItem key={m.id} m={m} copied={copied === m.id} onCopy={() => copy(m)} onCitation={openCitation} onLink={openLink} />
               ))}
               {pending !== null && (
                 <li className="chat-msg chat-msg-user">
@@ -474,7 +488,19 @@ export function ChatView(props: ViewProps) {
   );
 }
 
-function MessageItem({ m, copied, onCopy, onCitation }: { m: ChatMessage; copied: boolean; onCopy: () => void; onCitation: (c: Citation) => void }) {
+function MessageItem({
+  m,
+  copied,
+  onCopy,
+  onCitation,
+  onLink,
+}: {
+  m: ChatMessage;
+  copied: boolean;
+  onCopy: () => void;
+  onCitation: (c: Citation) => void;
+  onLink: (url: string) => void;
+}) {
   if (m.role === "user") {
     return (
       <li className="chat-msg chat-msg-user">
@@ -520,7 +546,7 @@ function MessageItem({ m, copied, onCopy, onCitation }: { m: ChatMessage; copied
       {tools}
       <ChatMarkdown
         text={m.content}
-        onExternalLink={(url) => chatApi.openLink(url).catch(() => {})}
+        onExternalLink={onLink}
         renderCard={(id, label, key) => {
           const c = byId.get(id);
           if (!c) return null;
