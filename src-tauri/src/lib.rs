@@ -7,6 +7,7 @@ mod commands;
 pub mod config;
 pub mod db;
 mod export;
+pub mod features;
 pub mod imaging;
 pub mod llm;
 pub mod platform;
@@ -72,6 +73,11 @@ pub fn run() {
             commands::test_provider,
             commands::export_markdown,
             commands::open_data_dir,
+            // insights commands
+            // chat commands
+            // journal commands
+            // platform_extras commands
+            // provider commands
         ])
         .build(tauri::generate_context!())
         .expect("error while building Daytrace")

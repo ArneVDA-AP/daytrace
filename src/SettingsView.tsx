@@ -1,5 +1,8 @@
 import { useState } from "react";
 import { api, Category, Pipeline, ProviderKind, Settings, SettingsDto } from "./api";
+import { ProviderAdvanced } from "./settings/ProviderAdvanced";
+import { RecapSection } from "./settings/RecapSection";
+import { PlatformSection } from "./settings/PlatformSection";
 
 const PROVIDERS: { id: ProviderKind; label: string; needsKey: boolean }[] = [
   { id: "anthropic", label: "Claude (Anthropic API)", needsKey: true },
@@ -152,6 +155,7 @@ export function SettingsView({ dto, onSaved, onClose }: { dto: SettingsDto; onSa
             <button className="ghost" onClick={runTest} disabled={busy !== null}>{busy === "test" ? "Testing…" : "Test connection"}</button>
             {test && <span className={test.ok ? "ok" : "bad"}>{test.text}</span>}
           </div>
+          <ProviderAdvanced s={s} set={set} />
         </section>
 
         <section>
@@ -244,6 +248,9 @@ export function SettingsView({ dto, onSaved, onClose }: { dto: SettingsDto; onSa
             <input value={s.outputLanguage} placeholder="English" onChange={(e) => set("outputLanguage", e.target.value)} />
           </label>
         </section>
+
+        <RecapSection s={s} set={set} />
+        <PlatformSection s={s} set={set} />
 
         <section>
           <h2>Your data</h2>

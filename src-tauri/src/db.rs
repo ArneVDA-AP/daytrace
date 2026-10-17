@@ -256,6 +256,11 @@ impl Db {
             let _ = conn.execute_batch(m);
         }
         conn.execute_batch(SCHEMA)?;
+        for s in crate::features::SCHEMAS {
+            if !s.trim().is_empty() {
+                conn.execute_batch(s)?;
+            }
+        }
         Ok(Db { conn: Arc::new(Mutex::new(conn)) })
     }
 
@@ -263,7 +268,18 @@ impl Db {
     pub fn memory() -> Db {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(SCHEMA).unwrap();
+        for s in crate::features::SCHEMAS {
+            if !s.trim().is_empty() {
+                conn.execute_batch(s).unwrap();
+            }
+        }
         Db { conn: Arc::new(Mutex::new(conn)) }
+    }
+
+    /// Direct connection access for feature modules (keep the guard short; never hold it across
+    /// an `.await`).
+    pub fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.c()
     }
 
     fn c(&self) -> std::sync::MutexGuard<'_, Connection> {

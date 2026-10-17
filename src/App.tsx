@@ -7,8 +7,21 @@ import { DayRibbon } from "./DayRibbon";
 import { SettingsView } from "./SettingsView";
 import { ExportPanel } from "./ExportPanel";
 import { StatusPill } from "./StatusPill";
+import { DailyView } from "./views/DailyView";
+import { WeeklyView } from "./views/WeeklyView";
+import { ChatView } from "./views/ChatView";
+import { JournalView } from "./views/JournalView";
+import type { ViewProps } from "./views/types";
 
-type View = "timeline" | "settings";
+type View = "timeline" | "daily" | "weekly" | "journal" | "chat" | "settings";
+
+const TABS: { id: View; label: string }[] = [
+  { id: "timeline", label: "Timeline" },
+  { id: "daily", label: "Daily" },
+  { id: "weekly", label: "Weekly" },
+  { id: "journal", label: "Journal" },
+  { id: "chat", label: "Chat" },
+];
 
 export default function App() {
   const [view, setView] = useState<View>("timeline");
@@ -75,6 +88,13 @@ export default function App() {
 
   return (
     <div className="app">
+      <nav className="tabs" aria-label="Sections">
+        {TABS.map((t) => (
+          <button key={t.id} className={view === t.id ? "tab on" : "tab"} aria-current={view === t.id ? "page" : undefined} onClick={() => setView(t.id)}>
+            {t.label}
+          </button>
+        ))}
+      </nav>
       <header className="topbar">
         <div className="daynav">
           <button className="icon" aria-label="Previous day" onClick={() => setDay(shiftDay(day, -1))}>‹</button>
@@ -101,7 +121,34 @@ export default function App() {
         </div>
       </header>
 
-      {view === "settings" ? (
+      {view !== "timeline" && view !== "settings" ? (
+        (() => {
+          const props: ViewProps = {
+            day,
+            setDay,
+            today: status.today,
+            settings,
+            status,
+            categories,
+            colorFor,
+            openTimeline: (d, cardId) => {
+              setDay(d);
+              setSelected(cardId ?? null);
+              setView("timeline");
+            },
+          };
+          switch (view) {
+            case "daily":
+              return <DailyView {...props} />;
+            case "weekly":
+              return <WeeklyView {...props} />;
+            case "journal":
+              return <JournalView {...props} />;
+            case "chat":
+              return <ChatView {...props} />;
+          }
+        })()
+      ) : view === "settings" ? (
         <SettingsView
           dto={settings}
           onSaved={(dto) => {
