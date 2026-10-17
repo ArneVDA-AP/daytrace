@@ -14,7 +14,7 @@
  *   ?appearance=light|dark|system   Settings > Appearance
  *   ?provider=anthropic|ollama|lm_studio|openai_compatible|claude_cli
  *   ?latency=400         delay every answer (ms) to see loading states
- *   ?chat=empty          no chat conversations yet
+ *   ?chat=empty          no chat conversations yet (more Goals and Chat variants: src/dev/goalschat.ts)
  * Example: http://localhost:1420/?status=offline,away#/timeline
  */
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
@@ -29,6 +29,7 @@ import { at, dayBounds, shiftDay } from "@/lib/time";
 import { allCards, DEFAULT_CATEGORIES, fmtClock, makeDataset } from "@/dev/fixtures";
 import { computeDay, computeWeek } from "@/dev/insights";
 import { screenSvg } from "@/dev/screens";
+import { goalsChatHandlers } from "@/dev/goalschat";
 
 export const DEV_MOCK_MARKER = "DAYTRACE_DEV_MOCK_IPC";
 
@@ -530,6 +531,9 @@ export function installMockIpc() {
     "plugin:dialog|save": () => "C:\\Users\\Preview\\Documents\\daytrace-export.md",
     "plugin:dialog|open": () => "C:\\Users\\Preview\\OneDrive\\Daytrace",
   };
+
+  // Goals and Chat: richer fixtures and variants (?goals=…, ?chat=…) from src/dev/goalschat.ts.
+  Object.assign(handlers, goalsChatHandlers({ ds, settings, provider, q, now, cardsOf, hasApiKey: () => hasApiKey }));
 
   mockWindows("main");
   mockIPC(

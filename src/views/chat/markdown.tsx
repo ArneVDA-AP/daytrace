@@ -1,22 +1,32 @@
 import { Fragment, type ReactNode } from "react";
 
-/**
+/*
  * A small Markdown renderer for chat answers. Everything becomes React elements and text nodes;
  * model output never reaches innerHTML. Supports headings, paragraphs, bullet and numbered lists
  * (nested by indentation), block quotes, fenced code, rules, pipe tables, and inline bold,
- * italic, strikethrough, code and links. `card:<id>` links become buttons via `onCard`.
+ * italic, strikethrough, code and links.
+ *
+ * Citations: a `[words](card:<id>)` link keeps its words as plain text and puts a card chip after
+ * the sentence it belongs to (after the next ".", "!" or "?" that ends a sentence, or at the end
+ * of the line, list item, table cell or heading).
  */
-export interface MarkdownProps {
-  text: string;
-  /** Renders a `card:<id>` link; return null to show the label as plain text. */
-  renderCard: (id: number, label: ReactNode, key: string) => ReactNode;
+
+export interface MarkdownOptions {
+  /** The chip for a cited card, or null to show only the link words (unknown card). */
+  cardChip: (id: number, key: string) => ReactNode | null;
   onExternalLink: (url: string) => void;
+}
+
+export interface RenderedMarkdown {
+  nodes: ReactNode[];
+  /** Card ids that got a chip. */
+  cardIds: Set<number>;
 }
 
 // Every pattern here must stay linear on long lines (no two adjacent quantifiers that can match
 // the same characters): answers are model output and can contain thousands of spaces or
-// brackets. Trailing heading markers and table separators are handled with string operations.
-// Lines are split on every line terminator, so `.` matches any character of a line.
+// brackets. Trailing heading markers, table separators and sentence ends are handled with string
+// operations. Lines are split on every line terminator, so `.` matches any character of a line.
 const LIST_RE = /^(\s*)([-*+]|\d{1,3}[.)])\s+(.*)$/;
 const FENCE_RE = /^\s*```/;
 const HEADING_RE = /^\s{0,3}(#{1,6})\s+(.*)$/;
@@ -25,11 +35,19 @@ const TABLE_CELL_SEP_RE = /^:?-{2,}:?$/;
 /** Quotes and inline markup nested deeper than this are shown as plain text. */
 const MAX_DEPTH = 8;
 
-type Ctx = Omit<MarkdownProps, "text">;
+interface Ctx extends MarkdownOptions {
+  cardIds: Set<number>;
+}
 
-export function ChatMarkdown({ text, renderCard, onExternalLink }: MarkdownProps) {
-  const ctx: Ctx = { renderCard, onExternalLink };
-  return <div className="chat-md">{blocks(text.replace(/\r\n?|[\u2028\u2029]/g, "\n").split("\n"), ctx, "b")}</div>;
+/** One run of inline text (a line, list item, cell or heading) collects its chips here. */
+interface Flow {
+  queue: { id: number; node: ReactNode }[];
+}
+
+export function renderMarkdown(text: string, opts: MarkdownOptions): RenderedMarkdown {
+  const ctx: Ctx = { ...opts, cardIds: new Set() };
+  const nodes = blocks(text.replace(/\r\n?|[\u2028\u2029]/g, "\n").split("\n"), ctx, "b");
+  return { nodes, cardIds: ctx.cardIds };
 }
 
 /** Heading text without the optional closing run of `#` (which must follow a space) and trailing spaces. */
@@ -45,6 +63,29 @@ export function headingText(raw: string): string {
 export function isTableSep(line: string): boolean {
   const c = cells(line);
   return c.length > 0 && c.every((x) => TABLE_CELL_SEP_RE.test(x));
+}
+
+const CLOSERS = "\"')]”’»";
+
+/** Index just after the first sentence end in `s` (punctuation, closing quotes, then a space or the end), or -1. */
+export function sentenceEnd(s: string): number {
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch !== "." && ch !== "!" && ch !== "?") continue;
+    let j = i + 1;
+    while (j < s.length && CLOSERS.includes(s[j])) j++;
+    if (j === s.length || s[j] === " " || s[j] === "\t" || s[j] === "\u00a0") return j;
+    i = j - 1;
+  }
+  return -1;
+}
+
+/** True when `s` ends a sentence (ignoring trailing spaces and closing quotes). */
+function endsSentence(s: string): boolean {
+  let i = s.length - 1;
+  while (i >= 0 && (s[i] === " " || s[i] === "\t")) i--;
+  while (i >= 0 && CLOSERS.includes(s[i])) i--;
+  return i >= 0 && (s[i] === "." || s[i] === "!" || s[i] === "?");
 }
 
 function startsBlock(line: string, next: string | undefined): boolean {
@@ -63,6 +104,13 @@ function indentOf(line: string): number {
   return m ? m[1].replace(/\t/g, "    ").length : 0;
 }
 
+const HEADING_CLASS: Record<number, string> = {
+  3: "text-lead font-semibold",
+  4: "text-body font-semibold",
+  5: "text-body font-semibold",
+  6: "text-body font-semibold text-muted-foreground",
+};
+
 function blocks(lines: string[], ctx: Ctx, keyPrefix: string, depth = 0): ReactNode[] {
   const out: ReactNode[] = [];
   let i = 0;
@@ -79,7 +127,7 @@ function blocks(lines: string[], ctx: Ctx, keyPrefix: string, depth = 0): ReactN
       while (i < lines.length && !FENCE_RE.test(lines[i])) body.push(lines[i++]);
       i++; // closing fence
       out.push(
-        <pre key={key} className="chat-md-code">
+        <pre key={key} className="scroll-thin overflow-x-auto rounded-md border bg-surface-2 px-3 py-2 font-mono text-meta">
           <code>{body.join("\n")}</code>
         </pre>,
       );
@@ -89,19 +137,27 @@ function blocks(lines: string[], ctx: Ctx, keyPrefix: string, depth = 0): ReactN
     if (h) {
       const level = Math.min(6, h[1].length + 2);
       const Tag = `h${level}` as "h3" | "h4" | "h5" | "h6";
-      out.push(<Tag key={key}>{inline(headingText(h[2]), ctx, key)}</Tag>);
+      out.push(
+        <Tag key={key} className={`mt-1 ${HEADING_CLASS[level]}`}>
+          {flow(headingText(h[2]), ctx, key)}
+        </Tag>,
+      );
       i++;
       continue;
     }
     if (RULE_RE.test(line)) {
-      out.push(<hr key={key} />);
+      out.push(<hr key={key} className="border-t" />);
       i++;
       continue;
     }
     if (/^\s*>/.test(line) && depth < MAX_DEPTH) {
       const body: string[] = [];
       while (i < lines.length && /^\s*>/.test(lines[i])) body.push(lines[i++].replace(/^\s*>\s?/, ""));
-      out.push(<blockquote key={key}>{blocks(body, ctx, key, depth + 1)}</blockquote>);
+      out.push(
+        <blockquote key={key} className="flex flex-col gap-2 border-l-2 border-border-strong pl-3 text-muted-foreground">
+          {blocks(body, ctx, key, depth + 1)}
+        </blockquote>,
+      );
       continue;
     }
     if (line.includes("|") && i + 1 < lines.length && isTableSep(lines[i + 1])) {
@@ -110,12 +166,14 @@ function blocks(lines: string[], ctx: Ctx, keyPrefix: string, depth = 0): ReactN
       const rows: string[][] = [];
       while (i < lines.length && lines[i].includes("|") && lines[i].trim() !== "") rows.push(cells(lines[i++]));
       out.push(
-        <div key={key} className="chat-md-table">
-          <table>
+        <div key={key} className="scroll-thin max-w-full overflow-x-auto">
+          <table className="border-collapse text-meta">
             <thead>
               <tr>
                 {header.map((c, j) => (
-                  <th key={j}>{inline(c, ctx, `${key}-h${j}`)}</th>
+                  <th key={j} scope="col" className="border-b border-border-strong px-3 py-1.5 text-left font-semibold first:pl-0">
+                    {flow(c, ctx, `${key}-h${j}`)}
+                  </th>
                 ))}
               </tr>
             </thead>
@@ -123,7 +181,9 @@ function blocks(lines: string[], ctx: Ctx, keyPrefix: string, depth = 0): ReactN
               {rows.map((r, ri) => (
                 <tr key={ri}>
                   {header.map((_, j) => (
-                    <td key={j}>{inline(r[j] ?? "", ctx, `${key}-${ri}-${j}`)}</td>
+                    <td key={j} className="tnum border-b px-3 py-1.5 align-top first:pl-0">
+                      {flow(r[j] ?? "", ctx, `${key}-${ri}-${j}`)}
+                    </td>
                   ))}
                 </tr>
               ))}
@@ -148,7 +208,7 @@ function blocks(lines: string[], ctx: Ctx, keyPrefix: string, depth = 0): ReactN
         {para.map((l, j) => (
           <Fragment key={j}>
             {j > 0 && <br />}
-            {inline(l, ctx, `${key}-${j}`)}
+            {flow(l, ctx, `${key}-${j}`)}
           </Fragment>
         ))}
       </p>,
@@ -199,13 +259,17 @@ function list(lines: string[], start: number, ctx: Ctx, key: string): [ReactNode
   const Tag = ordered ? "ol" : "ul";
   const startNum = ordered ? parseInt(first[2], 10) : undefined;
   return [
-    <Tag key={key} start={startNum !== 1 ? startNum : undefined}>
+    <Tag
+      key={key}
+      start={startNum !== 1 ? startNum : undefined}
+      className={`flex flex-col gap-1 pl-5 marker:text-subtle-foreground [&_ol]:mt-1 [&_ul]:mt-1 ${ordered ? "list-decimal" : "list-disc"}`}
+    >
       {items.map((it, j) => (
-        <li key={j}>
+        <li key={j} className="pl-0.5">
           {it.text.map((t, k) => (
             <Fragment key={k}>
               {k > 0 && <br />}
-              {inline(t, ctx, `${key}-${j}-${k}`)}
+              {flow(t, ctx, `${key}-${j}-${k}`)}
             </Fragment>
           ))}
           {it.children}
@@ -233,9 +297,43 @@ const INLINE: { re: RegExp; kind: "code" | "link" | "strong" | "em" | "del" }[] 
   { re: /\*([^*\s](?:[^*]*[^*\s])?)\*|(?<![\w])_([^_\s](?:[^_]*[^_\s])?)_(?![\w])/g, kind: "em" },
 ];
 
-function inline(text: string, ctx: Ctx, key: string, depth = 0): ReactNode[] {
+/** Inline text of one line, cell or heading, with the chips of its citations after each sentence. */
+function flow(text: string, ctx: Ctx, key: string): ReactNode[] {
+  const f: Flow = { queue: [] };
+  const out = inline(text, ctx, key, 0, f);
+  flush(out, f);
+  return out;
+}
+
+function flush(out: ReactNode[], f: Flow) {
+  const seen = new Set<number>();
+  for (const q of f.queue) {
+    if (seen.has(q.id)) continue;
+    seen.add(q.id);
+    out.push(q.node);
+  }
+  f.queue = [];
+}
+
+function inline(text: string, ctx: Ctx, key: string, depth: number, f: Flow): ReactNode[] {
   if (depth >= MAX_DEPTH) return [text];
   const out: ReactNode[] = [];
+  const root = depth === 0;
+  // At the top level, chips waiting for the end of their sentence go in after it.
+  const pushText = (s: string) => {
+    if (!root || !f.queue.length) {
+      out.push(s);
+      return;
+    }
+    const j = sentenceEnd(s);
+    if (j < 0) {
+      out.push(s);
+      return;
+    }
+    out.push(s.slice(0, j));
+    flush(out, f);
+    if (j < s.length) out.push(s.slice(j));
+  };
   // Each pattern's next match is searched once and reused until the text before it is consumed,
   // so a pattern that does not occur again is not searched again for every other match.
   const next = INLINE.map((p) => ({ kind: p.kind, re: new RegExp(p.re.source, "g"), m: undefined as RegExpExecArray | null | undefined }));
@@ -251,39 +349,60 @@ function inline(text: string, ctx: Ctx, key: string, depth = 0): ReactNode[] {
       if (p.m && (!best || p.m.index < best.m!.index)) best = p;
     }
     if (!best || !best.m) {
-      out.push(text.slice(pos));
+      pushText(text.slice(pos));
       break;
     }
     const m = best.m;
-    if (m.index > pos) out.push(text.slice(pos, m.index));
+    if (m.index > pos) pushText(text.slice(pos, m.index));
     const k = `${key}-${n++}`;
+    let inner: string | null = null;
     switch (best.kind) {
       case "code":
-        out.push(<code key={k}>{m[1]}</code>);
+        out.push(
+          <code key={k} className="rounded-sm bg-surface-2 px-1 py-px font-mono text-meta">
+            {m[1]}
+          </code>,
+        );
         break;
       case "strong":
-        out.push(<strong key={k}>{inline(m[1] ?? m[2], ctx, k, depth + 1)}</strong>);
+        inner = m[1] ?? m[2];
+        out.push(
+          <strong key={k} className="font-semibold">
+            {inline(inner, ctx, k, depth + 1, f)}
+          </strong>,
+        );
         break;
       case "em":
-        out.push(<em key={k}>{inline(m[1] ?? m[2], ctx, k, depth + 1)}</em>);
+        inner = m[1] ?? m[2];
+        out.push(<em key={k}>{inline(inner, ctx, k, depth + 1, f)}</em>);
         break;
       case "del":
-        out.push(<del key={k}>{inline(m[1], ctx, k, depth + 1)}</del>);
+        inner = m[1];
+        out.push(<del key={k}>{inline(inner, ctx, k, depth + 1, f)}</del>);
         break;
       case "link":
-        out.push(link(m[1], m[2], ctx, k, depth + 1));
+        out.push(link(m[1], m[2], ctx, k, depth + 1, f));
+        inner = m[1];
         break;
     }
+    // "**Done.** Next": the sentence ended inside the markup.
+    if (root && f.queue.length && inner !== null && endsSentence(inner)) flush(out, f);
     pos = m.index + m[0].length;
   }
   return out;
 }
 
-function link(label: string, target: string, ctx: Ctx, key: string, depth: number): ReactNode {
-  const children = inline(label, ctx, key, depth);
+function link(label: string, target: string, ctx: Ctx, key: string, depth: number, f: Flow): ReactNode {
+  const children = inline(label, ctx, key, depth, f);
   const card = /^card:\/{0,2}(\d+)$/.exec(target);
   if (card) {
-    return ctx.renderCard(Number(card[1]), children, key) ?? <Fragment key={key}>{children}</Fragment>;
+    const id = Number(card[1]);
+    const chip = ctx.cardChip(id, `${key}-chip`);
+    if (chip) {
+      ctx.cardIds.add(id);
+      f.queue.push({ id, node: chip });
+    }
+    return <Fragment key={key}>{children}</Fragment>;
   }
   if (/^https?:\/\//i.test(target)) {
     return (
@@ -291,6 +410,7 @@ function link(label: string, target: string, ctx: Ctx, key: string, depth: numbe
         key={key}
         href={target}
         title={target}
+        className="underline decoration-border-strong underline-offset-2 hover:decoration-foreground"
         onClick={(e) => {
           e.preventDefault();
           ctx.onExternalLink(target);

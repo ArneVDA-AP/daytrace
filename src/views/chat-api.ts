@@ -3,7 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 /** Which model answers, and why chat cannot run (if it cannot). */
 export interface ChatInfo {
-  provider: "anthropic" | "ollama" | "lm_studio" | "openai_compatible";
+  provider: "anthropic" | "ollama" | "lm_studio" | "openai_compatible" | "claude_cli" | "codex_cli";
   providerLabel: string;
   model: string;
   /** Chat-only model; empty means the timeline model. */
@@ -109,11 +109,12 @@ export function providerName(id: string | null): string {
 }
 
 /**
- * The question shown before a link from an answer opens. Answers are shaped by text read from
- * the screen, so a link may point somewhere other than its label says (or carry data in its
- * address); the full host and address are shown. Returns null for a link that is not http(s).
+ * What the question before opening a link from an answer shows. Answers are shaped by text read
+ * from the screen, so a link may point somewhere other than its label says (or carry data in its
+ * address): the host (URL.host is the punycode form, so look-alike letters from other scripts stay
+ * visible) and the full address, cut at 400 characters. Null for anything that is not http(s).
  */
-export function linkConfirmText(url: string): string | null {
+export function linkTarget(url: string): { url: string; host: string; address: string } | null {
   let u: URL;
   try {
     u = new URL(url);
@@ -121,9 +122,8 @@ export function linkConfirmText(url: string): string | null {
     return null;
   }
   if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-  // URL.host is the punycode form, so look-alike letters from other scripts stay visible.
   const address = u.href.length > 400 ? `${u.href.slice(0, 400)}…` : u.href;
-  return `Open this link in your browser?\n\nWebsite: ${u.host}\n\nFull address:\n${address}\n\nLinks in answers can come from text on your screen. Open it only if you know this website.`;
+  return { url, host: u.host, address };
 }
 
 /** Errors from invoke arrive as strings. */
