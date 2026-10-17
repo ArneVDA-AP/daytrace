@@ -304,9 +304,9 @@ fn installed(client: Client, file: Option<&Path>, codex_cli: bool) -> bool {
 
 fn not_installed(client: Client) -> String {
     match client {
-        Client::Codex => "Codex isn't installed for this Windows user. Install the Codex CLI (npm install -g @openai/codex), the IDE extension or the app, open it once, then check again.".into(),
-        Client::Cursor => "Cursor isn't installed for this Windows user. Install it, open it once, then check again.".into(),
-        Client::VsCode => "VS Code isn't installed for this Windows user. Install it, open it once, then check again.".into(),
+        Client::Codex => "Codex isn't installed for this Windows user. Install the Codex CLI (npm install -g @openai/codex), the IDE extension or the app, open it once, then try again.".into(),
+        Client::Cursor => "Cursor isn't installed for this Windows user. Install it, open it once, then try again.".into(),
+        Client::VsCode => "VS Code isn't installed for this Windows user. Install it, open it once, then try again.".into(),
     }
 }
 

@@ -230,7 +230,7 @@ export function AgentConnect() {
   );
 }
 
-function samePath(a: string, b: string): boolean {
+export function samePath(a: string, b: string): boolean {
   return a.trim().toLowerCase() === b.trim().toLowerCase();
 }
 
@@ -242,7 +242,7 @@ function RowOutcome({ outcome }: { outcome: Outcome | undefined }) {
   );
 }
 
-function StatusLine({ tone, text, detail }: { tone: "ok" | "off" | "warn"; text: string; detail?: React.ReactNode }) {
+export function StatusLine({ tone, text, detail }: { tone: "ok" | "off" | "warn"; text: string; detail?: React.ReactNode }) {
   const Icon = tone === "ok" ? CircleCheck : tone === "warn" ? CircleAlert : CircleDashed;
   return (
     <p className="flex items-start gap-1.5 text-foreground">
