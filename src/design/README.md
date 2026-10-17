@@ -29,7 +29,8 @@ Need a token, a component variant or a shell change? Write it in your notes file
   `?status=recording|paused|paused-timed|locked|away|capture-error|starting`,
   `?status=writing|batch|queued|offline|failing|nokey` (comma-separated to combine),
   `?onboarding=1`, `?empty=1`, `?appearance=light|dark`, `?provider=ollama`, `?latency=400`,
-  `?chat=empty`, `?fail=apikey|credits|limit|busy|flaky|login|cli|slow|model|unknown` (the last
+  `?chat=empty`, `?chat=charts` (chats with inline charts: `#/chat?c=91`, and blocks that can't be
+  drawn: `#/chat?c=92`), `?fail=apikey|credits|limit|busy|flaky|login|cli|slow|model|unknown` (the last
   batch failed for that cause), `?badge=recap` (a new recap: dot on Daily), `?gen=off` (cards
   without `generatedBy`). Example: `/?status=offline,away#/daily?day=2026-10-16`.
 - Fixture days are relative to today: today a workday (with a failed card, an idle card, a

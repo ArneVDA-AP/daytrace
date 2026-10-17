@@ -15,6 +15,7 @@
  *   ?provider=anthropic|ollama|lm_studio|openai_compatible|claude_cli
  *   ?latency=400         delay every answer (ms) to see loading states
  *   ?chat=empty          no chat conversations yet (more Goals and Chat variants: src/dev/goalschat.ts)
+ *   ?chat=charts         chats whose answers have charts: #/chat?c=91, #/chat?c=92 (src/dev/w5-r2.ts)
  *   ?recap=today|edited|generating|failed|autoerror|auto|nohistory|exported|exportfail   Daily
  *   ?insights=error      Daily and Weekly numbers fail to load
  * Example: http://localhost:1420/?status=offline,away#/timeline
@@ -34,6 +35,7 @@ import { applyF2Mock } from "@/dev/w4-f2";
 import { agentsMock } from "@/dev/agents";
 import { applyAgentAccessMock } from "@/dev/w4-f3";
 import { applyF1Mock } from "@/dev/w4-f1";
+import { applyChatChartsMock } from "@/dev/w5-r2";
 
 export const DEV_MOCK_MARKER = "DAYTRACE_DEV_MOCK_IPC";
 
@@ -307,6 +309,7 @@ export function installMockIpc() {
   Object.assign(handlers, agentsMock(q, now)); // Agents section (src/dev/agents.ts)
   applyAgentAccessMock(handlers, { q, settings }); // Settings > AI tools one-click setup (src/dev/w4-f3.ts)
   applyF1Mock(handlers, { q, today: ds.today, now }); // shell commands and variants (src/dev/w4-f1.ts)
+  applyChatChartsMock(handlers, { q, now }); // chat answers with charts, ?chat=charts (src/dev/w5-r2.ts)
 
   mockWindows("main");
   mockIPC(

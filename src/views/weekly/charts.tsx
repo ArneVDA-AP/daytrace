@@ -51,7 +51,7 @@ function rightRounded(x: number, y: number, w: number, h: number, r: number): st
 }
 
 /** A vertical bar rounded at its top (up) or bottom (down) end. */
-function endRounded(x: number, y: number, w: number, h: number, r: number, up: boolean): string {
+export function endRounded(x: number, y: number, w: number, h: number, r: number, up: boolean): string {
   const rr = Math.max(0, Math.min(r, w / 2, h));
   if (up) return `M${x},${y + h}V${y + rr}A${rr},${rr} 0 0 1 ${x + rr},${y}H${x + w - rr}A${rr},${rr} 0 0 1 ${x + w},${y + rr}V${y + h}Z`;
   return `M${x},${y}H${x + w}V${y + h - rr}A${rr},${rr} 0 0 1 ${x + w - rr},${y + h}H${x + rr}A${rr},${rr} 0 0 1 ${x},${y + h - rr}Z`;
