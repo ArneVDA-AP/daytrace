@@ -80,7 +80,8 @@ pub fn health() -> DbHealth {
 pub fn check_database(root: &Path, db: &Path) {
     let h = startup_check(db, &root.join(BACKUP_DIR));
     match h.status {
-        HealthStatus::Ok | HealthStatus::Unchecked => log::info!("database check passed"),
+        HealthStatus::Ok => log::info!("database check passed"),
+        HealthStatus::Unchecked => log::warn!("database not checked: {:?}", h.detail),
         HealthStatus::Restored => log::warn!("database was damaged ({:?}); restored backup {:?}; damaged file kept as {:?}", h.detail, h.restored_from, h.moved_to),
         HealthStatus::Reset => log::error!("database was damaged ({:?}) and no backup was usable; started a new database; damaged file kept as {:?}", h.detail, h.moved_to),
         HealthStatus::Damaged => log::error!("database is damaged and could not be moved aside: {:?}", h.detail),
@@ -215,9 +216,16 @@ pub fn list_backups(dir: &Path) -> Vec<(PathBuf, BackupInfo)> {
     v
 }
 
-/// Removes all but the newest `keep` backups.
+/// Removes all but the newest `keep` backups, and copies left unfinished by a crash.
 pub fn prune(dir: &Path, keep: usize) -> usize {
     let mut removed = 0;
+    let stale = crate::timeutil::now_ts() - 3600;
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if name.starts_with(PREFIX) && name.ends_with(".partial") && mtime(&e.path()) < stale {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
     for (path, info) in list_backups(dir).into_iter().skip(keep) {
         if std::fs::remove_file(&path).is_ok() {
             log::info!("removed old backup {}", info.name);
@@ -234,7 +242,10 @@ pub fn create_backup(db: &Path, dir: &Path) -> Result<BackupInfo> {
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let name = format!("{PREFIX}{}{EXT}", Local::now().format("%Y-%m-%d_%H%M%S"));
     let target = dir.join(&name);
-    let tmp = dir.join(format!("{name}.partial"));
+    // Unique per call, so a manual backup and the daily one never share a temporary file.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!("{name}.{}-{seq}.partial", std::process::id()));
     let _ = std::fs::remove_file(&tmp);
     let result = (|| -> Result<()> {
         let src = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
