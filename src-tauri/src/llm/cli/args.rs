@@ -137,6 +137,44 @@ pub fn claude_args(a: &ClaudeArgs) -> Vec<String> {
     v
 }
 
+/// A chat question through `claude -p` (Daytrace; Dayflow's CLI chat runs sqlite3 in a shell
+/// instead, which a stock Windows PC doesn't have). Every flag is in the Claude Code CLI
+/// reference (code.claude.com/docs/en/cli-reference):
+/// - `--output-format stream-json --verbose`: one JSON event per line (assistant messages with
+///   tool_use, user messages with tool_result, then the result), mapped to the chat's progress.
+/// - `--system-prompt-file`: the chat prompt replaces Claude Code's own; a file because Windows
+///   `.cmd` shims can't carry a multi-line argument.
+/// - `--tools ""`: no built-in tools (no shell, no file access); `--mcp-config` + `--strict-mcp-config`:
+///   only daytrace-mcp, none of the user's servers; `--allowedTools` lists its read tools and
+///   `--permission-mode dontAsk` denies anything else instead of prompting.
+/// - `--disable-slash-commands`, `--no-session-persistence`: no skills, nothing written to the
+///   session history; earlier turns are sent in the prompt.
+/// - `--max-turns`: the tool-round limit of the API chat.
+pub struct ChatArgs<'a> {
+    pub model: &'a str,
+    pub effort: &'a str,
+    pub system_prompt_file: &'a Path,
+    pub mcp_config_file: &'a Path,
+    /// Full tool names (`mcp__daytrace__get_timeline`, ...).
+    pub allowed_tools: &'a [String],
+    pub max_turns: usize,
+}
+
+/// `claude -p` arguments for a chat question. The question goes to stdin.
+pub fn claude_chat_args(a: &ChatArgs) -> Vec<String> {
+    let mut v: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose"].iter().map(|s| s.to_string()).collect();
+    v.extend(["--system-prompt-file".into(), a.system_prompt_file.display().to_string()]);
+    v.extend(["--tools".into(), String::new()]);
+    v.extend(["--mcp-config".into(), a.mcp_config_file.display().to_string(), "--strict-mcp-config".into()]);
+    v.extend(["--allowedTools".into(), a.allowed_tools.join(","), "--permission-mode".into(), "dontAsk".into()]);
+    v.extend(["--disable-slash-commands".into(), "--no-session-persistence".into(), "--max-turns".into(), a.max_turns.to_string()]);
+    if !a.model.trim().is_empty() {
+        v.extend(["--model".into(), a.model.trim().into()]);
+    }
+    v.extend(["--effort".into(), a.effort.into(), "--".into()]);
+    v
+}
+
 pub struct CodexArgs<'a> {
     pub model: &'a str,
     pub effort: Option<&'a str>,
@@ -224,6 +262,26 @@ mod tests {
         assert_eq!(
             args,
             ["-p", "--output-format", "json", "--tools", "", "--disable-slash-commands", "--system-prompt", TEXT_SYSTEM, "--no-session-persistence", "--effort", "low", "--strict-mcp-config", "--"]
+        );
+    }
+
+    #[test]
+    fn chat_args() {
+        let sys = PathBuf::from(r"C:\Temp\daytrace-cli\chat-1\system-prompt.md");
+        let mcp = PathBuf::from(r"C:\Temp\daytrace-cli\chat-1\mcp.json");
+        let tools = vec!["mcp__daytrace__get_timeline".to_string(), "mcp__daytrace__get_status".to_string()];
+        let args = claude_chat_args(&ChatArgs { model: "haiku", effort: "low", system_prompt_file: &sys, mcp_config_file: &mcp, allowed_tools: &tools, max_turns: 9 });
+        assert_eq!(
+            args,
+            [
+                "-p", "--output-format", "stream-json", "--verbose",
+                "--system-prompt-file", r"C:\Temp\daytrace-cli\chat-1\system-prompt.md",
+                "--tools", "",
+                "--mcp-config", r"C:\Temp\daytrace-cli\chat-1\mcp.json", "--strict-mcp-config",
+                "--allowedTools", "mcp__daytrace__get_timeline,mcp__daytrace__get_status", "--permission-mode", "dontAsk",
+                "--disable-slash-commands", "--no-session-persistence", "--max-turns", "9",
+                "--model", "haiku", "--effort", "low", "--",
+            ]
         );
     }
 

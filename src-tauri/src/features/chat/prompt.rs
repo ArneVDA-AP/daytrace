@@ -6,6 +6,8 @@
 //! - The tool list names Daytrace's six tools instead of two, and "how much time" points at
 //!   timeByCategory instead of "fetchTimeline, aggregate by category".
 //! - A CITATIONS section (Daytrace): answers link the cards they rely on.
+//! - For chat through the Claude Code CLI (`ToolSet::Mcp`) the tool section, the tool names in
+//!   "Implicit context" and the citation id name daytrace-mcp's read tools instead.
 //!
 //! Dayflow's user-memory and recent-suggestion sections are appended the same way
 //! (ChatService.buildGeminiSystemInstruction), and its language section
@@ -22,7 +24,68 @@ pub const WELCOME_PROMPTS: [&str; 4] = [
     "Compare this week to last week",
 ];
 
+/// Which tools the model gets: the chat's own (API and local providers) or daytrace-mcp's read
+/// tools (chat through the Claude Code CLI).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolSet {
+    Api,
+    Mcp,
+}
+
+const TOOLS_API: &str = r####"You have six read-only tools:
+
+1. **fetchTimeline** — Structured activity cards with titles, categories, and durations. Use this for summaries, standups, time breakdowns, and "what did I do" questions.
+2. **fetchObservations** — Raw screen observations. Use this for detailed questions like "what was I reading at 2pm" or "which tabs were open during that meeting."
+3. **searchCards** — Cards that mention given words. Use this to find when something happened across many days; pass synonyms too (e.g. Twitter and x.com).
+4. **timeByCategory** — Time per category for a day or range, optionally per day.
+5. **daySummary** — The shape of one day: start and end, active and idle time, longest blocks, most-used apps.
+6. **getCardDetails** — Everything stored for one card, including its observations and window titles.
+
+Rules:
+- Always call a tool when the user asks about their activity. Never fabricate or assume data.
+- If a tool returns no rows, say so clearly. Don't fill gaps with guesses.
+- If a tool fails, explain what happened and suggest a narrower time range.
+- For large time windows (full week+), use `includeDetailedSummary=false` to avoid oversized payloads.
+- Default to fetchTimeline unless the user needs observation-level detail."####;
+
+/// daytrace-mcp's read tools (features/agent_bridge/mcp.rs), described the way the six chat tools
+/// are; the rules are the same.
+const TOOLS_MCP: &str = r####"You have read-only tools from Daytrace's MCP server (their full names start with `mcp__daytrace__`):
+
+1. **get_timeline** — Activities for one day (or a range of up to 7 days) with titles, categories, times, and record IDs. Use this for summaries, standups, and "what did I do" questions.
+2. **get_time_breakdown** — Time per category for a date range. Cheap; use it for "how much time" questions.
+3. **get_activity_detail** — One activity in full, including its longer write-up.
+4. **get_observations** — The screen observations an activity was written from. Use this for detailed questions like "what was I reading at 2pm" or "which tabs were open during that meeting."
+5. **search_activities** — Activities whose title or summary mention given words. Use this to find when something happened across many days; search for synonyms too (e.g. Twitter and x.com).
+6. **get_daily** — The daily recap (standup) Daytrace wrote for a day. **get_weekly** — Totals for the week containing a date.
+7. **list_days**, **list_categories**, **get_status** — Days with activities, the user's categories, and whether recording and analysis are up to date.
+
+Rules:
+- Always call a tool when the user asks about their activity. Never fabricate or assume data.
+- If a tool returns no rows, say so clearly. Don't fill gaps with guesses.
+- If a tool fails, explain what happened and suggest a narrower time range.
+- For large time windows (full week+), use get_time_breakdown or get_weekly instead of listing every activity.
+- Default to get_timeline unless the user needs observation-level detail."####;
+
 pub fn system_prompt(now: DateTime<Local>, logical_today: &str, language: &str, memory: &str, recent_suggestions: &[String]) -> String {
+    build(now, logical_today, language, memory, recent_suggestions, ToolSet::Api)
+}
+
+pub fn build(now: DateTime<Local>, logical_today: &str, language: &str, memory: &str, recent_suggestions: &[String], tools: ToolSet) -> String {
+    let (tools_section, implicit_tools, implicit_screen, citation_lead) = match tools {
+        ToolSet::Api => (
+            TOOLS_API,
+            "- \"what did I do\" → fetchTimeline for the relevant day\n- \"how much time\" → timeByCategory for the relevant days",
+            "- \"show me\" or \"what was on screen\" → fetchObservations",
+            "Every card the tools return has an `id`. When a point in your answer rests on specific cards, link the one or two most relevant cards with a Markdown link whose target is `card:<id>`, for example [the code review](card:123).",
+        ),
+        ToolSet::Mcp => (
+            TOOLS_MCP,
+            "- \"what did I do\" → get_timeline for the relevant day\n- \"how much time\" → get_time_breakdown for the relevant days",
+            "- \"show me\" or \"what was on screen\" → get_observations",
+            "Every activity the tools return has a `record_id`. When a point in your answer rests on specific activities, link the one or two most relevant ones with a Markdown link whose target is `card:<record_id>`, for example [the code review](card:123).",
+        ),
+    };
     let current_date = now.format("%A, %B %-d, %Y");
     let current_time = now.format("%-I:%M %p");
     let language_block = language_instruction(language, false).map(|l| format!("\n\n## LANGUAGE\n\n{l}")).unwrap_or_default();
@@ -38,21 +101,7 @@ Day boundary: Days start at 4:00 AM (not midnight). "Yesterday" means the previo
 
 ## TOOLS & DATA INTEGRITY
 
-You have six read-only tools:
-
-1. **fetchTimeline** — Structured activity cards with titles, categories, and durations. Use this for summaries, standups, time breakdowns, and "what did I do" questions.
-2. **fetchObservations** — Raw screen observations. Use this for detailed questions like "what was I reading at 2pm" or "which tabs were open during that meeting."
-3. **searchCards** — Cards that mention given words. Use this to find when something happened across many days; pass synonyms too (e.g. Twitter and x.com).
-4. **timeByCategory** — Time per category for a day or range, optionally per day.
-5. **daySummary** — The shape of one day: start and end, active and idle time, longest blocks, most-used apps.
-6. **getCardDetails** — Everything stored for one card, including its observations and window titles.
-
-Rules:
-- Always call a tool when the user asks about their activity. Never fabricate or assume data.
-- If a tool returns no rows, say so clearly. Don't fill gaps with guesses.
-- If a tool fails, explain what happened and suggest a narrower time range.
-- For large time windows (full week+), use `includeDetailedSummary=false` to avoid oversized payloads.
-- Default to fetchTimeline unless the user needs observation-level detail.
+{tools_section}
 
 ---
 
@@ -67,10 +116,9 @@ When the user says things like "no, I meant..." or "try again but...", re-read t
 
 **Implicit context:**
 - "standup notes" → use Yesterday / Today / Blockers format unless the user has shown a different preference
-- "what did I do" → fetchTimeline for the relevant day
-- "how much time" → timeByCategory for the relevant days
+{implicit_tools}
 - "was I productive" → compare Work vs Distraction/Idle time
-- "show me" or "what was on screen" → fetchObservations
+{implicit_screen}
 
 ---
 
@@ -86,7 +134,7 @@ When the user says things like "no, I meant..." or "try again but...", re-read t
 
 ## CITATIONS
 
-Every card the tools return has an `id`. When a point in your answer rests on specific cards, link the one or two most relevant cards with a Markdown link whose target is `card:<id>`, for example [the code review](card:123). The app turns these links into buttons that open the card on the timeline.
+{citation_lead} The app turns these links into buttons that open the card on the timeline.
 - Only use ids that appeared in tool results in this conversation. Never invent an id.
 - Put the link on a few words of your sentence, not on a time or a number.
 - Do not add a separate list of sources; the app shows one.
@@ -203,5 +251,24 @@ mod tests {
         let plain = system_prompt(now, "2026-10-16", "", "", &[]);
         assert!(!plain.contains("## LANGUAGE") && !plain.contains("## User Memory\n") && !plain.contains("Recent Suggestions"));
         assert!(plain.ends_with("after the main answer."));
+        assert!(plain.contains("You have six read-only tools:\n\n1. **fetchTimeline**"));
+        assert!(plain.contains("- \"how much time\" → timeByCategory for the relevant days\n- \"was I productive\""));
+        assert!(plain.contains("has an `id`. When a point"));
+        assert!(!plain.contains("{"), "no placeholder left");
+    }
+
+    #[test]
+    fn mcp_variant_names_the_daytrace_mcp_tools() {
+        let now = Local.with_ymd_and_hms(2026, 10, 17, 9, 0, 0).unwrap();
+        let p = build(now, "2026-10-17", "", "", &[], ToolSet::Mcp);
+        assert!(p.contains("full names start with `mcp__daytrace__`"));
+        assert!(p.contains("- \"what did I do\" → get_timeline for the relevant day"));
+        assert!(p.contains("- \"show me\" or \"what was on screen\" → get_observations"));
+        assert!(p.contains("has a `record_id`."));
+        assert!(!p.contains("fetchTimeline") && !p.contains("timeByCategory"));
+        // Everything else is the same prompt.
+        let api = build(now, "2026-10-17", "", "", &[], ToolSet::Api);
+        let tail = |t: &str| t[t.find("## RESPONSE STYLE").unwrap()..t.find("## CITATIONS").unwrap()].to_string();
+        assert_eq!(tail(&p), tail(&api));
     }
 }
