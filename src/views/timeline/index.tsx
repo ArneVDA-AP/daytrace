@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ArrowLeft, CalendarDays, ClipboardCopy, Clock3, Download, ListRestart, MoreHorizontal, Moon, PanelRight, Settings2, TriangleAlert } from "lucide-react";
+import { ArrowLeft, CalendarDays, ClipboardCopy, Clock3, Download, ListRestart, MoreHorizontal, Moon, PanelRight, Settings2 } from "lucide-react";
 import { useDay } from "@/app/day";
 import { useAppState } from "@/app/state";
 import { Banner } from "@/components/banner";
@@ -226,7 +226,6 @@ export default function TimelineSection() {
           <div className="px-(--page-x) py-5">
             <Banner
               tone="error"
-              icon={<TriangleAlert />}
               title={`Couldn’t load the timeline of ${formatDayTitle(day)}`}
               details={data.error}
               actions={

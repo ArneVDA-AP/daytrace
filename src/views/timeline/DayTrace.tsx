@@ -1,6 +1,5 @@
 import * as React from "react";
-import { FoldHorizontal, UnfoldHorizontal } from "lucide-react";
-import { Toggle } from "@/components/ui/toggle";
+import { Switch } from "@/components/ui/switch";
 import { clock, dayBounds, formatDuration, hourLabel } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import type { Card } from "./api";
@@ -368,18 +367,11 @@ export function DayTrace({
             Recorded <span className="tnum text-foreground">{cards === null ? "…" : formatDuration(recorded)}</span>
           </span>
         </span>
-        <Toggle
-          size="sm"
-          variant="outline"
-          pressed={fit}
-          onPressedChange={onFitChange}
-          disabled={list.length === 0}
-          className="ml-auto gap-1.5"
-          aria-label="Fit to recorded hours"
-        >
-          {fit ? <UnfoldHorizontal aria-hidden="true" /> : <FoldHorizontal aria-hidden="true" />}
+        {/* A view option that is on by default: a switch reads quieter than a pressed button. */}
+        <label className={cn("ml-auto inline-flex items-center gap-2 text-meta text-foreground", list.length === 0 && "opacity-50")}>
+          <Switch checked={fit} onCheckedChange={onFitChange} disabled={list.length === 0} />
           Fit to recorded hours
-        </Toggle>
+        </label>
       </div>
     </section>
   );

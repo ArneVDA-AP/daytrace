@@ -317,7 +317,7 @@ function IntroStep({ s, dataDir, damagedCopy }: { s: Settings; dataDir: string; 
   return (
     <>
       {damagedCopy && (
-        <Banner tone="warn" icon={<TriangleAlert aria-hidden />} title="Daytrace couldn’t read its settings file">
+        <Banner tone="warn" title="Daytrace couldn’t read its settings file">
           So the setup starts again with the default settings, and recording waits until you finish it. The unreadable file was kept as{" "}
           <span className="font-mono text-caption [overflow-wrap:anywhere]">{damagedCopy}</span>.
         </Banner>
@@ -583,7 +583,7 @@ function StartStep({ s, set, keyMissing, hasKey }: { s: Settings; set: SetFn; ke
   return (
     <>
       {keyMissing && (
-        <Banner tone="warn" icon={<TriangleAlert aria-hidden />} title="No API key is saved yet">
+        <Banner tone="warn" title="No API key is saved yet">
           Daytrace records, but the screenshots wait until you add a key under Settings, Model provider.
         </Banner>
       )}

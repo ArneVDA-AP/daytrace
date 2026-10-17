@@ -1,5 +1,5 @@
 import * as React from "react";
-import { CalendarX2, OctagonAlert } from "lucide-react";
+import { CalendarX2 } from "lucide-react";
 import { api, type Card } from "@/api";
 import { useDay } from "@/app/day";
 import { useAppState } from "@/app/state";
@@ -148,7 +148,7 @@ export default function WeeklySection() {
                 </div>
               </div>
             ) : err && !current ? (
-              <Banner tone="error" icon={<OctagonAlert />} title="Couldn’t load this week" details={err} actions={<RetryButton onClick={() => void load(start)} />}>
+              <Banner tone="error" title="Couldn’t load this week" details={err} actions={<RetryButton onClick={() => void load(start)} />}>
                 Daytrace tries again every 2 minutes.
               </Banner>
             ) : current ? (

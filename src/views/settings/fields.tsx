@@ -175,7 +175,7 @@ export function ErrorBanner({ title, message, action, children }: { title: strin
   const id = React.useId();
   // Banner puts its body in a <p>, so the disclosure is a button and a span (phrasing content).
   return (
-    <Banner tone="error" icon={<CircleAlert aria-hidden />} title={title} actions={action}>
+    <Banner tone="error" title={title} actions={action}>
       {children}
       {children && " "}
       <button

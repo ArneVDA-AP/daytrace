@@ -1,5 +1,6 @@
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
+import { CircleAlert, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const bannerVariants = cva("flex flex-wrap items-start gap-x-3 gap-y-2 rounded-lg border px-3.5 py-3 text-foreground", {
@@ -28,6 +29,7 @@ export function Banner({
   details,
   className,
 }: VariantProps<typeof bannerVariants> & {
+  /** Defaults to the tone's icon (error: circle, warn: triangle); null for none. */
   icon?: React.ReactNode;
   title: React.ReactNode;
   actions?: React.ReactNode;
@@ -36,6 +38,9 @@ export function Banner({
   details?: string | null;
   className?: string;
 }) {
+  // Errors and warnings get the same icon everywhere unless a specific one says more (a key, a
+  // plug); pass icon={null} for none.
+  if (icon === undefined) icon = tone === "error" ? <CircleAlert aria-hidden="true" /> : tone === "warn" ? <TriangleAlert aria-hidden="true" /> : null;
   return (
     <div role={tone === "info" || !tone ? "status" : "alert"} data-slot="banner" className={cn(bannerVariants({ tone }), className)}>
       {icon && (

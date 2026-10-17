@@ -1,5 +1,5 @@
 import * as React from "react";
-import { DatabaseBackup, FolderOpen, RefreshCw, TriangleAlert } from "lucide-react";
+import { DatabaseBackup, FolderOpen, RefreshCw } from "lucide-react";
 import { api, formatDayTitle, shiftDay } from "@/api";
 import { useAppState } from "@/app/state";
 import { Banner } from "@/components/banner";
@@ -387,7 +387,7 @@ function ConfirmBody({ c, retention, onConfirm }: { c: Confirm; retention: numbe
 function HealthNotice({ h }: { h: DbHealth }) {
   if (h.status === "restored") {
     return (
-      <Banner tone="warn" icon={<TriangleAlert aria-hidden />} title="The database was restored from a backup">
+      <Banner tone="warn" title="The database was restored from a backup">
         At startup Daytrace found damage in its database and restored the backup from{" "}
         {h.restoredBackupAt ? formatWhen(h.restoredBackupAt) : h.restoredFrom}. Activity recorded after that backup is missing. The damaged file was kept in
         the data folder as {h.movedTo}.
@@ -396,7 +396,7 @@ function HealthNotice({ h }: { h: DbHealth }) {
   }
   if (h.status === "reset") {
     return (
-      <Banner tone="warn" icon={<TriangleAlert aria-hidden />} title="Daytrace started a new database">
+      <Banner tone="warn" title="Daytrace started a new database">
         At startup Daytrace found damage in its database and no usable backup, so it started a new, empty database. The damaged file was kept in the data
         folder as {h.movedTo}.
       </Banner>

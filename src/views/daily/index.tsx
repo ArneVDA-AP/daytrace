@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ClipboardCopy, FileDown, Moon, OctagonAlert, SquareArrowOutUpRight } from "lucide-react";
+import { ClipboardCopy, Clock3, FileDown, Moon, SquareArrowOutUpRight } from "lucide-react";
 import { api, type Card } from "@/api";
 import { useDay } from "@/app/day";
 import { useAppState } from "@/app/state";
@@ -155,9 +155,7 @@ export default function DailySection() {
         {nothingAtAll ? (
           <Empty className="min-h-full">
             <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <Moon aria-hidden="true" />
-              </EmptyMedia>
+              <EmptyMedia variant="icon">{isToday ? <Clock3 aria-hidden="true" /> : <Moon aria-hidden="true" />}</EmptyMedia>
               <EmptyTitle>{isToday ? "No cards yet today" : `No recording on ${formatDayTitle(day)}`}</EmptyTitle>
               <EmptyDescription>
                 {isToday
@@ -204,13 +202,14 @@ export default function DailySection() {
                 </div>
               </div>
             ) : dayErr && !current ? (
-              <Banner tone="error" icon={<OctagonAlert />} title="Couldn’t load this day’s numbers" details={dayErr} actions={<RetryButton onClick={() => void loadDay(day)} />}>
+              <Banner tone="error" title="Couldn’t load this day’s numbers" details={dayErr} actions={<RetryButton onClick={() => void loadDay(day)} />}>
                 Daytrace tries again every minute.
               </Banner>
             ) : current ? (
               current.cards.length === 0 ? (
                 <Empty className="border py-10">
                   <EmptyHeader>
+                    <EmptyMedia variant="icon">{isToday ? <Clock3 aria-hidden="true" /> : <Moon aria-hidden="true" />}</EmptyMedia>
                     <EmptyTitle>{isToday ? "No cards yet today" : `No recording on ${formatDayTitle(day)}`}</EmptyTitle>
                     <EmptyDescription>
                       {isToday ? "The day’s numbers fill in as Daytrace writes cards, about every 15 minutes while it records." : "This day has no cards, so there are no numbers to show."}

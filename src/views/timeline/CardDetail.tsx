@@ -404,7 +404,7 @@ export function CardDetail({
             </p>
           )}
           {error && (
-            <Banner tone="error" title="That didn’t work" icon={<TriangleAlert />}>
+            <Banner tone="error" title="That didn’t work">
               {error}
             </Banner>
           )}

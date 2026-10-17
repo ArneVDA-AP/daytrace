@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Copy, CopyCheck, TriangleAlert } from "lucide-react";
+import { Copy, CopyCheck } from "lucide-react";
 import { Banner } from "@/components/banner";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -49,7 +49,7 @@ export function AiToolsSection() {
       {setup && (
         <>
           {!setup.installed && (
-            <Banner tone="warn" icon={<TriangleAlert aria-hidden />} title="daytrace-mcp is missing">
+            <Banner tone="warn" title="daytrace-mcp is missing">
               It was not found next to Daytrace ({setup.exePath}). The Daytrace installer puts it there; install Daytrace again to get it.
             </Banner>
           )}

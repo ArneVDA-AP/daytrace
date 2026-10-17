@@ -1,5 +1,5 @@
 import * as React from "react";
-import { MousePointerClick, TriangleAlert } from "lucide-react";
+import { MousePointerClick } from "lucide-react";
 import { Banner } from "@/components/banner";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
@@ -79,7 +79,6 @@ export function DaySoFar({
         <div className="flex flex-col gap-2">
           <Banner
             tone="error"
-            icon={<TriangleAlert />}
             title="Couldn’t work out this day’s numbers"
             details={statsError}
             actions={
@@ -106,7 +105,7 @@ export function DaySoFar({
             <Stat
               label="Distracted"
               value={formatDuration(stats.distractedSecs)}
-              sub={`${Math.round(stats.distractedRatio * 100)} % of captured · ${stats.interruptions} ${stats.interruptions === 1 ? "interruption" : "interruptions"}`}
+              sub={`${Math.round(stats.distractedRatio * 100)}% of captured · ${stats.interruptions} ${stats.interruptions === 1 ? "interruption" : "interruptions"}`}
             />
           </>
         ) : (
@@ -158,7 +157,7 @@ export function DaySoFar({
                       </span>
                     </th>
                     <td className="py-1.5 text-right tnum">{formatDuration(s.secs)}</td>
-                    <td className="w-16 py-1.5 text-right text-muted-foreground tnum">{Math.round((s.secs / captured) * 100)} %</td>
+                    <td className="w-16 py-1.5 text-right text-muted-foreground tnum">{Math.round((s.secs / captured) * 100)}%</td>
                   </tr>
                 ))}
               </tbody>

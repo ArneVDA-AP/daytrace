@@ -1,6 +1,6 @@
 import * as React from "react";
 import { save } from "@tauri-apps/plugin-dialog";
-import { OctagonAlert, Pencil, RefreshCw, Sparkles } from "lucide-react";
+import { Pencil, RefreshCw, Sparkles } from "lucide-react";
 import type { SettingsDto } from "@/api";
 import { providerLabel } from "@/app/status";
 import {
@@ -248,7 +248,7 @@ export function StandupCard({
   let body: React.ReactNode;
   if (!recap) {
     body = loadError ? (
-      <Banner tone="error" icon={<OctagonAlert />} title="Couldn’t load the standup" details={loadError} actions={<RetryButton onClick={onRetryLoad} />}>
+      <Banner tone="error" title="Couldn’t load the standup" details={loadError} actions={<RetryButton onClick={onRetryLoad} />}>
         The day’s numbers below may still show. Daytrace tries again every minute.
       </Banner>
     ) : (
@@ -338,7 +338,6 @@ export function StandupCard({
     error && error.kind !== "export" ? (
       <Banner
         tone="error"
-        icon={<OctagonAlert />}
         title={
           error.kind === "generate" ? "The standup could not be written" : error.kind === "save" ? "Couldn’t save the standup" : "Couldn’t copy the standup"
         }
@@ -359,7 +358,7 @@ export function StandupCard({
 
   const exportFailed =
     error?.kind === "export" ? (
-      <Banner tone="error" icon={<OctagonAlert />} title="Couldn’t export the recap" details={error.message} actions={<RetryButton onClick={() => void actions.exportRecap()} busy={!!busy} />}>
+      <Banner tone="error" title="Couldn’t export the recap" details={error.message} actions={<RetryButton onClick={() => void actions.exportRecap()} busy={!!busy} />}>
         {settings.settings.recapExportDir.trim() ? (
           <>
             Check that the folder <span translate="no">{settings.settings.recapExportDir}</span> exists and can be written to, or change it in Settings.
@@ -374,7 +373,6 @@ export function StandupCard({
     recap && !entry && recap.autoError && !error && !generating && !editing ? (
       <Banner
         tone="error"
-        icon={<OctagonAlert />}
         title="The automatic standup could not be written"
         details={recap.autoError}
       >
