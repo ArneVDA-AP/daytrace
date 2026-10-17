@@ -18,6 +18,7 @@ click=<css selector>, wait=800 (extra ms), full=1 (full page).
 """
 import argparse
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -81,6 +82,14 @@ def wait_http(url, timeout=40):
     return False
 
 
+def stop(proc):
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    proc.wait(timeout=10)
+
+
 def parse_opts(s):
     out = {}
     for part in filter(None, s.split("|")):
@@ -117,12 +126,14 @@ def main():
     if not base:
         port = free_port()
         base = f"http://127.0.0.1:{port}"
+        # Own process group, so stopping it also stops the node process behind the vite shim.
         server = subprocess.Popen(
-            ["npx", "vite", "--host", "127.0.0.1", "--port", str(port), "--strictPort"],
+            [os.path.join(ROOT, "node_modules", ".bin", "vite"), "--host", "127.0.0.1", "--port", str(port), "--strictPort"],
             cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT, env={**os.environ, "BROWSER": "none"},
+            start_new_session=True,
         )
         if not wait_http(base + "/"):
-            server.terminate()
+            stop(server)
             sys.exit("The Vite dev server did not start.")
 
     from playwright.sync_api import sync_playwright
@@ -158,7 +169,7 @@ def main():
             browser.close()
     finally:
         if server:
-            server.terminate()
+            stop(server)
 
 
 if __name__ == "__main__":
