@@ -25,6 +25,7 @@ import { cn, errorText } from "@/lib/utils";
 import { insightsApi, type AutoPlan, type RecapEntry, type RecapView } from "@/views/insights/api";
 import { relativeDayLabel } from "@/views/insights/format";
 import { RetryButton, SectionCard } from "@/views/insights/parts";
+import { useUnsavedWork } from "@/views/platform-hooks";
 
 /*
  * The standup (Dayflow's daily recap) for the selected day: highlights from the last active day
@@ -122,6 +123,15 @@ export function useRecapActions({
   const sourceDay = entry?.sourceDay ?? recap?.sourceDay ?? null;
   const mine = busy && busy.day === day ? busy : null;
 
+  // Typed changes hold off the idle return to today and the 4 AM rollover (they would reset the
+  // editor), until they are saved or canceled.
+  const dirty =
+    !!editing &&
+    (editing.highlights !== (entry?.highlights ?? []).join("\n") ||
+      editing.tasks !== (entry?.tasks ?? []).join("\n") ||
+      editing.blockers !== (entry?.blockers ?? []).join("\n"));
+  useUnsavedWork(dirty, "standup");
+
   const run = async (kind: NonNullable<Busy>["kind"], fn: (forDay: string) => Promise<void>) => {
     const forDay = day;
     setBusy({ kind, day: forDay });
@@ -214,6 +224,8 @@ export function StandupCard({
   const titles = recapTitles(day, today, sourceDay);
   const [confirm, setConfirm] = React.useState(false);
   const editRef = React.useRef<HTMLButtonElement>(null);
+  const headingRef = React.useRef<HTMLHeadingElement>(null);
+  const confirmed = React.useRef(false);
   const firstFieldRef = React.useRef<HTMLTextAreaElement>(null);
   const wasEditing = React.useRef(false);
   const { busy, error, editing, generating } = actions;
@@ -225,7 +237,13 @@ export function StandupCard({
     wasEditing.current = !!editing;
   }, [editing]);
 
-  const regenerate = () => (entry?.edited ? setConfirm(true) : void actions.generate());
+  // Generate and Regenerate disappear while the standup is written: focus moves to the card's
+  // heading instead of falling back to the page, and the status line under it says what happens.
+  const generate = () => {
+    headingRef.current?.focus();
+    void actions.generate();
+  };
+  const regenerate = () => (entry?.edited ? setConfirm(true) : generate());
 
   const headerActions =
     entry && !editing && !generating ? (
@@ -327,7 +345,7 @@ export function StandupCard({
         auto={day === today ? recap.auto : null}
         settings={settings}
         busy={!!busy}
-        onGenerate={() => void actions.generate()}
+        onGenerate={generate}
         onWrite={actions.startEdit}
         writeRef={editRef}
       />
@@ -345,7 +363,7 @@ export function StandupCard({
         actions={
           error.kind === "generate" ? (
             entry ? (
-              <RetryButton onClick={() => void actions.generate()} busy={!!busy} />
+              <RetryButton onClick={generate} busy={!!busy} />
             ) : undefined
           ) : error.kind === "save" ? (
             <RetryButton onClick={() => void actions.saveEdit()} busy={!!busy} />
@@ -381,7 +399,7 @@ export function StandupCard({
     ) : null;
 
   return (
-    <SectionCard title="Standup" description={description} actions={headerActions}>
+    <SectionCard title="Standup" description={description} actions={headerActions} headingRef={headingRef}>
       <div className="flex flex-col gap-4">
         {failed}
         {exportFailed}
@@ -397,7 +415,14 @@ export function StandupCard({
         )}
       </div>
       <AlertDialog open={confirm} onOpenChange={setConfirm}>
-        <AlertDialogContent>
+        <AlertDialogContent
+          onCloseAutoFocus={(e) => {
+            if (!confirmed.current) return;
+            confirmed.current = false;
+            e.preventDefault();
+            headingRef.current?.focus();
+          }}
+        >
           <AlertDialogHeader>
             <AlertDialogTitle>Replace your edited standup?</AlertDialogTitle>
             <AlertDialogDescription>
@@ -406,7 +431,14 @@ export function StandupCard({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Keep my edits</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void actions.generate()}>Regenerate</AlertDialogAction>
+            <AlertDialogAction
+              onClick={() => {
+                confirmed.current = true;
+                void actions.generate();
+              }}
+            >
+              Regenerate
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -482,7 +514,7 @@ function NotGenerated({
   onWrite: () => void;
   writeRef: React.Ref<HTMLButtonElement>;
 }) {
-  const model = settings.settings.model.trim();
+  const model = settings.settings.recapModel.trim() || settings.settings.model.trim();
   return (
     <div className={cn("flex flex-col items-start gap-3 rounded-md border border-dashed border-border-strong p-4")}>
       {sourceDay ? (
