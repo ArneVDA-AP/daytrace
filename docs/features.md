@@ -4,12 +4,12 @@
 
 Daytrace runs on 64-bit Windows 10 and 11.
 
-1. Download `Daytrace_<version>_x64-setup.exe` from the [latest release](https://github.com/ArneVDA-AP/daytrace/releases/latest). `daytrace-mcp.exe` is part of it.
+1. There is no published release yet. Build the installer as described in [Development](development.md#building); the installer then sits in `src-tauri/target/release/bundle/nsis`. `daytrace-mcp.exe` is part of it.
 2. Run it. The installer is not code-signed yet, so Windows SmartScreen can show "Windows protected your PC": select **More info**, then **Run anyway**. Daytrace installs for your Windows account only, without administrator rights, in `%LOCALAPPDATA%\Daytrace`, and puts that folder on your PATH so `daytrace-mcp` works in a terminal.
 3. Daytrace opens with a short setup: what it records and where that goes, the model provider (an API key, Ollama or LM Studio, or a signed-in Claude Code or Codex CLI), the apps it must never capture, and whether it starts with Windows.
 4. **Start recording** ends the setup. The first timeline card appears about 15 minutes later. Closing the window keeps Daytrace recording in the notification area; pause, resume or quit it from the tray icon.
 
-After that Daytrace looks for new versions by itself (see [Updates](#updates)). To remove Daytrace: Windows **Settings** → **Apps** → **Installed apps** → Daytrace → **Uninstall**. With "Delete the application data" checked, the uninstaller also removes the screenshots, the timeline and the settings in `%APPDATA%\dev.daytrace.app`; otherwise they stay.
+After the first release, Daytrace looks for new versions by itself (see [Updates](#updates)). To remove Daytrace: Windows **Settings** → **Apps** → **Installed apps** → Daytrace → **Uninstall**. With "Delete the application data" checked, the uninstaller also removes the screenshots, the timeline and the settings in `%APPDATA%\dev.daytrace.app`; otherwise they stay.
 
 ## Overview
 

@@ -7,7 +7,6 @@
 **An automatic timeline of your workday, for Windows.**
 
 [![Build](https://github.com/ArneVDA-AP/daytrace/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/ArneVDA-AP/daytrace/actions/workflows/build.yml)
-[![Latest release](https://img.shields.io/github/v/release/ArneVDA-AP/daytrace?label=release)](https://github.com/ArneVDA-AP/daytrace/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 ![Windows 10 and 11](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4)
 
@@ -31,11 +30,13 @@ Daytrace takes a screenshot every few seconds, lets a vision model describe what
 
 ## Install
 
-1. Download `Daytrace_<version>_x64-setup.exe` from the [latest release](https://github.com/ArneVDA-AP/daytrace/releases/latest) and run it. The installer is not code-signed yet: on "Windows protected your PC", choose **More info** → **Run anyway**.
+There is no published release yet. Build the installer from source (Rust stable, Node 22 and the WebView2 runtime; see [docs/development.md](docs/development.md)), or download the installer from the artifacts of the latest [Build run](https://github.com/ArneVDA-AP/daytrace/actions/workflows/build.yml) (GitHub sign-in required).
+
+1. Build it with `npm ci` and `npm run tauri build`, then run the installer in `src-tauri/target/release/bundle/nsis`. The installer is not code-signed yet: on "Windows protected your PC", choose **More info** → **Run anyway**.
 2. The setup asks for a model provider and the apps Daytrace must never capture.
 3. Select **Start recording**. Your first card appears after about 15 minutes.
 
-Daytrace keeps running in the notification area when you close the window, and updates itself.
+Daytrace keeps running in the notification area when you close the window, and, once a release exists, updates itself.
 
 ## Screenshots
 
