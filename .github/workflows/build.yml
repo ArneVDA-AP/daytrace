@@ -7,6 +7,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Read-only token by default. Only "windows", which publishes the release, gets write access.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-24.04
@@ -34,7 +38,42 @@ jobs:
       - run: cargo test --lib --bins
         working-directory: src-tauri
 
+  # A v* tag publishes a public release (job "windows"), so a tag must sit on main. Runs on every
+  # event so that "windows" can depend on it (a skipped job would skip "windows" too); the check
+  # itself runs on tags only. The full-history checkout is cheap on this small Linux job.
+  # Limit: GitHub runs the build.yml of the tagged commit. This gate protects only commits whose
+  # build.yml contains it. A v* tag on any other commit runs that commit's own workflow and is not
+  # checked: main before this gate (d814fe0) publishes a public release with no tests, and a branch
+  # whose build.yml was edited can do the same. Restrict who may create or move v* tags with a tag
+  # ruleset ("Restrict creations", "Restrict updates", and keep "Restrict deletions" and "Block force
+  # pushes" on) and tag only a main commit that has this job.
+  tag-on-main:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # GITHUB_SHA is the tagged commit. It must be main's tip or an older commit of main.
+      # Nothing is published from a tag on a side branch.
+      - name: Tag commit is on main
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          rc=0
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || rc=$?
+          if [ "$rc" -eq 1 ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} (${GITHUB_SHA}) is not on main. Nothing is published. Tag a commit that is on main."
+            exit 1
+          elif [ "$rc" -ne 0 ]; then
+            echo "::error::git merge-base failed with exit code ${rc} for ${GITHUB_SHA} (commit or main history missing?). Nothing is published."
+            exit 1
+          fi
+
   windows:
+    # A v* tag publishes a public release from this job, so it only runs after the tests pass
+    # and after the tag is confirmed to be on main.
+    needs: [test, tag-on-main]
     runs-on: windows-latest
     permissions:
       contents: write
@@ -49,6 +88,37 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # The same Rust tests as the Linux job, on Windows (Win32 code paths: Credential Manager, the
+      # named pipe of the write bridge). The Tauri build script needs the built frontend (../dist),
+      # so the frontend is built first, as in the Linux job. Windows needs no extra system packages:
+      # the Linux apt packages are for GTK/WebKit, PipeWire and X11/Wayland, and the build step below
+      # compiles this same crate on this runner.
+      - run: npm run build
+      # The time limit stops a hung test (the pipe test waits if the server never disconnects)
+      # from holding the runner for GitHub's default job limit (360 minutes). It is generous on
+      # purpose: a cold cache on a 4-vCPU runner is much slower than the 14-minute cold release
+      # build on a 12-thread desktop, and rust-cache saves nothing after a failed run, so a limit
+      # that is too tight would fail every following run as well. Tune it after the first CI runs.
+      - name: Rust tests
+        run: cargo test --lib --bins
+        working-directory: src-tauri
+        timeout-minutes: 60
+      # On a tag: the version the same in package.json, tauri.conf.json, Cargo.toml and Cargo.lock,
+      # and a non-empty CHANGELOG.md section for it (scripts/check-release.mjs). Only on tags: until
+      # the tag, the notes may still sit under "Unreleased" (CHANGELOG.md).
+      - name: Release checks
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: npm run check:release
+      # On a tag: the tag must name that version (v0.3.0 for 0.3.0).
+      - name: Tag matches the version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match version ${version} in package.json."
+            exit 1
+          fi
       # Signed updates for "Install updates automatically": with the repository secret
       # TAURI_SIGNING_PRIVATE_KEY (and TAURI_SIGNING_PRIVATE_KEY_PASSWORD when the key has one)
       # the installer is signed and the release gets a latest.json. Without the secret the build

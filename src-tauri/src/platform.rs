@@ -29,9 +29,6 @@ pub fn is_shell_host(app: &str) -> bool {
 mod imp {
     use super::ForegroundApp;
     use windows::Win32::Foundation::{CloseHandle, POINT};
-    use windows::Win32::Security::Credentials::{
-        CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC, CREDENTIALW, CredDeleteW, CredFree, CredReadW, CredWriteW,
-    };
     use windows::Win32::System::StationsAndDesktops::{
         CloseDesktop, DESKTOP_CONTROL_FLAGS, DESKTOP_SWITCHDESKTOP, OpenInputDesktop, SwitchDesktop,
     };
@@ -44,7 +41,7 @@ mod imp {
         GetCursorPos, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, SPI_GETSCREENSAVERRUNNING,
         SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
     };
-    use windows::core::{HSTRING, PWSTR};
+    use windows::core::PWSTR;
 
     pub fn idle_seconds() -> u64 {
         unsafe {
@@ -212,6 +209,46 @@ mod imp {
             Some(ForegroundApp { app, path, title, monitor_center })
         }
     }
+}
+
+#[cfg(not(windows))]
+mod imp {
+    use super::ForegroundApp;
+
+    pub fn idle_seconds() -> u64 {
+        0
+    }
+    pub fn is_locked() -> bool {
+        false
+    }
+    pub fn display_required() -> bool {
+        false
+    }
+    pub fn cursor_position() -> Option<(i32, i32)> {
+        None
+    }
+    pub fn foreground_app() -> Option<ForegroundApp> {
+        None
+    }
+    pub fn blocked_window_rects(_blocked: &[String]) -> Vec<(i32, i32, i32, i32)> {
+        Vec::new()
+    }
+}
+
+pub use imp::*;
+
+/// API keys. The app on Windows keeps them in the Windows Credential Manager (`Daytrace/<slot>`).
+/// Unit tests (`cfg(test)`), on every platform, and other platforms keep them in memory: unit tests
+/// on a PC where Daytrace is installed must never read the user's stored keys (a test would then
+/// send requests with them) or write test keys next to them. Integration tests in `tests/` link
+/// the library without `cfg(test)` and use the real store; `replay.rs` is `#[ignore]` and meant
+/// to run with a real key. The memory store returns `DAYTRACE_API_KEY` for every slot when set.
+#[cfg(all(windows, not(test)))]
+mod secrets {
+    use windows::Win32::Security::Credentials::{
+        CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC, CREDENTIALW, CredDeleteW, CredFree, CredReadW, CredWriteW,
+    };
+    use windows::core::{HSTRING, PWSTR};
 
     fn target(slot: &str) -> String {
         format!("Daytrace/{slot}")
@@ -253,31 +290,11 @@ mod imp {
     }
 }
 
-#[cfg(not(windows))]
-mod imp {
-    use super::ForegroundApp;
+#[cfg(any(not(windows), test))]
+mod secrets {
     use std::sync::Mutex;
 
-    pub fn idle_seconds() -> u64 {
-        0
-    }
-    pub fn is_locked() -> bool {
-        false
-    }
-    pub fn display_required() -> bool {
-        false
-    }
-    pub fn cursor_position() -> Option<(i32, i32)> {
-        None
-    }
-    pub fn foreground_app() -> Option<ForegroundApp> {
-        None
-    }
-    pub fn blocked_window_rects(_blocked: &[String]) -> Vec<(i32, i32, i32, i32)> {
-        Vec::new()
-    }
-
-    // Development fallback: keys live in memory, seeded from DAYTRACE_API_KEY.
+    // Keys live in memory, seeded from DAYTRACE_API_KEY (development and tests).
     static SECRETS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 
     pub fn secret_get(slot: &str) -> Option<String> {
@@ -297,7 +314,7 @@ mod imp {
     }
 }
 
-pub use imp::*;
+pub use secrets::{secret_get, secret_set};
 
 /// Password managers and authenticators hidden by default (Dayflow's seed list, adapted to
 /// Windows executable names). Matching is on the normalized executable name.
@@ -338,6 +355,31 @@ pub fn blocked_match<'a>(app: &str, blocked: &'a [String]) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A key saved in a test stays in memory: the Windows Credential Manager does not get it.
+    #[cfg(windows)]
+    #[test]
+    fn tests_keep_keys_out_of_the_credential_manager() {
+        use windows::Win32::Security::Credentials::{CRED_TYPE_GENERIC, CREDENTIALW, CredDeleteW, CredFree, CredReadW};
+        use windows::core::HSTRING;
+        let slot = format!("isolation-probe-{}", std::process::id());
+        let target = HSTRING::from(format!("Daytrace/{slot}"));
+        secret_set(&slot, "probe").unwrap();
+        assert_eq!(secret_get(&slot).as_deref(), Some("probe"));
+        let mut ptr: *mut CREDENTIALW = std::ptr::null_mut();
+        // SAFETY: CredReadW fills `ptr` on success; it is freed right after.
+        let found = unsafe { CredReadW(&target, CRED_TYPE_GENERIC, None, &mut ptr) }.is_ok();
+        if found {
+            // Leave nothing behind, then fail.
+            unsafe {
+                CredFree(ptr as *const core::ffi::c_void);
+                let _ = CredDeleteW(&target, CRED_TYPE_GENERIC, None);
+            }
+        }
+        secret_set(&slot, "").unwrap();
+        assert!(!found, "a test wrote Daytrace/{slot} to the Windows Credential Manager");
+    }
+
     #[test]
     fn matches_blocked_apps() {
         let list: Vec<String> = DEFAULT_BLOCKED_APPS.iter().map(|s| s.to_string()).collect();

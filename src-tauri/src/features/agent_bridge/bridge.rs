@@ -484,4 +484,33 @@ mod tests {
         assert!(out.contains("\"ok\":true"), "{out}");
         rt.shutdown_background();
     }
+
+    /// The named pipe the installed app uses: answers, errors, and a client that reads its answer
+    /// late (the 0.3.0 fix: the server waits for the client before it disconnects).
+    #[cfg(windows)]
+    #[test]
+    fn round_trip_over_the_pipe() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+        assert_eq!(send(&path, "x", &json!({})).unwrap_err().code, "app_not_running");
+        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+        let p2 = path.clone();
+        rt.spawn(async move { serve(&p2, echo()).await });
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !app_running(&path) {
+            assert!(std::time::Instant::now() < deadline, "server did not start");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(send(&path, "x", &json!({"k": "v"})).unwrap(), json!({"op": "x", "args": {"k": "v"}}));
+        assert_eq!(send(&path, "fail", &json!({})).unwrap_err().message, "Edits are off.");
+        // A slow reader: write the request, wait, then read the answer.
+        use std::io::{Read, Write};
+        let mut pipe = std::fs::OpenOptions::new().read(true).write(true).open(imp::pipe_name(&path).unwrap()).unwrap();
+        pipe.write_all(&request_line("ping", &json!({}))).unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        let mut out = Vec::new();
+        let _ = pipe.read_to_end(&mut out);
+        assert!(String::from_utf8_lossy(&out).contains("\"ok\":true"), "{}", String::from_utf8_lossy(&out));
+        rt.shutdown_background();
+    }
 }
