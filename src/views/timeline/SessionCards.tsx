@@ -15,7 +15,8 @@ import { conditionText, drawingAlt, folderName, sessionCardCount, svgDataUrl } f
  * A record can come with a drawing: the card as the session showed it, an SVG file. It is shown
  * as an image (an <img> with a data: URL), never put into the page, so nothing in the file can
  * run or reach the page. An image follows the color-scheme of the page, so it follows the theme.
- * The card as text stays below it, and is the whole card when there is no drawing.
+ * The card as text stays below it, and is the whole card when there is no drawing. The drawing
+ * ends a text that does not fit with "…", so the text below it is the place to read it whole.
  */
 
 /** Width of the drawing in px: the width the session drew it at. */
@@ -138,10 +139,19 @@ function SessionCardItem({ card: c, where, isOpen }: { card: SessionCard; where?
           <div className="mt-2">{svg === null ? <p className="text-muted-foreground">The drawing of this card cannot be read.</p> : image}</div>
         </details>
       )}
-      {hasMore && (
+      {(hasMore || inPlace) && (
         <details className="group">
-          <summary className="w-fit cursor-default rounded-sm text-muted-foreground select-none hover:text-foreground">Check and steps</summary>
+          <summary className="w-fit cursor-default rounded-sm text-muted-foreground select-none hover:text-foreground">
+            {inPlace ? "Card as text" : "Check and steps"}
+          </summary>
           <div className="mt-2 flex flex-col gap-2">
+            {/* The drawing cuts a text that does not fit. Here the outcome and the grade note are whole. */}
+            {inPlace && (
+              <>
+                <p className="text-body text-pretty [overflow-wrap:anywhere]">{c.outcome}</p>
+                {c.gradeNote && <p className="text-pretty text-muted-foreground [overflow-wrap:anywhere]">{c.gradeNote}</p>}
+              </>
+            )}
             {c.check && (
               <p className="text-pretty [overflow-wrap:anywhere]">
                 <span className="text-muted-foreground">Check: </span>
