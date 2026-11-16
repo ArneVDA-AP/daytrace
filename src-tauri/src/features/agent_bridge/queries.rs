@@ -162,6 +162,13 @@ impl Source {
             .unwrap_or(false)
     }
 
+    /// The folder of finished Claude Code session cards while "Show Claude Code session cards" is
+    /// on in settings.json; None while it is off (features/session_cards.rs).
+    pub fn session_cards_dir(&self) -> Option<PathBuf> {
+        let settings = std::fs::read_to_string(self.data_dir.join("settings.json")).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok())?;
+        crate::features::session_cards::dir_from_settings(&settings)
+    }
+
     pub fn idle_category(&self) -> String {
         self.categories().into_iter().find(|c| c.is_idle).map(|c| c.name).unwrap_or_else(|| "Idle".into())
     }

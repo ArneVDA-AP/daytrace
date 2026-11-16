@@ -312,8 +312,8 @@ impl Server {
     pub fn call_tool(&self, name: &str, args: &Value) -> Value {
         let out = match name {
             "get_time_breakdown" => self.time_breakdown(args),
-            "get_timeline" => self.timeline(args),
-            "get_activity_detail" => self.activity_detail(args),
+            "get_timeline" => self.timeline(args).map(|v| self.with_session_cards(v, args)),
+            "get_activity_detail" => self.activity_detail(args).map(|v| self.with_session_cards(v, args)),
             "search_activities" => self.search(args),
             "get_daily" => self.daily(args),
             "get_weekly" => self.weekly(args),
@@ -343,6 +343,18 @@ impl Server {
             Ok(_) => tool_result(json!({"ok": true}), false),
             Err(e) => tool_error(&e.message),
         }
+    }
+
+    /// Adds the finished session cards of Claude Code (features/session_cards.rs) to a timeline or
+    /// to one activity while "Show Claude Code session cards" is on. Daytrace's own chat gets
+    /// none: the setting covers the timeline and the AI tools the user connected.
+    fn with_session_cards(&self, result: Value, args: &Value) -> Value {
+        let Some(dir) = (!self.chat).then(|| self.source.session_cards_dir()).flatten() else { return result };
+        let window = match (str_arg(args, "from"), str_arg(args, "to")) {
+            (None, None) => Self::day_arg(args).ok().map(|w| (w.start, w.end)),
+            (f, t) => q::range_windows(f.as_deref().unwrap_or(""), t.as_deref().unwrap_or("")).ok().map(|(f, t)| (f.start, t.end)),
+        };
+        crate::features::session_cards::decorate(result, &dir, window)
     }
 
     fn day_arg(args: &Value) -> q::QResult<q::DayWindow> {

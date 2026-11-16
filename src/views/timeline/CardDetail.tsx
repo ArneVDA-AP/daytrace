@@ -33,6 +33,7 @@ import { timelineApi, type BatchProgress, type Card, type DayExtras, type Failed
 import { autoRetryText, type RetryUi } from "./CardList";
 import { retryBusy, retryLine } from "./data";
 import { cardText, isFailed, isIdleCard, keyOf, parseLogLine } from "./model";
+import { SessionCardList } from "./SessionCards";
 import { Timelapse } from "./Timelapse";
 
 /*
@@ -118,6 +119,8 @@ export function CardDetail({
   const edited = extras?.edited.includes(card.id) ?? false;
   const review = extras?.reviews.find((r) => r.cardId === card.id);
   const feedback = extras?.feedback.find((f) => f.cardId === card.id);
+  // Claude Code session cards that finished during this card (Settings > AI tools).
+  const sessionCards = (extras?.sessionCards ?? []).filter((s) => s.cardId === card.id);
   const lines = card.detailedSummary
     .split("\n")
     .map((l) => l.trim())
@@ -573,6 +576,10 @@ export function CardDetail({
         </section>
       )}
 
+      {sessionCards.length > 0 && (
+        <SessionCardList id="sess-h" title="Claude Code sessions finished here" cards={sessionCards} drawing="open" className="xwide:col-start-1" />
+      )}
+
       {!failed && (
         <section aria-labelledby="rate-h" className="flex flex-col gap-3 border-t pt-4 xwide:col-start-1">
           <h3 id="rate-h" className="sr-only">
@@ -676,7 +683,7 @@ export function CardDetail({
         </section>
       )}
 
-      <section aria-labelledby="media-h" className="flex flex-col gap-2 xwide:sticky xwide:top-4 xwide:col-start-2 xwide:row-span-6 xwide:row-start-2 xwide:self-start">
+      <section aria-labelledby="media-h" className="flex flex-col gap-2 xwide:sticky xwide:top-4 xwide:col-start-2 xwide:row-span-7 xwide:row-start-2 xwide:self-start">
         <h3 id="media-h" className="text-body font-semibold">
           Screenshots
         </h3>

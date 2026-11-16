@@ -33,6 +33,48 @@ export interface FailedGroup {
   retryable: boolean;
 }
 
+export type SessionGrade = "pass" | "partial" | "fail";
+
+/** One condition of a session card's check. */
+export interface SessionCondition {
+  name: string;
+  /** "must": it must show. "fails": the check fails when it happens. */
+  kind: string;
+  /** "open", "met" or "failed". */
+  state: string;
+}
+
+/**
+ * A finished Claude Code session card (src-tauri/src/features/session_cards.rs): the outcome a
+ * session worked toward and how it graded itself. Written by an AI session; shown as plain text.
+ */
+export interface SessionCard {
+  /** The card that covers the finish time; null when no card does. */
+  cardId: number | null;
+  sessionId: string;
+  /** The folder the session worked in. */
+  cwd: string;
+  startedBy: string;
+  outcome: string;
+  check: string;
+  grade: SessionGrade;
+  gradeNote: string;
+  /** Empty when the session graded itself. */
+  gradedBy: string;
+  conditions: SessionCondition[];
+  steps: string[];
+  /** Unix seconds. */
+  startedAt: number;
+  finishedAt: number;
+  /** The finish time is the card's last change, not its grade (a record made from older data). */
+  approximate: boolean;
+  /**
+   * Names the drawing of the card as the session showed it, for `teApi.sessionCardVisual`.
+   * Null when the record has no drawing.
+   */
+  visual: string | null;
+}
+
 export interface DayExtras {
   day: string;
   edited: number[];
@@ -40,6 +82,10 @@ export interface DayExtras {
   reviews: CardReview[];
   reviewSummary: ReviewSummary;
   failedGroups: FailedGroup[];
+  /** Empty while Settings > AI tools > "Show Claude Code session cards" is off. */
+  sessionCards: SessionCard[];
+  /** Session cards of this day left out because the session ran in a temporary folder. */
+  sessionCardsHidden: number;
 }
 
 export interface DayCount {
@@ -74,6 +120,8 @@ export interface RetryItem {
 
 export const teApi = {
   dayExtras: (day: string) => invoke<DayExtras>("te_day_extras", { day }),
+  /** The drawing of a session card as SVG text (`SessionCard.visual`). Null when it cannot be read. */
+  sessionCardVisual: (name: string) => invoke<string | null>("te_session_card_visual", { name }),
   updateCard: (cardId: number, edit: { title?: string; category?: string; subcategory?: string }) =>
     invoke<Card>("te_update_card", {
       cardId,

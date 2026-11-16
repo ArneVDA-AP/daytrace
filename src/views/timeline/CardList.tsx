@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import type { Card, DayExtras, FailedGroup, RetryItem } from "./api";
 import { retryBusy, retryLine } from "./data";
 import { isFailed, isIdleCard, keyOf, navIds, navIndexOf, type Row } from "./model";
+import { sessionCardCount } from "./SessionCards";
 
 /*
  * The card list on a vertical trace (designer-shadcn's TimelineList with designer-bespoke's summary
@@ -82,6 +83,9 @@ export const CardList = React.memo(function CardList({
   const reviewOf = new Map((extras?.reviews ?? []).map((r) => [r.cardId, r]));
   const groupOf = new Map<number, FailedGroup>();
   (extras?.failedGroups ?? []).forEach((g) => g.cardIds.forEach((id) => groupOf.set(id, g)));
+  // Claude Code session cards that finished during each card (SessionCards.tsx).
+  const sessionsOf = new Map<number, number>();
+  (extras?.sessionCards ?? []).forEach((s) => s.cardId !== null && sessionsOf.set(s.cardId, (sessionsOf.get(s.cardId) ?? 0) + 1));
 
   const focusRow = (id: number) => listRef.current?.querySelector<HTMLAnchorElement>(`a[data-row-id="${id}"]`)?.focus();
 
@@ -151,6 +155,7 @@ export const CardList = React.memo(function CardList({
             dimmed={!failed && muted.has(c.isIdleShortcut && idleKey ? idleKey : keyOf(c.category))}
             edited={edited.has(c.id)}
             rating={review ? RATING_LABEL[review.rating] : null}
+            sessions={sessionsOf.get(c.id) ?? 0}
             onSelect={pick}
             failure={
               failed
@@ -207,6 +212,7 @@ function CardRow({
   dimmed,
   edited,
   rating,
+  sessions,
   onSelect,
   failure,
 }: {
@@ -219,6 +225,8 @@ function CardRow({
   dimmed: boolean;
   edited: boolean;
   rating: string | null;
+  /** Claude Code session cards that finished during this card. */
+  sessions: number;
   onSelect: (id: number) => void;
   failure: Failure | null;
 }) {
@@ -304,6 +312,7 @@ function CardRow({
               )}
               {edited && <Tag>Edited</Tag>}
               {rating && <Tag>{rating}</Tag>}
+              {sessions > 0 && <Tag>{sessionCardCount(sessions)}</Tag>}
             </span>
             {!idle && mins >= 30 && c.summary && <span className={cn("mt-1 text-meta text-muted-foreground", clamp)}>{c.summary}</span>}
           </a>

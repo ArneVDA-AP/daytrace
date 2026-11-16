@@ -19,6 +19,8 @@ export type {
   RetryItem,
   ReviewRating,
   ReviewSummary,
+  SessionCard,
+  SessionGrade,
 } from "@/timeline-extras-api";
 
 /** insights_day (src-tauri/src/features/insights/stats.rs), the fields used here. */

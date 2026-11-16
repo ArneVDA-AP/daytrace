@@ -9,6 +9,7 @@ import { clock, dayBounds, formatDuration } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import type { Card, DayExtras, DayStatsLite, GoalsLite } from "./api";
 import { laneTotals, type Lane } from "./model";
+import { SessionCardList, sessionCardCount } from "./SessionCards";
 
 /*
  * "Your day so far" (Dayflow Views/Components/DaySummaryView.swift and its sections), shown in the
@@ -70,6 +71,10 @@ export function DaySoFar({
   const longestCard = longest ? cards.find((c) => c.startTs <= longest.startTs && c.endTs > longest.startTs) : undefined;
   const active = stats ? Math.max(0, stats.capturedSecs - stats.idleSecs) : 0;
   const distractedPct = stats && active > 0 ? Math.round((stats.distractedSecs / active) * 100) : 0;
+  // Claude Code session cards of the day (Settings > AI tools); empty while that setting is off.
+  const sessionCards = extras?.sessionCards ?? [];
+  const sessionCardsHidden = extras?.sessionCardsHidden ?? 0;
+  const titleOf = new Map(cards.map((c) => [c.id, c.title]));
 
   return (
     <section aria-labelledby="dsf-title" className="mx-auto flex w-full max-w-[52rem] flex-col gap-6 px-6 pt-5 pb-10 max-split:px-4">
@@ -226,6 +231,34 @@ export function DaySoFar({
             </div>
           )}
         </section>
+      )}
+
+      {(sessionCards.length > 0 || sessionCardsHidden > 0) && (
+        <SessionCardList
+          id="dsf-sessions"
+          title="Claude Code sessions"
+          note={
+            <>
+              {sessionCards.length > 0
+                ? `${sessionCardCount(sessionCards.length)} finished on this day.`
+                : "No session card to show for this day."}
+              {sessionCardsHidden > 0 && ` ${sessionCardsHidden} more from temporary folders (test and scratch runs) ${sessionCardsHidden === 1 ? "is" : "are"} not shown.`}
+            </>
+          }
+          cards={sessionCards}
+          where={(s) =>
+            s.cardId !== null && titleOf.has(s.cardId) ? (
+              <>
+                During{" "}
+                <button type="button" className="font-medium text-foreground underline underline-offset-2" onClick={() => onSelect(s.cardId!)}>
+                  {titleOf.get(s.cardId)}
+                </button>
+              </>
+            ) : (
+              "No card covers this time."
+            )
+          }
+        />
       )}
 
       {longestCard && (

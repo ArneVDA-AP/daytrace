@@ -57,11 +57,37 @@ pub struct DayExtras {
     pub reviews: Vec<review::CardReview>,
     pub review_summary: review::ReviewSummary,
     pub failed_groups: Vec<cards::FailedGroup>,
+    /// Finished Claude Code session cards (features/session_cards.rs), each with the card that
+    /// covers its finish time; `cardId` is null for one that finished in time no card covers.
+    /// Empty while "Show Claude Code session cards" is off.
+    pub session_cards: Vec<crate::features::session_cards::Linked>,
+    /// Session cards of this day left out because the session ran in a temporary folder.
+    pub session_cards_hidden: usize,
+}
+
+/// The day's session cards. A failed card owns none: its time counts as not covered, so a session
+/// card that finished there is listed with the day.
+fn session_cards_of(state: &AppState, day_cards: &[crate::db::StoredCard], from: i64, to: i64) -> crate::features::session_cards::Placed {
+    use crate::features::session_cards as sc;
+    let settings = state.settings();
+    let Some(dir) = sc::dir_for(settings.show_session_cards, &settings.session_cards_dir) else { return Default::default() };
+    let spans: Vec<sc::Span> = day_cards.iter().filter(|c| !cards::is_failed(c)).map(|c| sc::Span { id: c.id, start: c.start_ts, end: c.end_ts }).collect();
+    sc::load(&dir, &spans, Some((from, to)))
+}
+
+/// The drawing of a session card (the text of its SVG file) for the name that
+/// `DayExtras.session_cards[].visual` gave. None while the setting is off and when there is no
+/// such drawing. The window shows it as an image.
+pub fn session_card_visual(state: &AppState, name: &str) -> Option<String> {
+    use crate::features::session_cards as sc;
+    let settings = state.settings();
+    sc::read_visual(&sc::dir_for(settings.show_session_cards, &settings.session_cards_dir)?, name)
 }
 
 pub fn day_extras(state: &AppState, day: &str) -> Result<DayExtras> {
     let (from, to) = bounds(day)?;
     let day_cards = state.db.cards_for_day(day)?;
+    let session = session_cards_of(state, &day_cards, from, to);
     let ids: Vec<i64> = day_cards.iter().map(|c| c.id).collect();
     let segs = review::segments_overlapping(&state.db, from.min(day_cards.iter().map(|c| c.start_ts).min().unwrap_or(from)), to.max(day_cards.iter().map(|c| c.end_ts).max().unwrap_or(to)))?;
     let mut groups = cards::group_failed(&day_cards);
@@ -75,6 +101,8 @@ pub fn day_extras(state: &AppState, day: &str) -> Result<DayExtras> {
         reviews: day_cards.iter().filter(|c| !cards::is_failed(c)).filter_map(|c| review::card_review(c, &segs)).collect(),
         review_summary: review::summary(&day_cards, &segs, from, to),
         failed_groups: groups,
+        session_cards: session.linked(),
+        session_cards_hidden: session.hidden_scratch,
     })
 }
 
@@ -110,6 +138,11 @@ fn needs_key(state: &AppState) -> Option<String> {
 #[tauri::command]
 pub fn te_day_extras(state: S, day: String) -> CmdResult<DayExtras> {
     day_extras(&state, &day).map_err(err)
+}
+
+#[tauri::command]
+pub fn te_session_card_visual(state: S, name: String) -> CmdResult<Option<String>> {
+    Ok(session_card_visual(&state, &name))
 }
 
 #[tauri::command]
