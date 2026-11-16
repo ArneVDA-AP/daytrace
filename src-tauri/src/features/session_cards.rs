@@ -27,7 +27,10 @@ const KIND: &str = "start-card.finished";
 const GRADES: &[&str] = &["pass", "partial", "fail"];
 /// A card file is a few kilobytes; anything larger is not one.
 const MAX_FILE_BYTES: u64 = 256 * 1024;
-/// Most cards one read returns (the oldest of the range are kept).
+/// Most card files one read opens (the oldest of the range are kept).
+const MAX_FILES: usize = 5000;
+/// Most cards one answer shows (the oldest are kept, the rest are counted). Cards of temporary
+/// folders are left out before this limit, so a batch of test runs does not use it up.
 pub const MAX_CARDS: usize = 300;
 /// Most characters kept of one text field.
 const TEXT_MAX: usize = 600;
@@ -101,11 +104,14 @@ pub struct Placed {
     pub unplaced: Vec<SessionCard>,
     /// Left out because the session ran in a temporary folder (test and scratch runs).
     pub hidden_scratch: usize,
+    /// Left out because the answer already holds `MAX_CARDS` cards (the newest of the range). One
+    /// day of work does not get there, so only daytrace-mcp reports it, for a range of days.
+    pub omitted: usize,
 }
 
 impl Placed {
     pub fn is_empty(&self) -> bool {
-        self.by_activity.is_empty() && self.unplaced.is_empty() && self.hidden_scratch == 0
+        self.by_activity.is_empty() && self.unplaced.is_empty() && self.hidden_scratch == 0 && self.omitted == 0
     }
 
     /// Every shown card with its activity, in time order.
@@ -242,21 +248,21 @@ fn read_card(path: &Path) -> Option<SessionCard> {
 /// the time in its name is in the range; a file that is not a card is skipped. A missing folder
 /// gives no cards.
 pub fn read_window(dir: &Path, from: i64, to: i64) -> Vec<SessionCard> {
-    let mut out = vec![];
+    let mut files: Vec<(String, PathBuf)> = vec![];
     for month in months(from, to) {
         let Ok(entries) = std::fs::read_dir(dir.join(month)) else { continue };
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if !name_secs(&name).is_some_and(|t| t >= from && t < to) {
-                continue;
-            }
-            if let Some(card) = read_card(&entry.path()).filter(|c| c.finished_at >= from && c.finished_at < to) {
-                out.push(card);
+            if name_secs(&name).is_some_and(|t| t >= from && t < to) {
+                files.push((name, entry.path()));
             }
         }
     }
+    // The name starts with the finish time, so this is time order.
+    files.sort();
+    files.truncate(MAX_FILES);
+    let mut out: Vec<SessionCard> = files.iter().filter_map(|(_, path)| read_card(path)).filter(|c| c.finished_at >= from && c.finished_at < to).collect();
     out.sort_by(|a, b| (a.finished_at, &a.session_id).cmp(&(b.finished_at, &b.session_id)));
-    out.truncate(MAX_CARDS);
     out
 }
 
@@ -290,6 +296,7 @@ pub fn is_scratch_in(cwd: &str, temp_dir: Option<&str>) -> bool {
 /// as unplaced; a card outside it with no activity belongs to another day and is dropped.
 pub fn place(cards: Vec<SessionCard>, spans: &[Span], window: Option<(i64, i64)>) -> Placed {
     let mut placed = Placed::default();
+    let mut shown = 0;
     for card in cards {
         let home = owner(card.finished_at, spans);
         let in_window = window.is_some_and(|(from, to)| card.finished_at >= from && card.finished_at < to);
@@ -300,6 +307,11 @@ pub fn place(cards: Vec<SessionCard>, spans: &[Span], window: Option<(i64, i64)>
             placed.hidden_scratch += 1;
             continue;
         }
+        if shown == MAX_CARDS {
+            placed.omitted += 1;
+            continue;
+        }
+        shown += 1;
         match home {
             Some(id) => placed.by_activity.entry(id).or_default().push(card),
             None => placed.unplaced.push(card),
@@ -354,7 +366,13 @@ pub fn card_json(c: &SessionCard, detailed: bool) -> Value {
 }
 
 fn span_of(activity: &Value) -> Option<Span> {
-    let ts = |key: &str| activity.get(key).and_then(Value::as_str).and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()).map(|d| d.timestamp());
+    // A failed card owns no session card, here as in the window (timeline_extras): its time
+    // counts as not covered.
+    let field = |key: &str| activity.get(key).and_then(Value::as_str).unwrap_or("");
+    if field("category").trim() == crate::db::SYSTEM_CATEGORY && field("title") == crate::db::ERROR_TITLE {
+        return None;
+    }
+    let ts =|key: &str| activity.get(key).and_then(Value::as_str).and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()).map(|d| d.timestamp());
     Some(Span { id: activity.get("record_id")?.as_i64()?, start: ts("start")?, end: ts("end")? })
 }
 
@@ -390,6 +408,9 @@ pub fn decorate(mut result: Value, dir: &Path, window: Option<(i64, i64)>) -> Va
         }
         if placed.hidden_scratch > 0 {
             result["hidden_scratch_session_cards"] = json!(placed.hidden_scratch);
+        }
+        if placed.omitted > 0 {
+            result["omitted_session_cards"] = json!(placed.omitted);
         }
     } else {
         attach(&mut result, true);
@@ -544,6 +565,26 @@ mod tests {
     }
 
     #[test]
+    fn cards_past_the_limit_are_counted_and_scratch_cards_do_not_use_the_limit() {
+        let spans = [span(1, NOON, NOON + 3000 * MIN)];
+        // A harness run of 400 sessions in a temp folder, then the work of the range.
+        let mut cards: Vec<SessionCard> = (0..400).map(|i| card(&format!("probe-{i}"), NOON + i, "/tmp/harness")).collect();
+        cards.extend((0..MAX_CARDS as i64 + 5).map(|i| card(&format!("real-{i}"), NOON + 1000 + i, "C:\\dev")));
+        let p = place(cards, &spans, None);
+        assert_eq!(p.by_activity[&1].len(), MAX_CARDS);
+        assert_eq!(p.by_activity[&1][0].session_id, "real-0", "the oldest are kept");
+        assert_eq!((p.hidden_scratch, p.omitted), (400, 5));
+
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..MAX_CARDS as i64 + 2 {
+            put(dir.path(), &format!("s{i:03}"), NOON + i, "C:\\dev", "pass");
+        }
+        let out = decorate(json!({"cards": [activity(1, NOON, NOON + 60 * MIN)]}), dir.path(), Some((NOON, NOON + 60 * MIN)));
+        assert_eq!(out["cards"][0]["session_cards"].as_array().unwrap().len(), MAX_CARDS);
+        assert_eq!(out["omitted_session_cards"], 2, "what is left out is said, not dropped");
+    }
+
+    #[test]
     fn read_window_takes_the_cards_of_the_range_from_the_month_folders() {
         let dir = tempfile::tempdir().unwrap();
         // 2026-12-01 00:00:00 UTC, so the range below spans two month folders.
@@ -666,6 +707,8 @@ mod tests {
         put(&cards_dir, "parser", fixture::at(f.day_start, 1, 40), "C:\\dev\\parser", "pass");
         put(&cards_dir, "after-hours", fixture::at(f.day_start, 9, 0), "C:\\dev", "fail");
         put(&cards_dir, "planning", fixture::at(day_before, 10, 30), "C:\\dev", "partial");
+        // 3:15 to 3:30 is a failed card ("Processing failed"): it owns no session card.
+        put(&cards_dir, "in-failed-time", fixture::at(f.day_start, 3, 20), "C:\\dev", "pass");
         let mut server = Server::new(f.source.clone());
         let call = |server: &Server, name: &str, args: Value| {
             let req = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": args}});
@@ -686,8 +729,12 @@ mod tests {
         assert_eq!(on["cards"][0]["title"], "Write the parser");
         assert_eq!(on["cards"][0]["session_cards"][0]["outcome"], "Outcome of parser");
         assert_eq!(on["cards"][0]["session_cards"][0]["grade"], "pass");
-        assert_eq!(on["unplaced_session_cards"][0]["outcome"], "Outcome of after-hours");
-        assert_eq!(on["unplaced_session_cards"][0]["grade"], "fail");
+        assert_eq!(on["unplaced_session_cards"][0]["outcome"], "Outcome of in-failed-time", "the window lists it with the day too");
+        assert_eq!(on["unplaced_session_cards"][1]["outcome"], "Outcome of after-hours");
+        assert_eq!(on["unplaced_session_cards"][1]["grade"], "fail");
+        assert_eq!(on["unplaced_session_cards"].as_array().unwrap().len(), 2);
+        assert!(on["cards"][3].get("session_cards").is_none());
+        assert!(call(&server, "get_activity_detail", json!({"record_id": f.ids[3]}))["structuredContent"].get("session_cards").is_none());
         assert_eq!(on["session_cards_note"], NOTE);
         assert_eq!(serde_json::from_str::<Value>(result["content"][0]["text"].as_str().unwrap()).unwrap(), on, "the text content is the same payload");
         // The rest of the answer did not change.
