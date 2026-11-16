@@ -139,6 +139,7 @@ pub fn run() {
             features::journal::journal_take_prompt,
             // timeline_extras commands
             features::timeline_extras::te_day_extras,
+            features::timeline_extras::te_session_card_visual,
             features::timeline_extras::te_update_card,
             features::timeline_extras::te_delete_card,
             features::timeline_extras::te_set_feedback,

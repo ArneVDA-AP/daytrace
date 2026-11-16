@@ -14,6 +14,12 @@
 //!
 //! The text of a card is written by an AI session from the user's request. Like activity titles,
 //! it is data, never instructions; the MCP output says so.
+//!
+//! Beside a record the plugin saves the card as it drew it: an SVG file with the record's name.
+//! The window shows that drawing, so a session card looks here as it did beside the session. The
+//! drawing is a file a session wrote: the window loads it as an image (`<img>`), never as markup of
+//! the page, and its path is built from the record's checked file name, never from text inside a
+//! record. daytrace-mcp answers hold the card's text only.
 
 use crate::timeutil::local;
 use chrono::{Datelike, NaiveDate, TimeZone, Utc};
@@ -27,6 +33,8 @@ const KIND: &str = "start-card.finished";
 const GRADES: &[&str] = &["pass", "partial", "fail"];
 /// A card file is a few kilobytes; anything larger is not one.
 const MAX_FILE_BYTES: u64 = 256 * 1024;
+/// The drawing of a card is about ten kilobytes; anything larger is not one.
+const MAX_VISUAL_BYTES: u64 = 512 * 1024;
 /// Most card files one read opens (the oldest of the range are kept).
 const MAX_FILES: usize = 5000;
 /// Most cards one answer shows (the oldest are kept, the rest are counted). Cards of temporary
@@ -77,6 +85,9 @@ pub struct SessionCard {
     pub finished_at: i64,
     /// The finish time is the card's last change, not its grade (a record made from older data).
     pub approximate: bool,
+    /// The name of the card's drawing for `read_visual` (the record's file name without `.json`),
+    /// when the record names a drawing and the file lies beside it; None when there is none.
+    pub visual: Option<String>,
 }
 
 /// A card with the activity it belongs to; `card_id` is None for an unplaced card.
@@ -233,6 +244,7 @@ pub fn parse_card(v: &Value) -> Option<SessionCard> {
         started_at: secs(v, "startedAt").unwrap_or(finished_at).min(finished_at),
         finished_at,
         approximate: v.get("backfilled").and_then(Value::as_bool).unwrap_or(false),
+        visual: None,
     })
 }
 
@@ -241,7 +253,36 @@ fn read_card(path: &Path) -> Option<SessionCard> {
     if !meta.is_file() || meta.len() > MAX_FILE_BYTES {
         return None;
     }
-    parse_card(&serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?)
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    let mut card = parse_card(&v)?;
+    // The record says that it has a drawing; where the drawing is follows from the record's own
+    // file name. A record whose drawing was not written names none, so an older drawing that an
+    // earlier grade left there is not shown for it.
+    let names_one = v.get("visual").and_then(Value::as_str).is_some_and(|s| !s.is_empty());
+    card.visual = path.file_stem().and_then(|s| s.to_str()).filter(|_| names_one).filter(|_| visual_file(&path.with_extension("svg"))).map(str::to_string);
+    Some(card)
+}
+
+fn visual_file(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= MAX_VISUAL_BYTES)
+}
+
+/// The drawing of a card as the plugin saved it: the text of `<dir>/<YYYY-MM>/<name>.svg`, where
+/// `name` is a record's file name without `.json` (`SessionCard::visual`). None for a name that is
+/// not one (so no other file can be asked for), for a missing or oversized file, and for a file
+/// that is not an SVG. The caller shows it as an image, not as markup of its own page.
+pub fn read_visual(dir: &Path, name: &str) -> Option<String> {
+    if !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+        return None;
+    }
+    name_secs(&format!("{name}.json"))?;
+    // The month folder is the UTC month of the time in the name, as the plugin files it.
+    let path = dir.join(format!("{}-{}", &name[..4], &name[4..6])).join(format!("{name}.svg"));
+    if !visual_file(&path) {
+        return None;
+    }
+    let text = std::fs::read_to_string(&path).ok()?;
+    text.trim_start().starts_with("<svg").then_some(text)
 }
 
 /// The cards that finished in `[from, to)` (Unix seconds), oldest first. A file is opened only when
@@ -625,6 +666,62 @@ mod tests {
         assert_eq!(got.iter().map(|c| c.session_id.as_str()).collect::<Vec<_>>(), ["good"]);
     }
 
+    const DRAWING: &str = "<svg class=\"strip\" xmlns=\"http://www.w3.org/2000/svg\" width=\"352\" height=\"40\"><text x=\"6\" y=\"17\">Graded pass.</text></svg>";
+
+    /// A record that names its drawing, and the drawing beside it. Returns the name of the pair.
+    fn put_drawn(dir: &Path, session: &str, finished_s: i64, drawing: Option<&str>, names_it: bool) -> String {
+        let (month, name) = file_name(session, finished_s);
+        let stem = name.trim_end_matches(".json").to_string();
+        let mut v = record(session, finished_s, "C:\\dev", "pass");
+        if names_it {
+            v["visual"] = json!(format!("{stem}.svg"));
+        }
+        std::fs::create_dir_all(dir.join(&month)).unwrap();
+        std::fs::write(dir.join(&month).join(&name), v.to_string()).unwrap();
+        if let Some(text) = drawing {
+            std::fs::write(dir.join(&month).join(format!("{stem}.svg")), text).unwrap();
+        }
+        stem
+    }
+
+    #[test]
+    fn a_card_has_a_drawing_when_its_record_names_one_and_the_file_is_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let drawn = put_drawn(dir.path(), "drawn", NOON, Some(DRAWING), true);
+        // The plugin could not write the drawing this time: the record names none, and the file of
+        // an earlier grade still lies there. It is not this card's drawing.
+        put_drawn(dir.path(), "stale", NOON + MIN, Some(DRAWING), false);
+        put_drawn(dir.path(), "lost", NOON + 2 * MIN, None, true);
+        let huge = "<svg>".to_string() + &" ".repeat(MAX_VISUAL_BYTES as usize) + "</svg>";
+        put_drawn(dir.path(), "huge", NOON + 3 * MIN, Some(&huge), true);
+        let got = read_window(dir.path(), NOON - MIN, NOON + 10 * MIN);
+        // The drawings lie in the same folder and are not cards: four records, four cards.
+        assert_eq!(
+            got.iter().map(|c| (c.session_id.as_str(), c.visual.as_deref())).collect::<Vec<_>>(),
+            [("drawn", Some(drawn.as_str())), ("stale", None), ("lost", None), ("huge", None)]
+        );
+        assert_eq!(read_visual(dir.path(), &drawn).as_deref(), Some(DRAWING));
+    }
+
+    #[test]
+    fn a_drawing_is_read_only_by_the_name_of_a_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let drawn = put_drawn(dir.path(), "drawn", NOON, Some(DRAWING), true);
+        let month = dir.path().join("2026-11");
+        std::fs::write(dir.path().join("secret.svg"), DRAWING).unwrap();
+        std::fs::write(month.join("notes.svg"), DRAWING).unwrap();
+        let not_svg = put_drawn(dir.path(), "text", NOON + MIN, Some("{\"not\": \"a drawing\"}"), true);
+        assert!(read_visual(dir.path(), &drawn).is_some());
+        // A name is the time, "Z_" and a session id: letters, digits, "_" and "-". Nothing else
+        // gets a file, so no name reaches outside the folder of its month.
+        for name in ["notes", "secret", "..\\secret", "../secret", "2026-11/notes", &format!("{drawn}.svg"), &format!("..\\2026-11\\{drawn}"), ""] {
+            assert_eq!(read_visual(dir.path(), name), None, "{name:?}");
+        }
+        assert_eq!(read_visual(dir.path(), &not_svg), None);
+        assert_eq!(read_visual(dir.path(), &drawn.replace("drawn", "absent")), None);
+        assert_eq!(read_visual(&dir.path().join("missing"), &drawn), None);
+    }
+
     #[test]
     fn text_from_a_card_is_one_line_and_bounded() {
         let mut v = record("s1", NOON, "C:\\dev", "pass");
@@ -766,7 +863,7 @@ mod tests {
     fn the_timeline_view_gets_each_card_with_its_activity_only_while_the_setting_is_on() {
         use crate::config::Paths;
         use crate::db::{ResolvedCard, ERROR_TITLE, SYSTEM_CATEGORY};
-        use crate::features::timeline_extras::day_extras;
+        use crate::features::timeline_extras::{day_extras, session_card_visual};
         use crate::state::AppState;
         use crate::types::ActivityCard;
         let dir = tempfile::tempdir().unwrap();
@@ -801,25 +898,32 @@ mod tests {
         put(&cards_dir, "in-failed-time", at(2, 30), "C:\\dev", "partial");
         put(&cards_dir, "scratch", at(1, 31), "/tmp/x", "pass");
         put(&cards_dir, "next-day", at(30, 0), "C:\\dev", "pass");
+        let drawn = put_drawn(&cards_dir, "drawn", at(1, 40), Some(DRAWING), true);
 
-        // The folder is named and the switch is off: nothing is read.
+        // The folder is named and the switch is off: nothing is read, and no drawing is given out.
         st.change_settings_in_memory(|s| s.session_cards_dir = cards_dir.to_string_lossy().into_owned());
         let off = day_extras(&st, day).unwrap();
         assert!(off.session_cards.is_empty());
         assert_eq!(off.session_cards_hidden, 0);
+        assert_eq!(session_card_visual(&st, &drawn), None);
 
         st.change_settings_in_memory(|s| s.show_session_cards = true);
         let on = day_extras(&st, day).unwrap();
         let got: Vec<(Option<i64>, &str)> = on.session_cards.iter().map(|l| (l.card_id, l.card.session_id.as_str())).collect();
-        assert_eq!(got, [(Some(work), "at-work"), (None, "in-failed-time")], "a failed card owns no session card");
+        assert_eq!(got, [(Some(work), "at-work"), (Some(work), "drawn"), (None, "in-failed-time")], "a failed card owns no session card");
         assert_eq!(on.session_cards_hidden, 1);
-        // What the window gets: the card's fields beside cardId, times in seconds.
+        // The window gets the name of a card's drawing, and the drawing itself for that name.
         let ui = serde_json::to_value(&on).unwrap();
+        assert_eq!(ui["sessionCards"][0]["visual"], Value::Null);
+        assert_eq!(ui["sessionCards"][1]["visual"], json!(drawn));
+        assert_eq!(session_card_visual(&st, &drawn).as_deref(), Some(DRAWING));
+        assert_eq!(session_card_visual(&st, "notes"), None);
+        // What the window gets: the card's fields beside cardId, times in seconds.
         assert_eq!(ui["sessionCards"][0]["cardId"], work);
         assert_eq!(ui["sessionCards"][0]["finishedAt"], at(1, 30));
         assert_eq!(ui["sessionCards"][0]["gradeNote"], "what ran");
         assert_eq!(ui["sessionCards"][0]["conditions"][0], json!({"name": "Opens", "kind": "must", "state": "met"}));
-        assert_eq!(ui["sessionCards"][1]["cardId"], Value::Null);
+        assert_eq!(ui["sessionCards"][2]["cardId"], Value::Null);
         assert_eq!(ui["sessionCardsHidden"], 1);
     }
 }

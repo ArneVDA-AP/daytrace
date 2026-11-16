@@ -75,6 +75,15 @@ fn session_cards_of(state: &AppState, day_cards: &[crate::db::StoredCard], from:
     sc::load(&dir, &spans, Some((from, to)))
 }
 
+/// The drawing of a session card (the text of its SVG file) for the name that
+/// `DayExtras.session_cards[].visual` gave. None while the setting is off and when there is no
+/// such drawing. The window shows it as an image.
+pub fn session_card_visual(state: &AppState, name: &str) -> Option<String> {
+    use crate::features::session_cards as sc;
+    let settings = state.settings();
+    sc::read_visual(&sc::dir_for(settings.show_session_cards, &settings.session_cards_dir)?, name)
+}
+
 pub fn day_extras(state: &AppState, day: &str) -> Result<DayExtras> {
     let (from, to) = bounds(day)?;
     let day_cards = state.db.cards_for_day(day)?;
@@ -129,6 +138,11 @@ fn needs_key(state: &AppState) -> Option<String> {
 #[tauri::command]
 pub fn te_day_extras(state: S, day: String) -> CmdResult<DayExtras> {
     day_extras(&state, &day).map_err(err)
+}
+
+#[tauri::command]
+pub fn te_session_card_visual(state: S, name: String) -> CmdResult<Option<String>> {
+    Ok(session_card_visual(&state, &name))
 }
 
 #[tauri::command]

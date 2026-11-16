@@ -68,6 +68,11 @@ export interface SessionCard {
   finishedAt: number;
   /** The finish time is the card's last change, not its grade (a record made from older data). */
   approximate: boolean;
+  /**
+   * Names the drawing of the card as the session showed it, for `teApi.sessionCardVisual`.
+   * Null when the record has no drawing.
+   */
+  visual: string | null;
 }
 
 export interface DayExtras {
@@ -115,6 +120,8 @@ export interface RetryItem {
 
 export const teApi = {
   dayExtras: (day: string) => invoke<DayExtras>("te_day_extras", { day }),
+  /** The drawing of a session card as SVG text (`SessionCard.visual`). Null when it cannot be read. */
+  sessionCardVisual: (name: string) => invoke<string | null>("te_session_card_visual", { name }),
   updateCard: (cardId: number, edit: { title?: string; category?: string; subcategory?: string }) =>
     invoke<Card>("te_update_card", {
       cardId,

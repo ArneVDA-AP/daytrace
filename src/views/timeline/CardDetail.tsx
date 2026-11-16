@@ -577,7 +577,7 @@ export function CardDetail({
       )}
 
       {sessionCards.length > 0 && (
-        <SessionCardList id="sess-h" title="Claude Code sessions finished here" cards={sessionCards} className="xwide:col-start-1" />
+        <SessionCardList id="sess-h" title="Claude Code sessions finished here" cards={sessionCards} drawing="open" className="xwide:col-start-1" />
       )}
 
       {!failed && (

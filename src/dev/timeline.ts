@@ -8,7 +8,9 @@
  *   - reveal_screenshot answers like the backend (the viewer's "Show in File Explorer")
  *   - ?tl=dayerror makes get_day fail (the Timeline's error state)
  *   - ?sessions=1 (or the switch in Settings > AI tools) shows made-up Claude Code session cards on
- *     today: two on Work cards, one that no card covers, and two counted as scratch runs
+ *     today: two on Work cards, one that no card covers, and two counted as scratch runs. The two
+ *     on Work cards have a drawing, a made-up one. To see a real drawing, set
+ *     window.__MOCK_SESSION_VISUAL to the text of an SVG file before the page loads.
  */
 import type { Card, Settings } from "@/api";
 import type { CardReview, DayExtras, FailedGroup, Feedback, RetryItem, SessionCard } from "@/timeline-extras-api";
@@ -74,10 +76,49 @@ function groupFailed(cards: Card[]): FailedGroup[] {
   return out;
 }
 
+/** The name of a drawing as the backend gives it: the record's file name without ".json". */
+function drawingName(finishedAt: number, sessionId: string): string {
+  const stamp = new Date(finishedAt * 1000).toISOString().replace(/[-:.]/g, "");
+  return `${stamp}_${sessionId}`;
+}
+
+/**
+ * A made-up drawing of a session card, for the preview only: the grade, the outcome and one bar
+ * per condition. The real drawings come from the session and look different.
+ */
+function madeUpDrawing(c: SessionCard): string {
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  const lines: string[] = [];
+  for (const word of c.outcome.split(" ")) {
+    const last = lines[lines.length - 1];
+    if (last !== undefined && last.length + word.length < 46) lines[lines.length - 1] = `${last} ${word}`;
+    else lines.push(word);
+  }
+  const top = 78 + lines.length * 18;
+  const height = top + c.conditions.length * 26 + 18;
+  return [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="352" height="${height}" viewBox="0 0 352 ${height}" font-family="system-ui, sans-serif" font-size="13">`,
+    "<style>",
+    ".ground{fill:#fff}.ink{fill:#16181b}.dim{fill:#667080}.met{fill:#2f7d4f}.open{fill:#b7bec8}",
+    "@media (prefers-color-scheme: dark){.ground{fill:#17191c}.ink{fill:#eceef1}.dim{fill:#98a1ae}.met{fill:#5fb984}.open{fill:#4a515b}}",
+    "</style>",
+    '<rect class="ground" width="100%" height="100%"/>',
+    '<text class="dim" x="16" y="26" font-size="11">Made-up drawing for the preview</text>',
+    `<text class="ink" x="16" y="52" font-weight="600">Graded ${esc(c.grade)}</text>`,
+    ...lines.map((l, i) => `<text class="ink" x="16" y="${76 + i * 18}">${esc(l)}</text>`),
+    ...c.conditions.map(
+      (k, i) =>
+        `<rect class="${k.state === "met" ? "met" : "open"}" x="16" y="${top + i * 26}" width="56" height="6" rx="3"/>` +
+        `<text class="dim" x="84" y="${top + i * 26 + 8}">${esc(k.name)}</text>`,
+    ),
+    "</svg>",
+  ].join("");
+}
+
 /** Made-up session cards for today: the plugin's fields, joined to the cards by finish time. */
 function sessionCards(day: string, cards: Card[], now: number): SessionCard[] {
   const work = cards.filter((c) => c.category === "Work" && c.endTs - c.startTs >= 10 * 60);
-  const base = { startedBy: "composer", gradedBy: "", approximate: false };
+  const base = { startedBy: "composer", gradedBy: "", approximate: false, visual: null };
   const out: SessionCard[] = [];
   if (work[0]) {
     const at = work[0].startTs + Math.floor((work[0].endTs - work[0].startTs) * 0.8);
@@ -98,6 +139,7 @@ function sessionCards(day: string, cards: Card[], now: number): SessionCard[] {
       steps: ["Read the resolver", "Write the failing test", "Fix the ordering", "Run the fixture"],
       startedAt: at - 34 * 60,
       finishedAt: at,
+      visual: drawingName(at, "3f6c2a1e-0b7d-4c55-9e21-7a1d5b0c9f10"),
     });
   }
   if (work[1]) {
@@ -119,6 +161,7 @@ function sessionCards(day: string, cards: Card[], now: number): SessionCard[] {
       steps: ["Wire the API", "Lay out the plans", "Check both widths"],
       startedAt: at - 21 * 60,
       finishedAt: at,
+      visual: drawingName(at, "b81d94c7-52aa-4e0f-8a3b-0c6e2f4d7a55"),
     });
   }
   const last = cards.reduce((a, c) => Math.max(a, c.endTs), 0);
@@ -239,6 +282,12 @@ export function timelineMock(ds: Dataset, now: () => number, settings?: Settings
         }
       : {}),
     te_day_extras: (a) => extras(a.day as string),
+    te_session_card_visual: (a) => {
+      if (!settings?.showSessionCards) return null;
+      const card = sessionCards(ds.today, cardsOf(ds.today), now()).find((c) => c.visual === a.name);
+      if (!card) return null;
+      return (window as { __MOCK_SESSION_VISUAL?: string }).__MOCK_SESSION_VISUAL ?? madeUpDrawing(card);
+    },
     te_update_card: (a) => {
       const c = all().find((x) => x.id === a.cardId);
       if (!c) throw "card not found";

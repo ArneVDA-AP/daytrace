@@ -7,7 +7,7 @@ in "What's new" after an update (from GitHub, or from this file when GitHub can'
 ## Unreleased
 
 ### New
-- Claude Code session cards (Settings → AI tools, off by default): with the start-card plugin for Claude Code, each finished session card (the outcome a session worked toward, its check and its grade) shows on the timeline card that covers the time the session finished, in the day's summary, and in `get_timeline` and `get_activity_detail`. Daytrace only reads the plugin's folder; `docs/ai-tools.md` has the details.
+- Claude Code session cards (Settings → AI tools, off by default): with the start-card plugin for Claude Code, each finished session card (the outcome a session worked toward, its check and its grade) shows on the timeline card that covers the time the session finished, in the day's summary, and in `get_timeline` and `get_activity_detail`. When the plugin saved a drawing of a card, the timeline shows the card as the session showed it. Daytrace only reads the plugin's folder; `docs/ai-tools.md` has the details.
 
 ## 0.3.0
 
