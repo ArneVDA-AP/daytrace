@@ -178,6 +178,13 @@ pub struct Settings {
     /// Ask each site named on a card for https://<site>/favicon.ico (no third-party service).
     /// Off by default: it is a network request to every site on the timeline.
     pub lookup_site_icons: bool,
+    // ---- session cards (features/session_cards.rs) ----
+    /// Show the finished session cards of Claude Code (start-card plugin) on the activity that
+    /// covers the time each one finished, in the timeline and in daytrace-mcp's answers. Off by
+    /// default: it reads a folder outside Daytrace's own data.
+    pub show_session_cards: bool,
+    /// The folder with the finished cards; empty uses `<Claude config dir>/start-card/finished`.
+    pub session_cards_dir: String,
 }
 
 impl Default for Settings {
@@ -220,6 +227,8 @@ impl Default for Settings {
             allow_agent_edits: false,
             show_icons: true,
             lookup_site_icons: false,
+            show_session_cards: false,
+            session_cards_dir: String::new(),
         }
     }
 }

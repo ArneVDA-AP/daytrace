@@ -9,6 +9,7 @@ import { AgentClientsGroup } from "./agent-clients";
 import { AgentConnect } from "./agent-connect";
 import { AgentEdits } from "./agent-edits";
 import { ErrorBanner, FieldError, Group, Note, Row } from "./fields";
+import { SessionCardsGroup } from "./session-cards";
 import { storageApi, type AgentSetup } from "./storage-api";
 
 /** Settings > AI tools: the setup text for daytrace-mcp (Dayflow's MCP / CLI tab). */
@@ -32,6 +33,7 @@ export function AiToolsSection() {
       <AgentConnect />
       <AgentClientsGroup />
       <AgentEdits />
+      <SessionCardsGroup />
       {error && (
         <ErrorBanner
           title="Couldn’t find daytrace-mcp"

@@ -77,6 +77,11 @@ export interface Settings {
   showIcons: boolean;
   /** Ask each site on the timeline for https://<site>/favicon.ico; off: sites get a letter. */
   lookupSiteIcons: boolean;
+  // session cards
+  /** Show the finished session cards of Claude Code (start-card plugin) on the timeline and to AI tools. */
+  showSessionCards: boolean;
+  /** The folder with the finished cards; empty uses the default under the Claude config folder. */
+  sessionCardsDir: string;
 }
 
 export interface NotificationPrefs {

@@ -7,9 +7,11 @@
  *   - Try again and Reprocess day run through queued/running/done over a few seconds
  *   - reveal_screenshot answers like the backend (the viewer's "Show in File Explorer")
  *   - ?tl=dayerror makes get_day fail (the Timeline's error state)
+ *   - ?sessions=1 (or the switch in Settings > AI tools) shows made-up Claude Code session cards on
+ *     today: two on Work cards, one that no card covers, and two counted as scratch runs
  */
-import type { Card } from "@/api";
-import type { CardReview, DayExtras, FailedGroup, Feedback, RetryItem } from "@/timeline-extras-api";
+import type { Card, Settings } from "@/api";
+import type { CardReview, DayExtras, FailedGroup, Feedback, RetryItem, SessionCard } from "@/timeline-extras-api";
 import { at, shiftDay } from "@/lib/time";
 import { fmtClock, type Dataset } from "@/dev/fixtures";
 
@@ -72,7 +74,76 @@ function groupFailed(cards: Card[]): FailedGroup[] {
   return out;
 }
 
-export function timelineMock(ds: Dataset, now: () => number): Record<string, (a: Args) => unknown> {
+/** Made-up session cards for today: the plugin's fields, joined to the cards by finish time. */
+function sessionCards(day: string, cards: Card[], now: number): SessionCard[] {
+  const work = cards.filter((c) => c.category === "Work" && c.endTs - c.startTs >= 10 * 60);
+  const base = { startedBy: "composer", gradedBy: "", approximate: false };
+  const out: SessionCard[] = [];
+  if (work[0]) {
+    const at = work[0].startTs + Math.floor((work[0].endTs - work[0].startTs) * 0.8);
+    out.push({
+      ...base,
+      cardId: work[0].id,
+      sessionId: "3f6c2a1e-0b7d-4c55-9e21-7a1d5b0c9f10",
+      cwd: "C:\\dev\\sync-engine",
+      outcome: "The conflict resolver keeps the newer edit when two devices change the same note.",
+      check: "The resolver's table-driven tests, with the equal-timestamp case added, on the real sync fixture.",
+      grade: "pass",
+      gradeNote: "42 tests ran and passed; the equal-timestamp test fails on the old code.",
+      conditions: [
+        { name: "Newer edit wins", kind: "must", state: "met" },
+        { name: "Equal timestamps give one winner", kind: "must", state: "met" },
+        { name: "A note is lost", kind: "fails", state: "met" },
+      ],
+      steps: ["Read the resolver", "Write the failing test", "Fix the ordering", "Run the fixture"],
+      startedAt: at - 34 * 60,
+      finishedAt: at,
+    });
+  }
+  if (work[1]) {
+    const at = work[1].startTs + Math.floor((work[1].endTs - work[1].startTs) * 0.5);
+    out.push({
+      ...base,
+      cardId: work[1].id,
+      sessionId: "b81d94c7-52aa-4e0f-8a3b-0c6e2f4d7a55",
+      cwd: "C:\\dev\\site",
+      outcome: "The pricing page loads the plans from the API and shows the yearly price.",
+      check: "The page in a browser at phone and desktop width, against the staging API.",
+      grade: "partial",
+      gradeNote: "Desktop width checked in the browser. The phone width was not checked: the staging API was down.",
+      gradedBy: "a fresh reviewer",
+      conditions: [
+        { name: "Plans come from the API", kind: "must", state: "met" },
+        { name: "Phone width reads well", kind: "must", state: "open" },
+      ],
+      steps: ["Wire the API", "Lay out the plans", "Check both widths"],
+      startedAt: at - 21 * 60,
+      finishedAt: at,
+    });
+  }
+  const last = cards.reduce((a, c) => Math.max(a, c.endTs), 0);
+  // The day ends at 4 AM tomorrow; the card must also lie before "now".
+  const free = Math.min(now, at(shiftDay(day, 1), 4, 0) - 60);
+  if (last > 0 && free > last + 120) {
+    out.push({
+      ...base,
+      cardId: null,
+      sessionId: "0d2e7b93-6f14-4a8c-b5d0-91c3e8a7f246",
+      cwd: "C:\\dev\\notes",
+      outcome: "The weekly notes export writes one Markdown file per day.",
+      check: "The export on last week's notes.",
+      grade: "fail",
+      gradeNote: "The export stopped on a note with an empty title. Not fixed in this session.",
+      conditions: [{ name: "Seven files written", kind: "must", state: "failed" }],
+      steps: ["Write the exporter", "Run it on last week"],
+      startedAt: last + 30,
+      finishedAt: last + 90,
+    });
+  }
+  return out.sort((a, b) => a.finishedAt - b.finishedAt);
+}
+
+export function timelineMock(ds: Dataset, now: () => number, settings?: Settings): Record<string, (a: Args) => unknown> {
   addFailedRun(ds);
   const cardsOf = (day: string) => ds.days.get(day) ?? [];
   const all = () => [...ds.days.values()].flat();
@@ -110,6 +181,9 @@ export function timelineMock(ds: Dataset, now: () => number): Record<string, (a:
         firstUnreviewed: unreviewed[0]?.id ?? null,
       },
       failedGroups: groupFailed(cards),
+      ...(settings?.showSessionCards && day === ds.today
+        ? { sessionCards: sessionCards(day, cards, now()), sessionCardsHidden: 2 }
+        : { sessionCards: [], sessionCardsHidden: 0 }),
     };
   };
 

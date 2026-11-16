@@ -33,6 +33,43 @@ export interface FailedGroup {
   retryable: boolean;
 }
 
+export type SessionGrade = "pass" | "partial" | "fail";
+
+/** One condition of a session card's check. */
+export interface SessionCondition {
+  name: string;
+  /** "must": it must show. "fails": the check fails when it happens. */
+  kind: string;
+  /** "open", "met" or "failed". */
+  state: string;
+}
+
+/**
+ * A finished Claude Code session card (src-tauri/src/features/session_cards.rs): the outcome a
+ * session worked toward and how it graded itself. Written by an AI session; shown as plain text.
+ */
+export interface SessionCard {
+  /** The card that covers the finish time; null when no card does. */
+  cardId: number | null;
+  sessionId: string;
+  /** The folder the session worked in. */
+  cwd: string;
+  startedBy: string;
+  outcome: string;
+  check: string;
+  grade: SessionGrade;
+  gradeNote: string;
+  /** Empty when the session graded itself. */
+  gradedBy: string;
+  conditions: SessionCondition[];
+  steps: string[];
+  /** Unix seconds. */
+  startedAt: number;
+  finishedAt: number;
+  /** The finish time is the card's last change, not its grade (a record made from older data). */
+  approximate: boolean;
+}
+
 export interface DayExtras {
   day: string;
   edited: number[];
@@ -40,6 +77,10 @@ export interface DayExtras {
   reviews: CardReview[];
   reviewSummary: ReviewSummary;
   failedGroups: FailedGroup[];
+  /** Empty while Settings > AI tools > "Show Claude Code session cards" is off. */
+  sessionCards: SessionCard[];
+  /** Session cards of this day left out because the session ran in a temporary folder. */
+  sessionCardsHidden: number;
 }
 
 export interface DayCount {

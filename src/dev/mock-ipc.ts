@@ -91,6 +91,8 @@ function defaultSettings(provider: ProviderKind): Settings {
     allowAgentEdits: false,
     showIcons: true,
     lookupSiteIcons: false,
+    showSessionCards: false,
+    sessionCardsDir: "",
   };
 }
 
@@ -104,6 +106,7 @@ export function installMockIpc() {
   const provider = (q.get("provider") as ProviderKind | null) ?? "anthropic";
   const settings: Settings = defaultSettings(provider);
   if (q.get("onboarding") === "1") settings.onboardingCompleted = false;
+  if (q.get("sessions") === "1") settings.showSessionCards = true; // Claude Code session cards (src/dev/timeline.ts)
   const appearance = q.get("appearance");
   if (appearance === "light" || appearance === "dark" || appearance === "system") settings.appearance = appearance;
   if (flags.has("paused")) settings.recordingEnabled = false;
@@ -309,7 +312,7 @@ export function installMockIpc() {
 
   // Goals and Chat: richer fixtures and variants (?goals=…, ?chat=…) from src/dev/goalschat.ts.
   Object.assign(handlers, goalsChatHandlers({ ds, settings, provider, q, now, cardsOf, hasApiKey: () => hasApiKey }));
-  Object.assign(handlers, timelineMock(ds, now)); // Timeline fixtures and handlers (src/dev/timeline.ts)
+  Object.assign(handlers, timelineMock(ds, now, settings)); // Timeline fixtures and handlers (src/dev/timeline.ts)
   applySettingsMock(handlers, { q, flags, settings, now, dataDir });
   applyF4Mock(handlers, { q, now }); // update install, What's new, debug info (src/dev/f4.ts)
   applyF2Mock(handlers, { q, settings, today: ds.today }); // wave 4 views (src/dev/w4-f2.ts)
